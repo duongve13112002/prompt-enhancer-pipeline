@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "image_observation.v0",
+  "title": "Image observation",
+  "$comment": "Draft v0. Follows docs/stages/K2-observe.md. One observer call reads one image and returns this object; the observations table holds one row per item with the image-level fields repeated.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "image_id",
+    "view",
+    "quality",
+    "origin",
+    "observations"
+  ],
+  "properties": {
+    "image_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "view": {
+      "type": "string",
+      "minLength": 1
+    },
+    "quality": {
+      "type": "number"
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "origin",
+        "model_revision",
+        "prompt_id",
+        "facet_schema_version"
+      ],
+      "properties": {
+        "origin": {
+          "const": "generated"
+        },
+        "model_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "facet_schema_version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "observations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "concept_id",
+          "facet_group",
+          "facet",
+          "value",
+          "visibility",
+          "region"
+        ],
+        "properties": {
+          "concept_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "facet_group": {
+            "enum": [
+              "identity",
+              "apparel",
+              "object",
+              "place",
+              "style",
+              "incidental",
+              "text_in_image"
+            ]
+          },
+          "facet": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "string"
+          },
+          "visibility": {
+            "enum": [
+              "clear",
+              "partial",
+              "occluded",
+              "not_shown"
+            ]
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "x",
+                  "y",
+                  "width",
+                  "height"
+                ],
+                "properties": {
+                  "x": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "y": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "width": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1
+                  },
+                  "height": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1
+                  }
+                },
+                "description": "Region as fractions of the image size."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

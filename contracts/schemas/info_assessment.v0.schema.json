@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "info_assessment.v0",
+  "title": "Info file assessment",
+  "$comment": "Draft v0. Follows docs/stages/K2-observe.md, naming step (decision 40). One text-only info_assessor call per folder with a parsed info file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "folder_id",
+    "usable",
+    "reason"
+  ],
+  "properties": {
+    "folder_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "usable": {
+      "type": "boolean",
+      "description": "Whether the info file gives usable concept names, judged by the model."
+    },
+    "reason": {
+      "type": "string"
+    }
+  }
+}

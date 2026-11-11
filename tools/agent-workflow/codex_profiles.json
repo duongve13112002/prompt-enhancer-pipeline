@@ -1,0 +1,38 @@
+{
+  "_comment": "Codex worker settings (decision 596), validated by codex_backend.load_codex_config; README.md 'Codex workers'. Role models follow .agents/policy/PM_POLICY.md section 2 (a harder task overrides with `cli_worker.py start --model gpt-6.1-sol --effort high`). Values in <angle brackets> are placeholders that load_codex_config refuses: set them in a local copy and pass `cli_worker.py start --codex-config <copy>` (nothing machine-specific is committed).",
+  "runtime": {
+    "codex_command": "<absolute path of the native codex.exe, not the .cmd shim>",
+    "codex_home": null,
+    "windows_sandbox": "elevated",
+    "permission_profile": "project-worker",
+    "extra_deny_paths": [],
+    "extra_write_paths": [],
+    "scratch_dir": ".tmp/codex-run",
+    "venv_dir": ".venv",
+    "check_timeout_seconds": 60,
+    "env_allow": [],
+    "disabled_features": ["apps", "computer_use", "multi_agent", "plugins", "remote_plugin", "skill_mcp_dependency_install", "memories"],
+    "tested_codex_version": "0.167.0",
+    "hooks": {
+      "policy_dir": ".tmp/pm-state/codex-hooks",
+      "guard_config": "tools/agent-workflow/guard_config.json",
+      "timeout_seconds": 20,
+      "max_input_bytes": 67108864,
+      "max_patch_bytes": 1048576,
+      "max_patch_targets": 256,
+      "max_task_bytes": 1048576,
+      "stop_section": "## Worker completion",
+      "stop_labels": ["Changes", "Checks", "Cleanup", "Remaining"],
+      "image_output_dir": ".tmp/codex-images"
+    }
+  },
+  "roles": {
+    "codex-dev": {"model": "gpt-6.1-terra", "effort": "medium", "web_search": "disabled", "timeout_minutes": 240, "hook_allowed_tools": ["Bash", "apply_patch", "view_image"]},
+    "codex-review": {"model": "gpt-6.1-sol", "effort": "high", "web_search": "disabled", "timeout_minutes": 120, "hook_allowed_tools": ["Bash", "view_image"]},
+    "codex-research": {"model": "gpt-6.1-terra", "effort": "medium", "web_search": "live", "timeout_minutes": 120, "hook_allowed_tools": ["Bash", "view_image", "webrun"]},
+    "codex-docs": {"model": "gpt-6-luna", "effort": "low", "web_search": "cached", "timeout_minutes": 120, "hook_allowed_tools": ["Bash", "apply_patch", "view_image", "webrun"]},
+    "codex-scout": {"model": "gpt-6.1-terra", "effort": "medium", "web_search": "cached", "timeout_minutes": 60, "hook_allowed_tools": ["Bash", "view_image", "webrun"]},
+    "codex-image": {"model": "gpt-6.1-terra", "effort": "medium", "web_search": "disabled", "timeout_minutes": 120, "hook_allowed_tools": ["Bash", "apply_patch", "view_image", "image_genimagegen"]}
+  },
+  "usage": {"stale_minutes": 60, "session_file_limit": 8, "cache_warn_ratio": 0.5, "antigravity_command": null, "command_timeout_seconds": 60}
+}

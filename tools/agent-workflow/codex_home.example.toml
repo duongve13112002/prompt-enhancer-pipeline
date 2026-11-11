@@ -1,0 +1,14 @@
+# Reference only (decision 596): the TOML equivalent of what cli_worker.py passes with `-c` on every Codex turn.
+# The launcher never writes ~/.codex/config.toml and does not read this file; copy it to a Codex home only to run
+# `codex` by hand under the same permissions. Never add `sandbox_mode` or `-s`: they replace default_permissions.
+# <PROJECT_ROOT> is a placeholder for the checkout, written with the platform's separators
+# (Windows: "D:\\path\\to\\project", doubled backslashes inside TOML strings).
+default_permissions = "project-worker"
+
+[windows]
+sandbox = "elevated"   # "unelevated" refuses restricted read access (measured on 0.160)
+
+[permissions.project-worker]
+extends = ":workspace"
+# An inline table: a dotted key with ":workspace_roots" fails.
+filesystem = { ":workspace_roots" = { ".secrets" = "deny" }, "<PROJECT_ROOT>\\.secrets" = "deny", "<CODEX_HOME>\\auth.json" = "deny" }

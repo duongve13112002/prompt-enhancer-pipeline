@@ -1,0 +1,283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "concept_card.v0",
+  "title": "Concept card",
+  "$comment": "Draft v0. Follows docs/stages/K3-cards.md. A card is built per concept over all folders that declare it and is recomputed from the current image list, never added to.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "concept_id",
+    "name",
+    "kind",
+    "facets",
+    "variant_groups",
+    "curated_statements",
+    "lint_findings",
+    "revisions"
+  ],
+  "properties": {
+    "concept_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "origin"
+      ],
+      "properties": {
+        "value": {
+          "enum": [
+            "character",
+            "clothing",
+            "place",
+            "object",
+            "style",
+            "other"
+          ]
+        },
+        "origin": {
+          "enum": [
+            "override",
+            "generated"
+          ]
+        }
+      }
+    },
+    "facets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "facet_group",
+          "facet",
+          "seen_count",
+          "values",
+          "stability",
+          "origin"
+        ],
+        "properties": {
+          "facet_group": {
+            "enum": [
+              "identity",
+              "apparel",
+              "object",
+              "place",
+              "style",
+              "incidental",
+              "text_in_image"
+            ]
+          },
+          "facet": {
+            "type": "string",
+            "minLength": 1
+          },
+          "seen_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "value",
+                "support_count",
+                "image_ids"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "support_count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "image_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          },
+          "stability": {
+            "enum": [
+              "curated",
+              "stable",
+              "stable_low_diversity",
+              "varies",
+              "single_observation"
+            ]
+          },
+          "origin": {
+            "enum": [
+              "info_file",
+              "override",
+              "generated"
+            ]
+          }
+        }
+      }
+    },
+    "variant_groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "group_id",
+          "facet",
+          "variants"
+        ],
+        "properties": {
+          "group_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "facet": {
+            "type": "string",
+            "minLength": 1
+          },
+          "variants": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "variant_id",
+                "value",
+                "image_ids"
+              ],
+              "properties": {
+                "variant_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "value": {
+                  "type": "string"
+                },
+                "image_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "curated_statements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text",
+          "origin",
+          "folder_id"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "info_file",
+              "override"
+            ]
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "lint_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message",
+          "refs"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string"
+          },
+          "refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "revisions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_revision",
+        "prompt_id",
+        "facet_schema_version",
+        "stability_policy_version",
+        "snapshot_id"
+      ],
+      "properties": {
+        "model_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "facet_schema_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stability_policy_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "snapshot_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "summary": {
+      "type": "string",
+      "description": "Short text summary of the card, written by the card builder; used by the alias generator and the concept-text embedding (K3, K4, K1)."
+    }
+  }
+}

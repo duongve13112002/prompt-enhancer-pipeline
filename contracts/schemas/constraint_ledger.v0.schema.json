@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "constraint_ledger.v0",
+  "title": "Constraint ledger",
+  "$comment": "Draft v0. Follows docs/stages/S2-planner.md (produced) and docs/stages/S5-validate.md (checked). Which types are checked structurally and which by the verifier is in contracts/README.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "constraints"
+  ],
+  "properties": {
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "type",
+          "text",
+          "span",
+          "bound_entity"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "enum": [
+              "literal_text",
+              "passthrough_token",
+              "format",
+              "negation",
+              "count",
+              "relation",
+              "attribute_binding",
+              "style",
+              "identity_grounding",
+              "edit_coverage",
+              "edit_scope",
+              "edit_strength"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The constraint in the planner's words."
+          },
+          "span": {
+            "type": "string",
+            "description": "Verbatim span of the user's prompt the item comes from."
+          },
+          "bound_entity": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

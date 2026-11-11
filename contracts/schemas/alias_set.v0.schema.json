@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "alias_set.v0",
+  "title": "Alias set",
+  "$comment": "Draft v0. Follows docs/stages/K4-aliases.md. Aliases only add candidates; a colliding alias is rejected or queued for review.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "concept_id",
+    "aliases",
+    "revisions"
+  ],
+  "properties": {
+    "concept_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "aliases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text",
+          "origin",
+          "status",
+          "collides_with"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "origin": {
+            "enum": [
+              "author",
+              "generated"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "pending_review",
+              "rejected"
+            ]
+          },
+          "collides_with": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "revisions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_revision",
+        "prompt_id"
+      ],
+      "properties": {
+        "model_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

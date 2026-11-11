@@ -1,0 +1,323 @@
+# Example full profile. Documentation only: nothing is implemented, so no loader exists. Contract: contracts/README.md.
+# Nothing here has been measured. Every key holds one of: a user decision or requirement (cited in a trailing comment),
+# a protocol-bound constant (with its note), an example policy the admin chooses, or a sentinel.
+# Sentinels:
+#   fit_from_gt      fitted on the evaluation set (eval fit), experiments in docs/stages/G-evaluation.md
+#   fit_from_bench   measured by a benchmark on the machine that serves
+#   fit_from_pilot   taken from a pilot run on the user's knowledge base
+#   pin_required     exact model revision (a commit hash or a file hash)
+#   deploy_required  set per machine or deployment
+#   design_required  decided by the implementing task with evidence
+#   ask_user         only for paid call budgets: the PM asks the user
+# [P] = PM proposal (not a user decision), [A] = assumption to verify.
+schema_version: 1
+status: template
+purpose: production                      # production | smoke (dev results never fit a sentinel, R-020)
+
+knowledge:                               # docs/stages/K0-sync.md, kb/README.md
+  root: deploy_required                  # the user's real knowledge base; the dev profile points at kb/_example
+  info_file:
+    names: [infor.txt, info.txt]         # accepted names are configuration; this default is a PM proposal [P]
+    encoding: utf-8
+  concept_separator: "|"                 # decision 9; splits line 1 (names) and line 2 (descriptions)
+  naming:                                # decisions 30, 38, 39, docs/stages/K2-observe.md
+    on_no_info_file: model_names_from_images
+    on_unusable_info_file: model_names_from_images   # empty, undecodable, no name on line 1, or judged unclear
+    assess_info_file: true               # decision 40: a model judges every parsed info file (role info_assessor)
+    sample_size: 5                       # images shown to the folder_namer call; the user's default (decision 39); fewer in the folder: all
+    selection: random
+    on_no_images: skip                   # the folder is reported and not indexed
+    rename_on_change: design_required    # share of images added or removed that re-runs naming
+    report: true                         # list every model-named folder in the sync report
+  overrides_file: kb_overrides.yaml      # optional, at the knowledge-base root, keyed by concept name
+  on_source_removed: remove              # decision 17
+
+sync:                                    # K0
+  mass_deletion_guard: {max_removed_fraction: design_required}   # R-014: a sync that would remove more stops
+  snapshots: {keep: design_required}
+  gc: {retention: design_required}
+  resume: true                           # R-017
+
+embedding:                               # K1, experiment E5
+  candidates:
+    - {id: qwen3-vl-embedding-2b, note: N105}
+    - {id: embeddinggemma-2, note: N104}
+    - {id: "bge-m3+siglip2", note: N106}          # baseline pair for comparison
+  chosen: fit_from_gt
+  revision: pin_required
+  query_text_limit: design_required      # some encoders cap text length (SigLIP 2 does, N008); applies to that candidate only
+
+observe:                                 # K2
+  one_image_per_call: true               # R-010, N107, N108: models mix up several images in one call
+  representatives_per_folder: fit_from_gt   # experiment E14
+  lazy_observation_of_rest: true         # images not yet read are read on demand at the next sync
+  facet_schema_version: design_required
+  region_output: optional                # a region per observation only when the schema asks for it
+
+cards:                                   # K3
+  stability_policy:
+    labels: [curated, stable, stable_low_diversity, varies, single_observation]
+  min_visible_images: fit_from_gt        # clear or partial views needed before a facet is stated
+  low_diversity: mark_stable_low_diversity   # never promoted to stable
+  variant_groups: true                   # decision 16
+  lint_report: true
+
+aliases:                                 # K4
+  generated: true                        # a model writes them offline; R-015 forbids hand-written tables
+  collision_policy: drop_and_queue_for_review   # an alias shared by two concepts is dropped from automatic use and queued for review (K4)
+  review_queue: true
+  only_add_candidates: true              # aliases never decide a link
+
+index:                                   # K5, R-016
+  ann: {method: design_required, params: design_required}
+  exact_search_below_count: fit_from_bench
+  lexical: {kind: char_ngram, ngram_size: design_required}
+
+rag:
+  enabled: true                          # decision 12, R-009
+  evidence_mode: cards                   # decision 13; cards | live | cards_then_live
+
+candidates:                              # S1, no model call
+  sources:
+    alias: {enabled: true}
+    lexical: {enabled: true}
+    dense: {enabled: true}
+  segment_prompt: true
+  fusion: rrf                            # moves to a fitted weighted fusion once labels exist, N113
+  shortlist_size: fit_from_gt
+
+planner:                                 # S2
+  second_chance_rounds: 1
+  catalogue_in_context: false            # the planner sees the shortlist only (N120)
+
+resolution:
+  on_family_match: context_then_random   # decision 15
+  random_seed: per_request               # a new choice for every request
+  trace_choice: true
+  on_variant_unspecified: context_then_random   # decision 16
+
+assembly:                                # S3
+  scope_matrix:                          # role -> facet groups it may use; PM proposal [P], validated by experiment E9
+    subject_identity: [identity]         # same table as docs/stages/S3-knowledge.md
+    worn_garment: [apparel]
+    location: [place]
+    object: [object]
+    style_reference: [style]
+    other: []
+  default_outfit: omit                   # facts of a default outfit are left out unless the role asks for them
+  max_facts_per_concept: design_required
+  max_images_per_concept: design_required   # S3 image selection
+  max_facts_per_request: design_required
+  fact_order: design_required            # position matters, N078, N116
+
+edit:
+  attach_kb_reference_images: false      # decision 14, R-011
+  max_kb_reference_images: design_required
+  source_entity_linking: false           # the source image is not linked to knowledge-base concepts by default
+  default_preservation:                  # per edit kind (R-002); name what stays instead of describing it, N100
+    local_edit: preserve_all_outside_target
+    global_transform: preserve_subject_and_layout
+    subject_recompose: preserve_identity_only
+
+creativity:                              # decision 8: example policy; the values are the admin's choice
+  mode: bounded
+  allowed_additions: [secondary_props, background_detail, lighting_detail]
+  max_new_entities: 2
+  max_added_text_blocks: 0
+  preserve: [identities, counts, attributes, relations, negations, style, literal_text]   # R-001
+  edit_cap: never_exceed_edit_scope      # R-006
+
+writer:                                  # S4
+  system_prompt_verbatim: true           # R-004: the admin's text is never edited
+  runtime_addendum: true                 # a separate message after the system prompt, never inside it
+  knowledge_block: delimited_data        # R-026
+
+validation:                              # S5
+  structural_checks: true                # valid JSON, schema, exact equality of text to render
+  verifier:
+    gating_rules:                        # experiment E7
+      - task_is_edit
+      - identity_facts_supplied
+      - profile_has_known_conflict
+      - ledger_entry_needs_meaning
+    inline_for: [edit, identity_facts]
+    sampled_fraction_for_rest: fit_from_pilot
+  max_repairs: 1                         # user proposal v1.1
+  fallbacks: [minimal_output_valid_for_contract, user_prompt_with_status_degraded, failed]   # tried in this order, docs/stages/S5-validate.md
+
+vision:                                  # S0
+  max_image_side: fit_from_bench         # a cap is needed: the model's default pixel cap is far above what latency allows, N102
+  format: jpeg
+  quality: design_required
+  transport: data_uri
+
+profiles:
+  root: configs/profiles
+  default_profile_id: deploy_required    # decision 4: the admin's default profile
+  exclude: [_example]                    # the example folder is never loaded
+
+vlm:                                     # R-018: rules name no model; models are profile values
+  backends:
+    main:
+      provider: openai_compatible        # the user's server, or llama-server on the dev machine, N055, N057
+      base_urls: [deploy_required]
+      api_key_file: none
+      model: {id: deploy_required, revision: pin_required, source: none, file: none, mmproj_file: none}   # source, file and mmproj_file are used only by servers that load a local model file
+      max_concurrency: fit_from_bench
+    cloud_claude:                        # decision 28: optional cloud backend; used only when a role binds to it and the user granted requests
+      provider: anthropic
+      base_urls: [provider_default]
+      api_key_file: .secrets/anthropic.key   # the user puts the key file here; agents never open .secrets/
+      model: {id: claude-haiku-5-5, revision: none, source: none, file: none, mmproj_file: none}   # the user's default cloud model
+      max_concurrency: design_required
+      call_budget: ask_user              # the number of requests the user allows; asked before the first call
+      on_budget_exhausted: fallback_to_default_backend   # decision 29: continue on the local backend with warning BUDGET_EXHAUSTED; alternative: stop
+      allow_images: true                 # decision 29: images may be sent when a role is bound here; false keeps every request with an image on the local backend
+    cloud_gemini:                        # decision 28
+      provider: gemini
+      base_urls: [provider_default]
+      api_key_file: .secrets/gemini.key
+      model: {id: gemini-3.1-flash-lite, revision: none, source: none, file: none, mmproj_file: none}   # the user's default; confirm the provider still offers it before use [A]
+      max_concurrency: design_required
+      call_budget: ask_user
+      on_budget_exhausted: fallback_to_default_backend
+      allow_images: true
+  default_backend: main                  # decision 28: every role uses the local backend unless the profile binds it elsewhere
+  roles:                                 # each role: one backend, one prompt, one schema
+    planner:
+      backend: main
+      mode: generate
+      prompt_id: planner_v0
+      image: {source: edit_source_only, max_side: from_vision, format: from_vision}   # the planner sees the source image for edit (S2)
+      max_tokens: design_required
+      sampling: &sampling_default
+        temperature: design_required
+        top_p: design_required
+        top_k: design_required
+        min_p: design_required
+        frequency_penalty: design_required
+        presence_penalty: design_required   # high values may penalise repeated JSON keys; test 0 against the recommended value, N102, experiment E11
+        repetition_penalty: design_required
+        seed: none
+        stop: none
+      reasoning: &reasoning_off
+        mode: "off"                      # decision 21, experiment E10: thinking on versus off
+        effort: none                     # consistent with mode off
+        budget_tokens: none
+        template_kwargs_key: enable_thinking   # name of the chat-template switch; sent as a value, N121
+      output:
+        format: json_schema
+        schema_id: intent_ir.v0          # contracts/schemas/
+        strict: true
+        transport: response_format
+        validate_response: true          # servers may ignore schema keywords silently, N122
+    writer:
+      backend: main
+      mode: generate
+      prompt_id: brief_v0
+      image: {source: edit_source_and_live_look, max_side: from_vision, format: from_vision}   # the edit source image, plus knowledge images when live_look reads them (internal, S3); nothing extra goes downstream
+      max_tokens: design_required
+      sampling: *sampling_default
+      reasoning: *reasoning_off
+      output:
+        format: from_profile_manifest    # the admin's system prompt sets the format (decision 4)
+        schema_id: from_profile_manifest
+        strict: design_required          # strict formats can lower reasoning quality, N117
+        transport: design_required
+        validate_response: true
+    verifier:
+      backend: main
+      mode: generate
+      prompt_id: verifier_v0
+      image: none                        # one text-only call (S5)
+      max_tokens: design_required
+      sampling: *sampling_default
+      reasoning: *reasoning_off
+      output: {format: json_schema, schema_id: verifier_result.v0, strict: true, transport: response_format, validate_response: true}
+    observer:                            # K2, offline: thinking may be on; decided by the implementing task
+      backend: main
+      mode: generate
+      prompt_id: observer_v0
+      image: {max_side: design_required, format: jpeg, quality: design_required, transport: data_uri}
+      max_tokens: design_required
+      sampling: *sampling_default
+      reasoning: {mode: design_required, effort: design_required, budget_tokens: design_required, template_kwargs_key: enable_thinking}
+      output: {format: json_schema, schema_id: image_observation.v0, strict: true, transport: response_format, validate_response: true}
+    info_assessor:                       # K2 first step, offline, text only: is this info file usable? (decision 40)
+      backend: main
+      mode: generate
+      prompt_id: info_assessor_v0
+      image: none
+      max_tokens: design_required
+      sampling: *sampling_default
+      reasoning: {mode: design_required, effort: design_required, budget_tokens: design_required, template_kwargs_key: enable_thinking}
+      output: {format: json_schema, schema_id: info_assessment.v0, strict: true, transport: response_format, validate_response: true}
+    folder_namer:                        # K2 first step, offline: names a folder with no usable info file from images drawn at random (decisions 30, 39)
+      backend: main
+      mode: generate
+      prompt_id: folder_namer_v0
+      image: {max_side: design_required, format: jpeg, quality: design_required, transport: data_uri}
+      max_tokens: design_required
+      sampling: *sampling_default
+      reasoning: {mode: design_required, effort: design_required, budget_tokens: design_required, template_kwargs_key: enable_thinking}
+      output: {format: json_schema, schema_id: folder_naming.v0, strict: true, transport: response_format, validate_response: true}
+    card_builder:
+      backend: main
+      mode: generate
+      prompt_id: card_builder_v0
+      image: none
+      max_tokens: design_required
+      sampling: *sampling_default
+      reasoning: {mode: design_required, effort: design_required, budget_tokens: design_required, template_kwargs_key: enable_thinking}
+      output: {format: json_schema, schema_id: concept_card.v0, strict: true, transport: response_format, validate_response: true}
+    alias_generator:
+      backend: main
+      mode: generate
+      prompt_id: alias_generator_v0
+      image: none
+      max_tokens: design_required
+      sampling: *sampling_default
+      reasoning: {mode: design_required, effort: design_required, budget_tokens: design_required, template_kwargs_key: enable_thinking}
+      output: {format: json_schema, schema_id: alias_set.v0, strict: true, transport: response_format, validate_response: true}
+    manifest_drafter:
+      backend: main
+      mode: generate
+      prompt_id: manifest_drafter_v0
+      image: none
+      max_tokens: design_required
+      sampling: *sampling_default
+      reasoning: {mode: design_required, effort: design_required, budget_tokens: design_required, template_kwargs_key: enable_thinking}
+      output: {format: json_schema, schema_id: profile_manifest.v0, strict: true, transport: response_format, validate_response: true}
+    scenario_generator:
+      backend: main
+      mode: generate
+      prompt_id: scenario_generator_v0
+      image: none
+      max_tokens: design_required
+      sampling: *sampling_default
+      reasoning: {mode: design_required, effort: design_required, budget_tokens: design_required, template_kwargs_key: enable_thinking}
+      output: {format: json_schema, schema_id: eval_scenario.v0, strict: true, transport: response_format, validate_response: true}
+
+runtime:                                 # no fixed hardware (AGENTS.md section 8)
+  gpus: auto
+  vram_budget_gb: deploy_required        # per GPU
+  vram_check: {before: true, after: true}
+  cpu_workers: auto
+  resume: true                           # R-017
+
+storage:
+  data_root: data                        # Git-ignored; every derived table lives under it
+  kb_store: data/kb                      # snapshots, tables and the serving index
+  table_format: parquet                  # decision 19, R-016
+
+serving:                                 # docs/serving.md, R-019, decision 21
+  max_concurrency: fit_from_bench
+  queue_limit: design_required
+  total_deadline_s: fit_from_bench       # measured on the deployment, never claimed from estimates
+  prefix_cache: true                     # the admin's system prompt stays first in the message so a backend can reuse its cache
+
+evaluation:                              # G-evaluation, R-023, decision 22
+  scenario_kinds: [single_concept, multi_concept, family_mention, variant_unspecified, no_match, negation, literal_text, edit_local, edit_global, edit_recompose, rag_off]
+  languages: [vi, en, ja, zh]            # configuration; the user's knowledge base decides the real list
+  split_by: concept                      # a concept never appears in both the fit and the test split; split values: fit, test
+  min_items_per_class: design_required

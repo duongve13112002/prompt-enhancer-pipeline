@@ -1,0 +1,31 @@
+# Dev-machine profile: extends the full profile and overrides only what differs. Documentation only; nothing is implemented.
+# Everything must work here first (R-020, decision 20). Dev results show that the code works; they never fit a sentinel
+# and never support a timing claim. The quantisation file below is a profile value: change it per run (experiment E15, N123).
+schema_version: 1
+extends: enhancer.example.yaml
+status: template
+purpose: smoke
+
+knowledge:
+  root: kb/_example                      # the user's real knowledge base path replaces this (kb/README.md)
+
+runtime:
+  gpus: [0]
+  vram_budget_gb: 8                      # the user's dev GPU, decision 20; a profile value
+
+embedding:
+  chosen: embeddinggemma-2               # N104; the smoke choice for the dev machine, small enough to share the dev GPU; experiment E5 chooses for the full profile
+
+vlm:
+  backends:
+    main:
+      provider: openai_compatible        # llama-server speaks the OpenAI style, N055
+      base_urls: [deploy_required]       # a loopback URL of the local server, set per machine
+      api_key_file: none
+      model:
+        id: Qwen3.5-4B
+        source: unsloth/Qwen3.5-4B-GGUF  # N056
+        file: Qwen3.5-4B-Q3_K_M.gguf     # decision 20; 2.29 GB, N103
+        mmproj_file: mmproj-F16.gguf     # N103
+        revision: pin_required
+      max_concurrency: 1

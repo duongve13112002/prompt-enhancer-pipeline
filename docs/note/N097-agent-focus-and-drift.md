@@ -1,0 +1,21 @@
+# N097 Keeping agents on target: context loss, goal drift and side work
+
+- **Source:** https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents ; https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents ; https://www.anthropic.com/engineering/multi-agent-research-system ; https://code.claude.com/docs/en/context-window ; https://code.claude.com/docs/en/hooks ; https://code.claude.com/docs/en/memory ; https://code.claude.com/docs/en/sub-agents ; https://code.claude.com/docs/en/best-practices ; https://learn.chatgpt.com/guides/best-practices ; https://developers.openai.com/cookbook/examples/gpt-5/gpt-5-1_prompting_guide ; https://www.antigravity.google/docs/artifacts ; arXiv 2503.13657 (MAST), 2609.01660, 2505.02709, 2603.03258, 2510.07777
+- **Class:** documented (two Haiku research agents read the pages, 2026-11-10; papers mostly from abstracts; the PM did not re-read them)
+- **Checked:** 2026-11-10
+- **Used in:** .agents/policy/PM_POLICY.md section 6, footer rule 17, task template
+- **Carried over:** copied on 2026-11-11 from the project this tooling came from; only this line and `Used in` changed. It was read by that project's agents, so treat it as a lead and re-read the source before relying on it. Stage, experiment, requirement and decision numbers in the text below belong to that project.
+
+## What this project relies on
+
+- **Failure frequencies (MAST, 1,600+ traces, 7 frameworks):** step repetition 15.7%, reasoning-action mismatch 13.2%, unaware of termination conditions 12.4%, disobey task specification 11.8%, incorrect verification 9.1%, no or incomplete verification 8.2%, task derailment 7.4%, failure to ask for clarification 6.8%, premature termination 6.2%, loss of conversation history only 2.8%. Clearer role specifications raised one framework's success by 9.4%. So most waste is unclear stop conditions, spec drift and weak verification, not forgotten context.
+- **Steps, not context length (arXiv 2609.01660, abstract and summary):** degradation tracks the number of steps; bounding the context made decay steeper; on one tool-use task every model fell from near-perfect to near zero within 16 steps. Long work is split into fresh phases with a short handoff.
+- **Inherited drift (arXiv 2603.03258):** models that hold a goal alone adopt the drift of a weaker agent's context when conditioned on it, so raw worker transcripts are not passed to other agents. Reminders reliably reduce divergence (arXiv 2510.07777, no effect size).
+- **Briefs:** each subagent task needs an objective, an output format, tool and source guidance and explicit boundaries; vague tasks caused duplicated and missing work (Anthropic multi-agent post). Codex: Goal, Context, Constraints, Done when. A subagent sees only its brief, not the parent's conversation or memory.
+- **Plans and progress:** a 2-5 item plan with exactly one item in progress; a progress update every 6 steps or 8 tool calls with a concrete outcome (GPT-5.1 guide). Long-running harness: progress file plus a JSON feature list whose status the agent may only flip; resume block (read progress and git log, pick one item, run a basic check, then work); one feature per session.
+- **Claude Code compaction:** the project-root CLAUDE.md (and its imports), unscoped rules, skill descriptions and the plan from plan mode survive; conversation-only instructions are summarized and can be lost. SessionStart hooks with matcher `compact` (also `startup`, `resume`, `clear`, `fork`) add their output as context; PreCompact output becomes instructions for the summary. `/compact <focus>` is documented. After two failed corrections, `/clear` and write a better prompt.
+- **Results:** subagents return condensed summaries (about 1,000-2,000 tokens) and file references, not raw output; concise tool responses used about a third of the tokens of detailed ones. Context editing plus the memory tool gave 39% better results and an 84% token cut on one 100-turn eval (no sample size given).
+
+## Caveats
+
+- Paper figures come from abstracts or HTML renderings read by an agent; numbers are leads, not evidence (R-008). No source gives a tokens-per-quality figure for this setup: measure with the worker ledger before and after a change.

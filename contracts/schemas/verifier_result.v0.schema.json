@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "verifier_result.v0",
+  "title": "Verifier result",
+  "$comment": "Draft v0. Follows docs/stages/S5-validate.md. One entry per constraint id the verifier was asked about; evidence_span quotes the output.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "results"
+  ],
+  "properties": {
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "constraint_id",
+          "verdict",
+          "evidence_span",
+          "note"
+        ],
+        "properties": {
+          "constraint_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "verdict": {
+            "enum": [
+              "pass",
+              "fail"
+            ]
+          },
+          "evidence_span": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "_comment": "Template for the PM session hooks. Copy to .claude/settings.local.json (git-ignored) and replace <PROJECT_ROOT> (absolute canonical checkout, forward slashes), <PERMISSION_ROOT> (the same path in permission-rule form, e.g. //d/Project_github/...) and <VENV_PYTHON> (absolute .venv interpreter). Details: tools/agent-workflow/README.md, section Guard hooks.",
+  "permissions": {
+    "deny": [
+      "Read(**/.secrets/**)",
+      "Read(<PERMISSION_ROOT>/.secrets/**)",
+      "Grep(**/.secrets/**)",
+      "Glob(**/.secrets/**)",
+      "Bash(git push --force*)",
+      "Bash(git push *--force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * -f*)",
+      "PowerShell(git push --force*)",
+      "PowerShell(git push *--force*)",
+      "PowerShell(git push -f*)",
+      "PowerShell(git push * -f*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {"type": "command", "timeout": 30, "command": "<VENV_PYTHON>",
+           "args": ["-B", "-I", "<PROJECT_ROOT>/tools/agent-workflow/hooks/process_guard.py"]}
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell|Monitor",
+        "hooks": [
+          {"type": "command", "timeout": 30, "command": "<VENV_PYTHON>",
+           "args": ["-B", "-I", "<PROJECT_ROOT>/tools/agent-workflow/hooks/tool_guard.py", "--git-mode", "pm"]}
+        ]
+      },
+      {
+        "matcher": "ArtifactData",
+        "hooks": [
+          {"type": "command", "timeout": 30, "command": "<VENV_PYTHON>",
+           "args": ["-B", "-I", "<PROJECT_ROOT>/tools/agent-workflow/hooks/question_guard.py"]}
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {"type": "command", "timeout": 30, "command": "<VENV_PYTHON>",
+           "args": ["-B", "-I", "<PROJECT_ROOT>/tools/agent-workflow/hooks/ctx_nudge.py",
+                    "--role", "pm", "--thresholds", "300000,350000", "--loop-window", "4"]},
+          {"type": "command", "timeout": 30, "command": "<VENV_PYTHON>",
+           "args": ["-B", "-I", "<PROJECT_ROOT>/tools/agent-workflow/hooks/tool_monitor.py"]},
+          {"type": "command", "timeout": 60, "command": "<VENV_PYTHON>",
+           "args": ["-B", "-I", "<PROJECT_ROOT>/tools/agent-workflow/hooks/pm_invariants.py"]}
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {"type": "command", "timeout": 30, "command": "<VENV_PYTHON>",
+           "args": ["-B", "-I", "<PROJECT_ROOT>/tools/agent-workflow/hooks/tool_monitor.py"]}
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {"type": "command", "timeout": 60, "command": "<VENV_PYTHON>",
+           "args": ["-B", "-I", "<PROJECT_ROOT>/tools/agent-workflow/hooks/precompact_snapshot.py"]}
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {"type": "command", "timeout": 30, "command": "<VENV_PYTHON>",
+           "args": ["-B", "-I", "<PROJECT_ROOT>/tools/agent-workflow/hooks/standing_rules.py"]},
+          {"type": "command", "timeout": 30, "command": "<VENV_PYTHON>",
+           "args": ["-B", "-I", "<PROJECT_ROOT>/tools/agent-workflow/hooks/session_context.py"]},
+          {"type": "command", "timeout": 30, "command": "<VENV_PYTHON>",
+           "args": ["-B", "-I", "<PROJECT_ROOT>/tools/agent-workflow/hooks/tool_health.py", "session-start"]}
+        ]
+      }
+    ]
+  }
+}

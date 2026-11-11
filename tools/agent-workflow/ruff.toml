@@ -1,0 +1,5 @@
+# Tooling scripts: the project ruff rules, minus line length (long prose lines in docstrings and messages).
+extend = "../../pyproject.toml"
+
+[lint]
+extend-ignore = ["E501"]

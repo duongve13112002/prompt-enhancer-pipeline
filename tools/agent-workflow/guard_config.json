@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "max_command_chars": 16384,
+  "git_timeout_seconds": 10,
+  "tool_broken": {
+    "mode": "block",
+    "streak_length": 2,
+    "harness_error_patterns": [
+      "ENAMETOOLONG",
+      "uv_spawn",
+      "unexpected EOF while looking for matching",
+      "syntax error: unexpected end of file",
+      "spawn \\S+ (ENOENT|EACCES|E2BIG)"
+    ],
+    "ordinary_exit_pattern": "^Exit code -?\\d+",
+    "reset_dir": ".tmp/pm-state/tool-health",
+    "dependent_tools": {"Monitor": "Bash"},
+    "probe_shell": {
+      "windows": {"env": "CLAUDE_CODE_GIT_BASH_PATH", "paths": ["C:/Program Files/Git/bin/bash.exe"]},
+      "posix": {"env": "SHELL", "paths": ["/bin/bash", "/usr/bin/bash"]}
+    },
+    "probe_args": ["-c", "echo ok"],
+    "probe_expect": "ok",
+    "probe_timeout_seconds": 15,
+    "max_path_chars": 6000
+  },
+  "write_guard": {
+    "mode": "block",
+    "allowed_dirs": [".tmp", "runs"]
+  },
+  "git_guard": {
+    "mode": "block",
+    "readonly_subcommands": [
+      "status", "diff", "log", "show", "blame", "shortlog", "describe", "rev-parse", "rev-list",
+      "ls-files", "ls-tree", "cat-file", "grep", "merge-base", "merge-tree", "name-rev", "for-each-ref",
+      "show-ref", "cherry", "range-diff", "diff-tree", "diff-files", "diff-index", "check-ignore",
+      "check-attr", "whatchanged", "show-branch", "version", "help", "config", "worktree", "branch",
+      "tag", "remote", "reflog", "stash"
+    ],
+    "merge_subcommands": ["merge", "add"],
+    "allowed_config_keys": ["color.ui", "core.quotepath", "core.autocrlf", "core.safecrlf", "diff.noprefix", "log.showsignature", "i18n.logoutputencoding", "core.longpaths"],
+    "worktrees_dir": ".tmp/worktrees"
+  },
+  "inline_interp": {
+    "mode": "block",
+    "max_inline_chars": 200,
+    "code_flags": {
+      "python": ["-c"],
+      "node": ["-e", "--eval", "-p", "--print"],
+      "perl": ["-e", "-E"],
+      "ruby": ["-e"]
+    }
+  },
+  "pytest_slot": {
+    "mode": "block",
+    "launchers": ["test_slot.py", "int_delta_tests.ps1"],
+    "exempt_flags": ["--collect-only", "--co", "--version", "--help", "-h"]
+  },
+  "read_router": {
+    "mode": "warn"
+  },
+  "push_guard": {
+    "mode": "block",
+    "marker_dir": ".tmp/pm-state/prepush-ok",
+    "lint_command": "powershell -File .tmp/pm-scripts/prepush_lint.ps1 (PM-local; writes the marker through tools/agent-workflow/prepush_mark.py only when every section is clean)"
+  },
+  "question_guard": {
+    "mode": "warn",
+    "collection": "questions",
+    "verified_field": "verified",
+    "checked_against_field": "checked_against",
+    "decision_pattern": "(?i)\\bdecisions?\\s+#?(\\d{1,4}[a-z]?)\\b",
+    "rule_pattern": "(?i)\\b(S\\d{2})\\b",
+    "decision_files": ["tasks/DECISIONS_INDEX.md", "tasks/archive/DECISIONS_INDEX-*.md"],
+    "decision_row_pattern": "(?m)^\\|\\s*(\\d{1,4}[a-z]?)\\s*\\|",
+    "rules_file": ".agents/policy/USER_STANDING_RULES.md",
+    "rule_row_pattern": "(?m)^(S\\d{2})\\s*\\|",
+    "answered_dir": ".tmp/pm-state/board/questions",
+    "status_field": "status",
+    "answered_status": "answered",
+    "reopens_field": "reopens",
+    "reopen_evidence_pattern": "(?is)^\\s*user words\\s*:\\s*[\"'“‘«].{3,}",
+    "min_option_chars": 12
+  },
+  "ps_error": {
+    "mode": "warn",
+    "patterns": ["\\+ CategoryInfo\\s*:", "\\+ FullyQualifiedErrorId\\s*:", "(?m)^\\s*\\+ ~+\\s*$"]
+  },
+  "eol": {
+    "mode": "warn",
+    "check_after_shell": true
+  },
+  "worker_progress": {
+    "heading": "## AUTO PROGRESS",
+    "max_files": 10,
+    "max_excerpt_chars": 600,
+    "git_status_lines": 15,
+    "transcript_tail_bytes": 4000000
+  }
+}

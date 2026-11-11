@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "response_envelope.v0",
+  "title": "Response envelope",
+  "$comment": "Draft v0. Follows docs/stages/S6-envelope.md. Attachments live outside output (R-011, R-012).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "output",
+    "attachments",
+    "source_binding",
+    "retrieval",
+    "warnings",
+    "trace_id"
+  ],
+  "properties": {
+    "status": {
+      "enum": [
+        "success",
+        "repaired",
+        "degraded",
+        "needs_clarification",
+        "failed"
+      ]
+    },
+    "output": {
+      "type": [
+        "string",
+        "object",
+        "array",
+        "null"
+      ],
+      "description": "Exactly the form the profile's output contract defines; no citations, warnings or debug fields (R-024)."
+    },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "image_id",
+          "role",
+          "bind_to",
+          "use_for"
+        ],
+        "properties": {
+          "image_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "enum": [
+              "source_image",
+              "user_reference",
+              "knowledge_reference"
+            ]
+          },
+          "bind_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "use_for": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "source_binding": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source_image_id"
+          ],
+          "properties": {
+            "source_image_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "retrieval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "snapshot_id"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "disabled",
+            "skipped_no_knowledge_needed",
+            "retrieved",
+            "no_match",
+            "failed"
+          ]
+        },
+        "snapshot_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "PARAM_UNSUPPORTED",
+          "SCHEMA_INVALID",
+          "TRUNCATED",
+          "SNAPSHOT_MISSING",
+          "PROFILE_CONFLICT",
+          "BUDGET_EXHAUSTED"
+        ]
+      }
+    },
+    "trace_id": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

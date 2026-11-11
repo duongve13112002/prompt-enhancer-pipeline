@@ -1,0 +1,23 @@
+# K0 Sync: scan, diff, plan, guard, publish
+
+**Purpose.** Keep the knowledge base managed (R-014, decision 17): find what changed in the source tree, reprocess only what is affected, and publish a new immutable snapshot without disturbing running requests. K0 is the entry and exit of `kb sync`, the only writer; K1 to K5 run between its execute and publish steps. The full flow, the change table and the key scheme live in [execution](../execution.md#the-kb-sync-flow-r-014-decision-17).
+
+**Input and output.** The source tree under `knowledge.root` (concept folders, info files, `kb_overrides.yaml` at the root) and the current snapshot, then the plan, updated `sync_state`, the rows of `folders`, `concepts`, `folder_concepts`, `images`, `folder_images`, a sync report, and on publish a `snapshots` row and the moved current pointer. Layout of a knowledge base: [kb/README.md](../../kb/README.md).
+
+**Method.**
+1. Scan the whole tree; hash files whose size or modification time changed. Every image gets `image_id = sha256:<hex>` of its bytes.
+2. Parse each folder (R-007, decisions 9, 10 and 30): line 1 of the info file holds the names, line 2 the descriptions, both split by `knowledge.concept_separator` and matched by position; a folder without an info file, or whose info file gives no usable name (it is empty, cannot be decoded or has no name on line 1 **[P]**), is recorded with a pending name and is named later by a model from images drawn at random ([K2](K2-observe.md), decisions 30 and 39); an info file that parses is still judged for clarity by a model in K2 (decision 40), and an unclear one sends its folder to the same naming step; folder names are used as given and nothing splits them. Names are compared after Unicode normalisation (NFKC, case folding) only; `concept_id` derives from the normalised name, so the same name in several folders is one concept (decision 10). A folder whose name and description counts differ is reported and not indexed until fixed.
+3. Diff against the current snapshot; plan the work and the model calls per role; `--plan` stops here.
+4. Apply the mass-deletion guard, execute K1 to K4 per artifact (order in [execution](../execution.md#the-kb-sync-flow-r-014-decision-17)), build the snapshot (K5), validate it, publish.
+
+**Decisions and configuration keys.** `knowledge.root`, `knowledge.info_file.names`, `knowledge.concept_separator` (default the vertical bar, decision 9), `knowledge.naming.*` ([K2](K2-observe.md)), `knowledge.overrides_file`, `knowledge.on_source_removed` (`remove` by default), `sync.mass_deletion_guard.max_removed_fraction` (`design_required`), `sync.snapshots.keep`, `sync.gc.retention`, `storage.kb_store`. Two folders that give one concept different descriptions keep both, each with its source, and the conflict goes to the lint report. A generated description is not a conflict with another folder's description. The sync report lists every model-named folder.
+
+**Compute.** CPU and disk; hashing runs in parallel over a bounded worker pool. Not implemented; nothing measured.
+
+**Depends on.** Nothing upstream; calls K1 to K5.
+
+**Failure modes.** An unmounted source drive looks like a mass deletion (caught by the guard); an interrupted sync (resumed from `sync_state`; the current snapshot stays published); a folder edited during a scan (the next sync sees it); duplicate images across folders (one `image_id`, several `folder_images` rows).
+
+**Experiments.** E14 uses the sync plan's call counts; the guard share is decided with the user's knowledge-base layout (`design_required`).
+
+**References.** [N124](../note/N124-incremental-indexing.md), [N125](../note/N125-snapshots-and-vector-deletion.md), [N126](../note/N126-content-addressed-caches.md).

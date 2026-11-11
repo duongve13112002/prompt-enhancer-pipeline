@@ -1,0 +1,8 @@
+# Optional override file at the knowledge-base root, keyed by concept name (one file for the whole base).
+# It corrects a wrong card without touching images. Documentation only; nothing is implemented.
+"Áo dài":
+  concept_type: clothing                # if absent the system infers it and marks it "inferred"
+  aliases: ["ao dai", "áo dài truyền thống"]
+  facts:                                # facts the author asserts; trusted like the info file
+    - {facet: apparel.silhouette, value: "fitted long tunic with side slits"}
+  suppress: [apparel.color]             # facets never used from this concept

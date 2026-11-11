@@ -1,0 +1,19 @@
+# Model call rules (binding detail of AGENTS.md)
+
+Read before changing a prompt, a model call, the client or the backend settings. Request fields: [contracts/vlm-request.md](../../contracts/vlm-request.md); prompt contract: [prompts/README.md](../../prompts/README.md). Rules and source name no model: models and backends are profile values (R-018).
+
+1. **Backend.** Every model role (`vlm.roles.<name>`) is reached over HTTP through its configured backend. The repository never installs or starts a production server. Keys live in files under `.secrets/`; a non-loopback endpoint uses HTTPS. Record provider, endpoint name (not the key), model id and revision with every run.
+2. **Capability probe.** At start send test requests and record what the backend supports (image input, JSON schema, thinking switch, several images, each sampling field). The result is stored with the run ([dev-machine](../dev-machine.md), E12).
+3. **No implicit defaults.** Every request field is stated in the profile; none is left to a library or server default.
+4. **Thinking off on the request path** where the backend allows it; the switch name is a profile value ([serving](../serving.md), E10).
+5. **Unsupported parameters** are dropped with a recorded `PARAM_UNSUPPORTED` warning, and the effective request is stored, so every result stays bound to what was really sent.
+6. **Prompt versioning.** Every prompt has a `prompt_id`. A change is a new id and invalidates every fitted value that depends on it, because fitted values belong to one (model, prompt, image size) combination.
+7. **Image size.** Downscale before sending, to `vision.max_image_side`, because the server default can be far larger than a request needs.
+8. **Data, not instructions.** Knowledge-base text, text read from images and captions go in as delimited data, never at an instruction position (R-026, [N131](../note/N131-image-prompt-injection.md)).
+9. **Structured output** is validated after the engine, because engines may ignore schema keywords silently. An invalid response is recorded (`SCHEMA_INVALID`), retried only as the stage design allows, and never repaired by guessing.
+10. **Independence.** A model never evaluates output, labels or scenarios that it produced itself.
+11. **Cloud backends and budget (decision 28).** The local backend is the default for every role. A cloud backend (Claude or Gemini; the default model ids are profile values in `configs/enhancer.example.yaml`) is used only when the configuration profile binds a role to it, its key file is under `.secrets/`, and the user has said how many requests it may spend (`call_budget: ask_user` until then). Count every call against the budget; when it is spent, continue on the default backend with the warning `BUDGET_EXHAUSTED` unless the profile says `stop` (decision 29). Images go to a cloud provider only while `allow_images` is true; when it is false, a request that carries an image runs on the default backend.
+12. **Claims.** State no accuracy or throughput number for a model without a note (R-021); measure on the user's backend.
+13. **No word lists.** No per-language rules or keyword lists in prompts or code; meaning comes from the model, structure from direct checks (R-015).
+
+**Where model names may appear.** The rule that rules and source name no model (R-018) is about the product's models. Their names appear only in example profiles and overlays under `configs/`, in [dev-machine.md](../dev-machine.md) and [serving.md](../serving.md), in research notes and in the decision record. The agent models in `.agents/policy/PM_POLICY.md` are a separate matter: they are the tools that build the product.

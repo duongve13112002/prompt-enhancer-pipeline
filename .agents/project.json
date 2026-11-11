@@ -1,0 +1,50 @@
+{
+  "_comment": "The one file that binds the agent tooling (tools/agent-workflow, .agents/, hooks) to THIS repository. Every project-specific value the tools need lives here; everything else derives the root from the tools' own location. Validated by tools/agent-workflow/project_config.py; checked and applied by tools/agent-workflow/setup_project.py. After copying the tooling to another repository, edit this file, then run `setup_project.py apply` and `setup_project.py check` (skill: .agents/skills/agent-setup).",
+  "schema_version": 1,
+  "project": {
+    "name": "prompt-enhancer-pipeline",
+    "summary": "Prompt enhancer for image generation and editing, grounded in a knowledge base of concept folders"
+  },
+  "python": {
+    "min_version": "3.11",
+    "venv_dir": ".venv",
+    "src_dir": "src",
+    "package": null,
+    "runtime_config_module": null,
+    "runtime_config_loader": "load_runtime_settings"
+  },
+  "git": {
+    "default_branch": "main",
+    "integration_branch": "main"
+  },
+  "agents": {
+    "claude": {
+      "enabled": true,
+      "cli": "claude"
+    },
+    "codex": {
+      "enabled": true,
+      "cli": "codex"
+    },
+    "antigravity": {
+      "enabled": true,
+      "cli": "agy",
+      "runner_scripts_dir": "scripts/agy-runner"
+    }
+  },
+  "foreign_bindings": [
+    "image_correction",
+    "Enhance_Diffusion_model_pipeline",
+    "D:/Project_github",
+    "r3-batch",
+    "R-261",
+    "image-curation-pipeline",
+    "curation.example.yaml",
+    "VLM_VERIFIER_RULES"
+  ],
+  "foreign_scan_exclude": [
+    ".agents/project.json",
+    "tasks/archive/",
+    "tools/agent-workflow/tests/"
+  ]
+}

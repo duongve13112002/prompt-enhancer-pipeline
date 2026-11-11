@@ -1,0 +1,29 @@
+{
+  "_comment": "Settings of the session-memory hooks (decision 353): hooks/session_context.py, hooks/precompact_snapshot.py, recall.py build --settled, decisions_applied.py and supervisor_events.py. Every field is required and validated by memory_hooks_config.py; a missing or invalid field switches off only the block that needs it, with a visible 'not configured' line. total_inject_chars is at most 10000, the documented cap of the harness for hook context; inbox_max_chars at most 9000.",
+  "batch_branch": "main",
+  "git_timeout_seconds": 8,
+  "max_branch_lines": 15,
+  "max_worktree_lines": 12,
+  "total_inject_chars": 9500,
+  "note_inject_chars": 8000,
+  "decisions_default": 8,
+  "decisions_max": 50,
+  "decision_text_chars": 100,
+  "inject_headings": ["## USER AGREEMENTS", "## IN-FLIGHT", "## NOW"],
+  "inflight_snapshot_chars": 2500,
+  "precompact_git_timeout_seconds": 20,
+  "precompact_git_status_lines": 15,
+  "settled_max_chars": 4000,
+  "settled_head_chars": 2000,
+  "settled_line_chars": 90,
+  "settled_keywords_per_row": 4,
+  "settled_stopwords": [
+    "about", "after", "also", "answer", "answers", "before", "between", "both", "does", "from", "have",
+    "into", "just", "keep", "keeps", "must", "never", "only", "other", "same", "should", "that", "their",
+    "them", "then", "there", "these", "this", "those", "user", "users", "uses", "using", "when", "where",
+    "which", "while", "will", "with", "without", "words", "would", "your"
+  ],
+  "applied_from_decision": 1,
+  "pending_rows_max": 15,
+  "inbox_max_chars": 4000
+}

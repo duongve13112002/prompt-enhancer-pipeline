@@ -1,0 +1,36 @@
+# Agent runtime state (the orchestration rules file stays tracked)
+.agents/registry.json
+.agents/log.md
+
+# Local state, environments, caches
+.tmp/
+.cache/
+.venv/
+.venv-*/
+wheelhouse/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Models, run evidence and secrets
+models/*
+!models/README.md
+runs/
+.secrets/*
+!.secrets/README.md
+
+# Machine-local Claude Code settings
+.claude/settings.local.json
+CLAUDE.local.md
+
+# The knowledge base: keep only the README and the text-only example (the user's real one lives elsewhere)
+kb/*
+!kb/README.md
+!kb/_example/
+evalset/*
+!evalset/README.md
+
+# Working data: kb_store, snapshots, evaluation tables, traces
+data/

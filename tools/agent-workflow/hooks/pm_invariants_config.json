@@ -1,0 +1,13 @@
+{
+  "schema_version": 2,
+  "check_interval_minutes": 10,
+  "unpushed_age_minutes": 30,
+  "note_age_minutes": 60,
+  "result_lookback_minutes": 240,
+  "max_paths_listed": 3,
+  "git_timeout_seconds": 10,
+  "process_list_timeout_seconds": 20,
+  "supervisor_markers": ["pm-supervisor.ps1"],
+  "supervisor_heartbeat_file": "pm-supervisor.json",
+  "ci_watcher_markers": ["ci_wait_private.ps1"]
+}

@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "folder_naming.v0",
+  "title": "Folder naming",
+  "$comment": "Draft v0. Follows docs/stages/K2-observe.md, step 'Naming folders without a usable info file' (decisions 30, 39, 40, 42). One folder_namer call looks at images drawn at random from the folder and returns this object. Names produced here carry origin generated.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "folder_id",
+    "folder_name_fits",
+    "info_file_fits",
+    "images_consistent",
+    "concepts",
+    "reason",
+    "sampled_image_ids"
+  ],
+  "properties": {
+    "folder_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "folder_name_fits": {
+      "type": "boolean",
+      "description": "Whether the folder name fits what the sampled images show, judged by the model."
+    },
+    "info_file_fits": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "Whether the names of the folder's info file fit what the sampled images show; null when the folder has no info file."
+    },
+    "images_consistent": {
+      "type": "boolean",
+      "description": "False when the sampled images show unrelated subjects; the sync report then flags the folder (decision 42)."
+    },
+    "concepts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "description"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "description": "One sentence."
+          }
+        }
+      }
+    },
+    "reason": {
+      "type": "string"
+    },
+    "sampled_image_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}
