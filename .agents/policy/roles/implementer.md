@@ -6,3 +6,4 @@
 - Run the done check yourself and paste its real output. If it fails twice at the same step, stop and report what blocks.
 - Fill `Configuration impact` before the first runtime edit and the `Configuration audit` before handoff (skill `config-audit`).
 - Remove temporary files and scripts you created for iteration before handoff.
+- Comments are concise English on intent and tradeoffs; mutate the changed lines (about 3 to 10 mutants) and report the survivors.

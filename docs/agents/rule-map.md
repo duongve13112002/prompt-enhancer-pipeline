@@ -39,3 +39,25 @@ Written when the rules were restructured on 2026-11-11 (decision 24), so that no
 | `USER_STANDING_RULES.md` | S01 to S33 kept with their IDs; S34 to S37 added from the user's messages of 2026-11-11 |
 | `ORCHESTRATION.md`, `AGENT_PEER_RULES.md` | Copied; only the earlier project's decision numbers were removed |
 | New | `.agents/policy/roles/*.md`, `.agents/policy/cli/*.md` |
+
+## Streamlining of 2026-11-13 (decision 48)
+
+| Rule | Moved to |
+| --- | --- |
+| AGENTS.md section 13: review policy, single pass, high-risk reviews, fix-round cap, run each check once, keeping proposals and findings apart | `PM_POLICY.md` section 5 |
+| AGENTS.md section 13: cold read | `PM_POLICY.md` section 8 (already there) |
+| AGENTS.md section 13: report format and handoff labels | the template's Completion report and Handoff; `ORCHESTRATION.md` section 8.4 |
+| AGENTS.md section 3: notes and their index | researcher pack (draft in the task file); the PM numbers and indexes at integration |
+| AGENTS.md section 5: comments; section 7: implementer mutants | implementer pack |
+| AGENTS.md section 7: reviewer mutants | reviewer pack |
+| AGENTS.md section 6: global caches; section 8: warm pools | `docs/rules/PLATFORM_GPU_RULES.md` |
+| AGENTS.md section 6: acquire models only from the pinned source | `docs/model-storage.md` |
+| AGENTS.md section 10: requirement headlines | four headlines kept; the rest in `tasks/REQUIREMENTS.md` |
+| AGENTS.md section 11: confirm the repository is private at session start | `ORCHESTRATION.md` section 2 |
+| `ORCHESTRATION.md` registry `.agents/registry.json`, TTL bookkeeping, reuse of a `waiting_qa` agent for a new task | removed: state in `cli-workers.json`, `agents.json` and `## IN-FLIGHT`; one fresh worker per task (decision 45) |
+| `ORCHESTRATION.md` four report formats | one: the template's Completion report |
+| `PM_POLICY.md` "two review rounds per attempt chain", "3 attempts per row" | one fix-round cap of three per task (section 5) |
+| Small-task class | `PM_POLICY.md` section 4 and the template, decision 49 (S16 changed accordingly) |
+| `PM_POLICY.md` agy prompt form | `.agents/policy/cli/antigravity.md` |
+| `ORCHESTRATION.md` "never change effort" | effort may change on Claude without losing the cache (N135); model and tools may not |
+

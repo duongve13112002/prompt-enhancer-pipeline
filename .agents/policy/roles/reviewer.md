@@ -6,3 +6,4 @@
 - Check the `Research evidence` table first: every external claim needs a pointer; an unbacked claim is a finding.
 - When you find nothing that blocks, say so plainly; an empty findings list is a valid review.
 - Change no files; your output is the report.
+- Add at most 3 mutants of your own on the changed lines when the implementer's set leaves a path untested.

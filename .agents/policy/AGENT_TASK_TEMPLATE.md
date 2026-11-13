@@ -13,6 +13,8 @@
 - **Role pack and CLI wrapper:** the worker's role (`implementer`, `reviewer`, `scout`, `researcher`, `runner`) and CLI; the PM pastes `.agents/policy/roles/<role>.md` above the footer and `.agents/policy/cli/<cli>.md` at the top.
 - **Test sets:** the tests this change must keep green, or `not applicable: <reason>` (the lint's built-in list still names another project's suites; task T-020 rebinds it).
 - **Trivial:** `yes` only for a wording or configuration-value edit; it skips Step 0.
+- **Small:** `yes` for a small task ([PM_POLICY](PM_POLICY.md) section 4, decision 49); Step 0 goes atop the report and the worker continues (Codex: still two messages). The done check and the review stay.
+- **Base:** the commit and the predecessor patches the worktree starts from (ORCHESTRATION section 5).
 
 ## Step 0 (before any edit)
 
@@ -22,7 +24,7 @@ Unless the header says `Trivial: yes`, write into the task file first:
 2. **Questions:** at most 5, ranked by impact, each with a proposed answer.
 3. **Plan:** what exists, what is missing, the steps, and finish checks mapped to the done check.
 
-A file-changing task then replies with Step 0 and stops until the plan is approved (who reads it: [PM_POLICY](PM_POLICY.md) section 4). Reviewers, scouts, checkers and researchers put Step 0 at the top of their report and continue. Step 0 reuses `Research required before code` and the hazard map; it adds no separate research step.
+A file-changing task that is not small then replies with Step 0 and stops until the plan is approved (who reads it: [PM_POLICY](PM_POLICY.md) section 4). Small tasks, reviewers, scouts, checkers and researchers put Step 0 at the top of their report and continue. Step 0 reuses `Research required before code` and the hazard map; it adds no separate research step.
 
 After approval, build one step at a time inside scope, with a two-line summary per step under `## Steps` in the task file. Deliver the output, the plan, the check results and `not_run` (what was not done, with the reason).
 
@@ -35,7 +37,7 @@ Use this compact template for every delegated task. Remove irrelevant rows only 
 
 - **Task name:**
 - **Responsible role:**
-- **Task difficulty and assigned model:** (host, model and `.claude/agents/*.md` definition on Claude Code)
+- **Task difficulty and assigned model:** (CLI, model and the `cli_worker.py` profile or Codex role)
 - **Reasoning effort and reason:**
 - **Preloaded skills:**
 - **Current status:**
@@ -82,3 +84,5 @@ An unclassified runtime literal, ignored configured field, hidden material defau
 - **What was already done:**
 - **What the next agent must do:**
 - **What must not be repeated:**
+- **Worktree, base and partial patch:** (path, base commit, `.tmp/pm-state/patches/<task>.partial.patch` when the task stopped midway)
+- **Decisions and notes for the PM to merge:** (entries for `docs/implementation-notes.md` and drafted research notes; workers do not edit those shared files)

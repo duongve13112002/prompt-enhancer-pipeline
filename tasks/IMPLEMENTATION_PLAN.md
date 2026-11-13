@@ -1,6 +1,6 @@
 # Implementation Plan
 
-Plan only. **Implementation (T-005 onward) starts only after an explicit user command** (AGENTS.md). T-002 to T-004 are read-only or documentation work that starts when the user approves its Step 0. No duration is estimated: it depends on the knowledge-base size, the machines and review capacity.
+Plan only. **Every code task (T-005 onward, the tooling tasks T-020 to T-026, and the code part of T-003) starts only after its own explicit user command** `BẮT ĐẦU IMPLEMENTATION <task>` (AGENTS.md Gates). T-002, T-004 and the design part of T-003 are read-only or documentation work that starts when the user approves its Step 0. No duration is estimated: it depends on the knowledge-base size, the machines and review capacity.
 
 ## Phase 0 and first working path
 
@@ -26,7 +26,9 @@ Plan only. **Implementation (T-005 onward) starts only after an explicit user co
 
 **Gate 1:** every path (generate, edit, retrieval off) works end to end on the dev machine; structural checks pass; the isolation test passes with no knowledge base present.
 
-## Workflow and tooling (decision 24, decision 26)
+## Workflow and tooling (decisions 24, 26 and 43 to 48)
+
+Order: T-024, T-025 and T-026 come before the first parallel code wave (they make review of uncommitted patches, cleanup and quota waits work); T-020 and T-021 before or alongside T-005.
 
 | ID | Task | Kind | R-IDs | Needs user go |
 | --- | --- | --- | --- | --- |
@@ -34,7 +36,9 @@ Plan only. **Implementation (T-005 onward) starts only after an explicit user co
 | T-021 | Brief order (context first, task last) in `brief_lint.py`; scope-guard hook that blocks edits outside a brief's Scope; report lint that requires the done-check output and evidence pointers | code | R-021 | yes |
 | T-022 | CI: GitHub Actions on the latest Ubuntu and Windows; the workflow started by manual dispatch on a commit the user pushed (decision 37); the visibility-window script with the always-run return to private; a session-start check that the repository is private. Starts by re-reading the sources of [N134](../docs/note/N134-github-visibility-and-actions.md) ([docs/ci.md](../docs/ci.md)) | code | R-025 | yes |
 | T-023 | Baseline of rule violations and tokens per accepted task, then the comparison after T-020 and T-021 | run | R-021 | no |
-| T-024 | Align the copied tooling with decision 37 (the user makes every commit and push): `tool_guard.py` denies commit, push and history-changing commands for the PM as well as for workers; integration of a worker's result as an uncommitted patch; messages and docs that say "the PM commits" (`cli_worker.py`, `CLAUDE_CLI_SUBAGENTS.md`); tests | code | R-021 | yes |
+| T-024 | Align the copied tooling with decisions 37, 41 and 48 (no agent commits): `tool_guard.py` denies commit, push and history-changing commands for the PM as well as for workers and lets the PM stage inside a worker worktree to save a patch; `gemini-ws.ps1` builds an Antigravity workspace from a worktree or a saved patch instead of `Base..Head` commits; the merge mode of the Git guard; messages and docs that say "the PM commits" or name `.agents/registry.json` (`cli_worker.py`, `CLAUDE_CLI_SUBAGENTS.md`, `audit_brief.md`); tests | code | R-021 | yes |
+| T-025 | Cleanup tooling (decision 43): `purge_tmp.py` gains a dry run and a `sweep` command that lists and deletes `.tmp` children no worker, task or job owns past a configured age (default 72 hours) and applies a retention to `.tmp/pm-archive`; the SessionStart hook prints the size of `.tmp` and the number of orphans; tests | code | R-021 | yes |
+| T-026 | Quota tooling (decisions 44, 46): re-read the sources of [N135](../docs/note/N135-quota-reset-and-scheduling.md); a status-line script that writes Claude's `rate_limits` and Antigravity's `quota` to `.tmp/pm-state/`; `usage_snapshot.py` reads those files (and stops assuming JSON from `agy -p /usage`), treats a provider without a reported limit as unlimited, and flags Claude at 90%; `quota-blocks.json` written on exhaustion and printed by the SessionStart hook; a dry run of the scheduled wake on the dev machine, both as a one-shot Desktop scheduled task (new session, one-orchestrator check) and with `CronCreate` in the terminal CLI; project allow rules for the commands a wake session runs (`usage_snapshot.py`, `cli_worker.py status` and `send`, `purge_tmp.py`), after checking whether Desktop scheduled sessions honour project settings, so an unattended wake needs no approval; the supervisor keeps the computer awake only while workers run, without changing power settings; a source for Claude's own reset time inside Claude Desktop (the `rate_limit_event` of worker turns, or another documented one); tests | code | R-021 | yes |
 
 ## Phase 2: quality
 
@@ -44,6 +48,7 @@ Plan only. **Implementation (T-005 onward) starts only after an explicit user co
 | T-031 | Deployment smoke and latency and throughput measurement (E13), run by the user from the run guide | run | R-019 |
 | T-032 | Card audit (E16) on a sample the user checks | run | R-010 |
 | T-033 | Downstream evaluation with an image model, once the user provides one (E8) | run | R-011 |
+| T-034 | Flow test with Codex image generation as a stand-in image model (decision 47, [N136](../docs/note/N136-codex-image-generation.md)): one generation and one edit first to confirm the tool works in `codex exec`; then render the pilot's enhanced prompts once each with the `codex-image` role, edit images Codex made itself (the user's knowledge-base images only if the user allows it), and have a vision model check each image against the constraint ledger; report images made and what the check found. Shows that the flow works, never the quality of the user's image model. After T-017 | run | R-001, R-011 |
 
 **Gate 2:** intent preservation and concept resolution meet targets the user sets after the first measurements; latency meets R-019 on the deployment.
 

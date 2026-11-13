@@ -4,7 +4,7 @@ Design only; nothing exists yet.
 
 ## Models
 
-Weights live under `models/` in the project root (Git-ignored), uploaded in advance. Each model has a manifest entry verified at load time: repository, revision, filenames, sizes, SHA-256, licence. A quantised model and its projector file have entries with the same fields. Never substitute a model, quantisation or path silently, because a changed file changes every artifact derived from it ([K0-sync](stages/K0-sync.md), R-017).
+Weights live under `models/` in the project root (Git-ignored), uploaded in advance; a missing artifact is acquired only from its pinned source and only when the task permits a download. Each model has a manifest entry verified at load time: repository, revision, filenames, sizes, SHA-256, licence. A quantised model and its projector file have entries with the same fields. Never substitute a model, quantisation or path silently, because a changed file changes every artifact derived from it ([K0-sync](stages/K0-sync.md), R-017).
 
 ## Data volume
 

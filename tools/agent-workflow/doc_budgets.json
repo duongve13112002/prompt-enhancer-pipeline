@@ -1,18 +1,19 @@
 {
-  "_comment": "Live-document character budgets, checked by hooks/session_context.py at every PM session start, resume and compaction. Over budget: condense or archive verbatim in the same change set. 2026-11-11 (this repository): AGENTS.md lowered to stay well under the 24,000-byte rule-file limit of agy (N130); PM_POLICY raised for section 8 (cold read); role packs and CLI wrappers are short by design and have no budget entry.",
+  "_comment": "Live-document character budgets, checked by hooks/session_context.py at every PM session start, resume and compaction. Over budget: condense or archive verbatim in the same change set. 2026-11-11 (this repository): AGENTS.md lowered to stay well under the 24,000-byte rule-file limit of agy (N130); PM_POLICY raised for section 8 (cold read); role packs and CLI wrappers are short by design and have no budget entry. 2026-11-13 (decision 48): AGENTS.md cut to about 12 KB; review rules moved into PM_POLICY; ORCHESTRATION rewritten and given a budget; standing rules S40 and S41 added. USER_STANDING_RULES plus AGENT_PEER_RULES are injected whole by hooks/standing_rules.py and their budgets must sum below its 10,000-character cap, so the peer-rules budget is 1500 (the file is about 500). PM_POLICY raised to 23000 for the Claude Desktop wake path (decision 52).",
   "project": {
     "CLAUDE.md": 2000,
-    "AGENTS.md": 19000,
+    "AGENTS.md": 12500,
     "tasks/STATUS.md": 20000,
     "tasks/PROJECT_CONTEXT.md": 12000,
-    ".agents/policy/PM_POLICY.md": 20000,
+    ".agents/policy/PM_POLICY.md": 23000,
     "tasks/LESSONS_LEARNED.md": 20000,
     "tasks/DECISIONS_INDEX.md": 35000,
     ".agents/policy/AGENT_BRIEF_FOOTER.md": 4600,
     "docs/agents/README.md": 6000,
     "tools/agent-workflow/CODEX_JOBS.md": 3000,
-    ".agents/policy/USER_STANDING_RULES.md": 6500,
-    ".agents/policy/AGENT_PEER_RULES.md": 3900
+    ".agents/policy/USER_STANDING_RULES.md": 7500,
+    ".agents/policy/AGENT_PEER_RULES.md": 1500,
+    ".agents/ORCHESTRATION.md": 17000
   },
   "pm_note": 15000,
   "memory": {

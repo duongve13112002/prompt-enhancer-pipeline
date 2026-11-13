@@ -6,7 +6,7 @@ Classes: **source-verified** = the PM or an agent read the primary source itself
 
 Two groups: N008 to N097 were carried over from the project the tooling came from (each says so in a `Carried over` line; numbers they mention for stages, experiments, requirements and decisions belong to that project); N000 and N100 onward were written for this repository on 2026-11-11.
 
-Counts: assumption 7, documented 48, source-verified 17.
+Counts: assumption 7, documented 51, source-verified 17.
 
 | ID | Note | Class | Used in |
 | --- | --- | --- | --- |
@@ -82,3 +82,6 @@ Counts: assumption 7, documented 48, source-verified 17.
 | N132 | [Retrieval evidence for Vietnamese and rare entities](N132-multilingual-retrieval-evidence.md) | documented | G, E1, E4 |
 | N133 | [Benchmarks for instruction-based image editing](N133-edit-evaluation-benchmarks.md) | documented | G (downstream evaluation) |
 | N134 | [GitHub repository visibility changes and Actions billing](N134-github-visibility-and-actions.md) | assumption | docs/ci.md, task T-022 |
+| N135 | [Usage-limit reset times and in-session scheduling](N135-quota-reset-and-scheduling.md) | documented | PM_POLICY section 1, ORCHESTRATION, tasks T-025, T-026 |
+| N136 | [Codex CLI built-in image generation](N136-codex-image-generation.md) | documented | task T-034, G (E8 stand-in), .agents/policy/cli/codex.md |
+| N137 | [Public guidance on multi-agent coding workflows](N137-orchestration-guidance-review.md) | documented | decisions 44 to 48, ORCHESTRATION, PM_POLICY, AGENTS.md |

@@ -5,12 +5,13 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
 ## Current state
 
 - **Phase:** `INIT` (documentation and agent tooling; no pipeline code). Implementation starts only on an explicit user command.
-- **Done 2026-11-11:** repository seeded (T-001): requirements R-001 to R-028, decisions 1 to 42, architecture, fifteen stage documents, contracts and schemas, example profiles, an example admin profile, knowledge-base and evaluation-set layouts, 72 research notes; tooling copied and bound through `.agents/project.json`; rules restructured per decision 24 (core rules, role packs, CLI wrappers; map in [docs/agents/rule-map.md](../docs/agents/rule-map.md)).
+- **Done 2026-11-11:** repository seeded (T-001): requirements R-001 to R-028, decisions 1 to 53, architecture, fifteen stage documents, contracts and schemas, example profiles, an example admin profile, knowledge-base and evaluation-set layouts, 72 research notes; tooling copied and bound through `.agents/project.json`; rules restructured per decision 24 (core rules, role packs, CLI wrappers; map in [docs/agents/rule-map.md](../docs/agents/rule-map.md)).
+- **Workflow revised 2026-11-13 (decisions 43 to 48):** the orchestrator cleans `.tmp` itself; Claude workers stop at 90% of Claude's window; scheduled wake at a known quota reset, resuming only approved tasks; one fresh worker per task; Codex image generation as a stand-in image model (T-034); AGENTS.md shortened and ORCHESTRATION rewritten for this repository's tools. Evidence: [N135](../docs/note/N135-quota-reset-and-scheduling.md), [N136](../docs/note/N136-codex-image-generation.md), [N137](../docs/note/N137-orchestration-guidance-review.md).
 - **Cold read (T-004, R-028):** see the task file [archive/T-004-cold-read.md](archive/T-004-cold-read.md) for the first round's readers, findings, fixes and the questions sent to the user.
 - **Tooling check at seeding:** `python3 -B -I tools/agent-workflow/setup_project.py check` in a Linux container: binding, instruction files, budgets, hook-read files, Git-ignore entries and foreign tokens OK; warnings for machine facts (no `.venv`, no Codex or agy CLI, no PowerShell, hooks not registered, no `.tmp/pm-state`); `setup_project.py apply` was not run because it renders machine-local settings.
-- **Not run:** nothing was implemented, measured or benchmarked. No live Claude, Codex or agy worker was started in this layout; hooks were not exercised in an interactive session. The tool test suite was not run here.
+- **Not run:** nothing was implemented, measured or benchmarked. No live Claude, Codex or agy worker was started in this layout; hooks were not exercised in an interactive session. **Tool tests (2026-11-13, Linux container, Python 3, pytest in a scratch venv):** 3017 passed, 82 skipped, 10 failed; the same 10 fail on the earlier copy of this repository and the checked ones fail in the user's original project too (Windows-specific behaviour: process trees, PID times, links, path separators, PowerShell commands), so they are to be rerun on the Windows dev machine (task T-002 reports the result).
 - **Git and remote:** the user creates the GitHub repository, clones it, sets up `gh` and makes every commit and push (decisions 35 to 37 and 41); agents work inside that clone and only propose commit messages. The delivered zip holds the files only, with no Git data.
-- **Next:** T-002 (environment report, read-only) and T-003 (evaluation scenarios from the user's knowledge base), each when the user approves its Step 0.
+- **Next:** T-002 (environment report, read-only) and T-003 (evaluation scenarios from the user's knowledge base), each when the user approves its Step 0; T-024 to T-026 before the first parallel code wave.
 
 ## PM proposals in force, awaiting the user's explicit confirmation
 
@@ -20,7 +21,7 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
 4. Brief order "context first, task last" and the scope-guard and report-lint tools wait for tooling tasks T-020 to T-022; until then briefs keep the old order.
 5. CI starts by manual dispatch only, when the user asks for a run on a pushed commit ([docs/ci.md](../docs/ci.md)).
 
-The copied tooling still assumes that the PM commits; T-024 aligns it with decisions 37 and 41.
+The copied tooling still assumes that the PM commits, that a worker registry file exists and that `agy -p /usage` prints JSON; T-024 to T-026 align it.
 
 ## Not questions for the user
 

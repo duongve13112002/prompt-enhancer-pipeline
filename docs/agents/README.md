@@ -9,7 +9,7 @@ Overview for people and agents. Rules: [AGENTS.md](../../AGENTS.md). Dispatch: [
 | Rules every agent loads | `AGENTS.md` (Claude through `CLAUDE.md` -> `@AGENTS.md`; Codex and agy directly) |
 | Project binding for the tooling | `.agents/project.json` |
 | Models per role, quota, reviews, focus | `.agents/policy/PM_POLICY.md` |
-| Reuse of warm agents, registry, cleanup | `.agents/ORCHESTRATION.md` |
+| Assignment, state, cleanup | `.agents/ORCHESTRATION.md` |
 | Brief template and footer | `.agents/policy/AGENT_TASK_TEMPLATE.md`, `AGENT_BRIEF_FOOTER.md` |
 | Rules for one role; framing for one CLI | `.agents/policy/roles/`, `.agents/policy/cli/` |
 | Where each older rule went | `docs/agents/rule-map.md` |
@@ -24,12 +24,12 @@ Overview for people and agents. Rules: [AGENTS.md](../../AGENTS.md). Dispatch: [
 ## Roles
 
 - **PM / orchestrator:** the agent you chat with (mode DELEGATE by default). Plans, writes briefs, delegates, reads every report, updates `tasks/STATUS.md`, proposes commit messages (the user commits and pushes).
-- **Workers** (dev, reviewer, scout, checker): Claude `claude -p`, Codex or agy sessions; one task per brief, inside its scope; never commit; Step 0 first.
+- **Workers** (implementer, reviewer, scout, researcher, runner): Claude `claude -p`, Codex or agy sessions; one fresh worker per task, kept only for that task's fix rounds and phases; inside its scope; never commit; Step 0 first.
 - **Cheap readers** (Haiku 5.5, `gpt-6-luna`, Gemini 3.8 Flash at `low`): search, digest logs and diffs, read web pages; their numbers are leads until a primary source is re-read.
 
 ## Quota
 
-All three CLIs run on subscriptions with a 5-hour window and a weekly limit. Before each round of assignments the PM runs `usage_snapshot.py` and uses each provider until its quota runs out, then moves its work to another provider (PM_POLICY section 1).
+All three CLIs run on subscriptions with a 5-hour window and a weekly limit. Before each round the PM reads the usage; Codex and Antigravity are used until their quota runs out, Claude workers until 90% of Claude's window (the rest is the orchestrator's); a provider that reports no limit is not checked. When a provider runs out and its reset time is known, the PM schedules its own wake for that time and then resumes only work the user already approved (PM_POLICY section 1).
 
 ## Life of a task
 
@@ -37,7 +37,8 @@ All three CLIs run on subscriptions with a 5-hour window and a weekly limit. Bef
 2. The worker writes Step 0 (unknowns, at most 5 questions, plan with a checkable finish) and stops; the PM answers.
 3. The worker builds, writes a progress line about every 8 tool calls, stops when the done check passes, and reports with the [handoff format](../../.agents/skills/handoff-report/SKILL.md).
 4. A fresh agent of another family reviews once; the worker fixes the full list in one round (at most three counted rounds, then one question to the user).
-5. The PM integrates, updates docs once, records decisions.
+5. The PM saves the accepted patch, applies it to the main working tree uncommitted, updates docs once, records decisions and proposes a commit message; the user commits.
+6. The PM cleans up the worker, its worktree, its scratch and its chat history, and sweeps orphan `.tmp` trees (ORCHESTRATION section 4).
 
 ## Staying on target
 

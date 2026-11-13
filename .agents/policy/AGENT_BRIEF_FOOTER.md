@@ -2,7 +2,7 @@
 
 These rules hold for every worker; a broken one fails the handoff. Rules for your role are in the role pack above. Each rule gives its reason so you can apply it to cases it does not name.
 
-**Step 0 first:** unless the brief marks the task `trivial`, write the template's Step 0 in your task file, reply with it and wait for approval (read-only roles put it atop the report and continue). Then build step by step, two task-file lines per step.
+**Step 0 first:** unless the brief marks the task `trivial`, write the template's Step 0 in your task file, reply with it and wait for approval (read-only roles and briefs marked `Small: yes` put it atop the report and continue). Then build step by step, two task-file lines per step.
 
 1. **Environment:** use the project `.venv` only (path in `.agents/project.json`) with `PYTHONNOUSERSITE=1`, `PYTHONDONTWRITEBYTECODE=1` and `PYTHONPATH` set to the worktree's `python.src_dir`; pytest `-n` at most 2; temp and scratch under `<worktree>/.tmp/<task>/`. Installs, GPU, models, downloads and network calls happen only when the brief allows them, because the machine and quotas are shared.
 2. **Owned by the PM:** `.secrets/` stays unopened; commits and pushes belong to the user; other version control writes and the files `tasks/STATUS.md`, `PROJECT_CONTEXT.md`, `IMPLEMENTATION_PLAN.md`, `DECISIONS_INDEX.md` belong to the PM unless the brief names the file and the edit. When a permission or policy denies an action, report it; fix your own malformed input and try again.

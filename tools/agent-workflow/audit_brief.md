@@ -18,7 +18,7 @@ You change nothing. The PM verifies every "not met" you report, so give evidence
 2. `.agents/policy/USER_STANDING_RULES.md`: the rules to check, one per line `Sxx | rule | source | check`.
 3. `tasks/DECISIONS_INDEX.md` (newest 15 rows; for a condensed row ending in "..." open the verbatim row in
    `tasks/archive/DECISIONS_INDEX-*`).
-4. Artifacts: code, `configs/`, `tasks/`, `.agents/registry.json`, `.agents/log.md`, `git log -20 --stat`,
+4. Artifacts: code, `configs/`, `tasks/`, `cli_worker.py status --all --json`, `## IN-FLIGHT` of `.tmp/pm-state/pm-continuation.md`, `.agents/log.md`, `git log -20 --stat`,
    `git branch --no-merged <git.integration_branch from .agents/project.json>`, `tools/agent-workflow/`. Git is read-only for you.
 5. Optional: the PM memory directory `~/.claude/projects/<project-folder>/memory/`
    (read only). If a read is denied, write "memory not readable" and go on.

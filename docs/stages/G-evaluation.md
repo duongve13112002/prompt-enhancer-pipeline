@@ -24,7 +24,7 @@
 | E5 | the embedder | best E1 on the user's knowledge base | `embedding.*` (then `pin_required`) |
 | E6 | planner and writer split or merged without knowledge | merged only if no constraint metric drops | `planner`, `writer` merge switch |
 | E7 | verifier gating | risk-gated is kept if it misses no more failures than always | `validation` gating and sampling share (`fit_from_pilot`) |
-| E8 | `verbalize` versus `attach` | measured on downstream images when the user supplies an image model | informs the user's `edit.attach_kb_reference_images` choice |
+| E8 | `verbalize` versus `attach` | measured on downstream images when the user supplies an image model; before that, task T-034 renders with Codex image generation as a stand-in to test the flow only (decision 47) | informs the user's `edit.attach_kb_reference_images` choice |
 | E9 | the scope matrix | changing out-of-scope content of knowledge images changes no output | validates `assembly.scope_matrix` |
 | E10 | thinking on or off | on only if quality gains outweigh measured latency | `planner`, `writer` thinking |
 | E11 | presence penalty with JSON | the value with no schema failures and no quality loss | `planner`, `writer` sampling |

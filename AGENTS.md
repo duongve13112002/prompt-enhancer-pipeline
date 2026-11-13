@@ -1,113 +1,86 @@
 # Agent Working Rules and Project Mission
 
-Release 0.1, 2026-11-11. **This file is the single rule source** for Claude Code (through `@AGENTS.md` in [CLAUDE.md](CLAUDE.md)), Codex and Antigravity (`agy`), which read it directly. Edit only this file; keep sections 1-13 numbered because skills and tools cite them. It holds the rules every agent needs; rules for one role live in [.agents/policy/roles/](.agents/policy/roles/) and reach a worker through its brief. Each rule states its reason so you can apply it to cases it does not spell out. Provenance: [tasks/DECISIONS_INDEX.md](tasks/DECISIONS_INDEX.md); where each older rule went: [docs/agents/rule-map.md](docs/agents/rule-map.md).
+Release 0.2, 2026-11-13. **The single rule source** for Claude Code (through `@AGENTS.md` in [CLAUDE.md](CLAUDE.md)), Codex and Antigravity (`agy`). Edit only this file and keep sections 1-13 numbered: skills and tools cite them. It holds what every agent needs; role rules reach a worker through its brief ([.agents/policy/roles/](.agents/policy/roles/)); orchestrator rules live in [PM_POLICY](.agents/policy/PM_POLICY.md) and [ORCHESTRATION](.agents/ORCHESTRATION.md). Each rule gives its reason. Provenance: [DECISIONS_INDEX](tasks/DECISIONS_INDEX.md); where older rules went: [rule-map](docs/agents/rule-map.md).
 
 ## Gates
 
 > [!IMPORTANT]
-> **Before a runtime edit:** copy [.agents/policy/AGENT_TASK_TEMPLATE.md](.agents/policy/AGENT_TASK_TEMPLATE.md) into the task file and complete `Configuration impact`.
-> **Before completion:** give the row-by-row `Configuration audit` with its tests; a missing row, ignored setting, hidden default or unclassified literal fails the task.
-> **Code starts on the user's explicit command** (`BẮT ĐẦU IMPLEMENTATION <task>`, from T-005). Read-only and documentation tasks of the plan (T-002 to T-004) start when the user approves their Step 0 plan with any message; inside a started task, read-only roles (reviewer, scout, researcher) put Step 0 atop their report and continue.
+> **Code starts on the user's explicit command** `BẮT ĐẦU IMPLEMENTATION <task>`, for every code task of the plan (T-005 onward and the tooling tasks T-020 to T-026). Read-only and documentation tasks of the plan (T-002 to T-004) start when the user approves their Step 0 plan with any message. Inside a started task the PM approves each worker's Step 0, and sends the user any plan that touches product meaning, permissions or spend.
+> **Before a runtime edit** complete `Configuration impact` of the [task template](.agents/policy/AGENT_TASK_TEMPLATE.md); **before completion** give its row-by-row `Configuration audit` with tests. A missing row, ignored setting, hidden default or unclassified literal fails the task.
 
 ## 1. Language
 
-- Chat with the user in the conversation's language (Vietnamese). Everything in the repository is English: docs, notes, code, identifiers, comments, configuration, test names, commit messages, briefs, runtime prompts. One language keeps every agent and tool reading the same text.
-- Keep multilingual data verbatim: folder names, info files, concept names, sample prompts, quotations. Translating evidence changes it.
+- Chat with the user in Vietnamese. Everything in the repository is English (docs, code, identifiers, comments, configuration, tests, commit messages, briefs, runtime prompts), so every agent and tool reads the same text.
+- Keep multilingual data verbatim (folder names, info files, concept names, sample prompts, quotations): translating evidence changes it.
 
 ## 2. Understand before changing
 
-- Start by stating the behaviour, inputs and outputs, constraints, acceptance check, risks and what is missing; then give a short plan with reasons.
-- Ask when product meaning, edit permission, model identity, API behaviour or a deployment setting is unclear, and meanwhile do the work that does not depend on the answer. A guessed meaning is the costliest mistake here because every later step builds on it.
-- **Step 0:** every task not marked `trivial` begins with the template's Step 0 (unknowns, at most 5 ranked questions each with a proposed answer, a plan with a checkable finish line). A file-changing task then waits until its plan is read; read-only roles continue.
-- **User away:** take the conservative, reversible choice, log it in `tasks/STATUS.md` as "PM decision pending user review", ask in chat and continue. Only a plan the user must read waits.
-- **Settled points:** before asking, search `tasks/DECISIONS_INDEX.md`, `tasks/STATUS.md` and `recall.py search`, so the user is asked each thing once.
+- **Step 0:** a task not marked `trivial` starts with the template's Step 0: unknowns, at most 5 ranked questions each with a proposed answer, a plan with a checkable finish. A file-changing worker then waits for its plan to be read; inside a started task, read-only roles and small tasks (`Small: yes`) put Step 0 atop their report and continue.
+- Ask when product meaning, edit permission, model identity, API behaviour or a deployment setting is unclear, and meanwhile do the work that does not depend on the answer: a guessed meaning is the costliest mistake, because every later step builds on it. Search `tasks/DECISIONS_INDEX.md`, `tasks/STATUS.md` and `recall.py search` first, so the user is asked each thing once.
+- **User away:** take the conservative, reversible choice, log it in `tasks/STATUS.md` as "PM decision pending user review", ask in chat and continue.
 
 ## 3. Research and evidence
 
-- Read the relevant code, callers, tests, configuration and docs before changing them. Say "not read" or "unknown" when that is the truth; an honest gap is useful, an invented module or figure is damage.
-- **Every claim carries its evidence:** a file and line, a command with its real output, or a URL with the exact quoted words. Label each claim documented, source-verified, experiment or assumption. A claim without a pointer is an assumption and is written as one.
-- **Research gate:** every brief lists `Research required before code`; every handoff has a `Research evidence` table. Researchers extract the exact quote first and summarise second. A figure a research agent brings back is a lead until the primary source is re-read (R-021).
-- Record each external claim in [docs/note/](docs/note/README.md) and update its index. Plan in [tasks/IMPLEMENTATION_PLAN.md](tasks/IMPLEMENTATION_PLAN.md); keep [tasks/STATUS.md](tasks/STATUS.md) current.
+- Read the code, callers, tests, configuration and docs before changing them. "Not read" and "unknown" are valid answers; an invented module or figure is damage.
+- **Every claim carries its evidence:** a file and line, a command with its real output, or a URL with the exact quoted words, labelled documented, source-verified, experiment or assumption. A figure a research agent brings back is a lead until the primary source is re-read (R-021). Briefs list `Research required before code`; handoffs fill `Research evidence`.
 
 ## 4. Environments and platforms
 
-- **Install only inside the project.** Python packages go into the project `.venv` (`python -m pip` there). Report a missing system tool or runtime to the user instead of installing it, because the machine is shared and a global change can break other work. Production model servers are outside this repository: models are reached over HTTP (R-018). Keep CPU and GPU dependency profiles separate and write a lockfile only from a real resolution ([docs/dependencies-and-environments.md](docs/dependencies-and-environments.md)).
-- **Windows and Linux are both supported** and both run in CI (R-025). Shared logic contains no OS-specific separators, shell syntax, signals or temp behaviour; native artifacts name their platform.
-- Worktrees, builds, CI, temp cleanup, GPU scaling: read [docs/rules/PLATFORM_GPU_RULES.md](docs/rules/PLATFORM_GPU_RULES.md) first.
+- **Install only inside the project** (`.venv`, `python -m pip` there); report a missing system tool instead of installing it, because the machine is shared. Models are reached over HTTP (R-018). Keep CPU and GPU dependency profiles separate ([dependencies](docs/dependencies-and-environments.md)).
+- **Windows and Linux** are both supported and both run in CI (R-025); shared logic has no OS-specific separators, shell syntax, signals or temp behaviour. Worktrees, builds, temp cleanup, GPU scaling: [PLATFORM_GPU_RULES](docs/rules/PLATFORM_GPU_RULES.md).
 
 ## 5. Complete, configurable behaviour
 
-- **Deployment and user choices are validated profile values:** models, providers, endpoints, devices, workers, precision, thresholds, budgets, seeds, timeouts, retries, directories, separators, inference settings. A missing field is refused at start with a precise message, because a silent default hides a decision nobody made (R-015).
-- **No hand-written content rules.** Meaning comes from model output or from structure; a word list, a regular expression over natural language, a per-language rule or a trick that passes one test all fail review. Structural facts are handled directly: a file that cannot be decoded, a string that is not valid JSON, two strings that are not equal.
-- **Values come from experiments.** A threshold, size or count that is not yet measured holds a sentinel (`fit_from_gt`, `fit_from_bench`, `fit_from_pilot`, `pin_required`, `deploy_required`, `design_required`, `ask_user`); the `fit` step writes the value with its evidence report ([contracts/README.md](contracts/README.md)).
-- **Literals that may stay:** wire and schema constants, immutable artifact identity, bounded parser and protocol limits, real safety invariants. Classify every retained literal in the changed path: `configurable`, `protocol-bound`, `artifact-bound`, `safety-bound`, `test-only` or `defect`.
-- **Configuration audit:** every user value has validated config, an example profile, a non-default override test and a refusal test.
-- **Finished means working:** required behaviour has a real implementation; test doubles live only in labelled tests. Report unfinished work as unfinished. Comments are concise English on intent and tradeoffs.
+- **Deployment and user choices are validated profile values** (models, providers, endpoints, devices, workers, thresholds, budgets, seeds, timeouts, retries, paths, separators, inference settings). A missing field is refused at start with a precise message, because a silent default hides a decision nobody made (R-015).
+- **No hand-written content rules:** meaning comes from model output or from structure; a word list, a regular expression over natural language, a per-language rule or a trick that passes one test fails review. Structural facts (a file that cannot be decoded, invalid JSON) are handled directly.
+- **Values come from experiments:** an unmeasured threshold holds a sentinel (`fit_from_gt`, `fit_from_bench`, `fit_from_pilot`, `pin_required`, `deploy_required`, `design_required`, `ask_user`) until the `fit` step writes it with evidence ([contracts](contracts/README.md)).
+- **Retained literals** are classified: `configurable`, `protocol-bound`, `artifact-bound`, `safety-bound`, `test-only` or `defect`. Every user value has validated config, an example profile, a non-default override test and a refusal test.
+- **Finished means working:** test doubles live only in labelled tests; unfinished work is reported as unfinished.
 
 ## 6. Artifacts, storage and secrets
 
-- **Everything stays under the project root** (`models/`, `.cache/`, `.tmp/`, `.venv/`, build and output directories). Working data lives under `data_root` (default `data/`, Git-ignored, configurable with the same containment check). The user's knowledge base is read only: derived data never goes into it (R-014).
-- Validate configurable paths after resolving links; a path outside its root fails clearly. Configure libraries and subprocesses so they cannot fill global caches.
-- **Models:** configured local artifacts first, verified by repository, revision, file, size, hash and platform; acquire only from the pinned source when the task permits; use exactly the configured model ([docs/model-storage.md](docs/model-storage.md)).
-- **Secrets** live only in Git-ignored `.secrets/`. Agents, shells and review tools leave that directory unopened and unlisted; only project Python loads a credential at runtime and passes it straight to the SDK. Tests use their own dummies. The one file there an agent may read is [.secrets/README.md](.secrets/README.md).
-- **Clean up after yourself:** remove your own `.tmp/` trees before handoff and keep the small reports you cite. Leave `models/`, `.venv*/`, `.secrets/`, `runs/` evidence and trees in use alone, and remove links as links. When an agent is finished and unneeded, the orchestrator deletes its worktree, branch, scratch files and chat history ([ORCHESTRATION](.agents/ORCHESTRATION.md) section 4).
+- **Everything stays under the project root** (`models/`, `.cache/`, `.tmp/`, `.venv/`, outputs); working data lives under `data_root` (default `data/`, Git-ignored). The user's knowledge base is read only (R-014). Validate configured paths after resolving links.
+- **Models:** configured local artifacts first, verified by repository, revision, file, size and hash; use exactly the configured model ([model-storage](docs/model-storage.md)).
+- **Secrets** live only in Git-ignored `.secrets/`. Agents, shells and review tools never open, list or print it; only project Python loads a credential at runtime. The one readable file there is [.secrets/README.md](.secrets/README.md).
+- **Clean up after yourself:** remove your own `.tmp/` trees before handoff, keep the small reports you cite, remove links as links; never touch `models/`, `.venv*/`, `.secrets/`, `runs/` evidence or trees in use. The orchestrator cleans up finished agents and orphan trees ([ORCHESTRATION](.agents/ORCHESTRATION.md) section 4).
 
 ## 7. Testing
 
-- Test all behaviour. The agent environment is CPU-only unless a GPU is detected and the task authorizes it; the dev machine runs smoke tests ([docs/dev-machine.md](docs/dev-machine.md)); the deployment is run by the user.
-- Default suite: bounded CPU tests, tiny synthetic fixtures, labelled doubles; no large downloads, heavy inference or paid calls. Tool tests run through `tools/agent-workflow/test_slot.py`.
-- **Targeted mutation testing:** the implementer mutates the changed lines and fixed findings (about 3-10); the reviewer adds at most 3. Parsers, grammars and validators get Hypothesis property tests.
-- A general solution is the goal: code that special-cases a test input or a fixture name is a defect even when the test is green. If a test is wrong or a task is infeasible, say so instead of working around it.
-- GPU smoke scripts run real implementations and fail or skip transparently; compilation or HTTP 200 proves nothing ([docs/test-plan.md](docs/test-plan.md)).
+- Test all behaviour with bounded CPU tests, tiny synthetic fixtures and labelled doubles; no large downloads, heavy inference or paid calls in the default suite. The dev machine runs smoke tests ([dev-machine](docs/dev-machine.md)); the user runs the deployment. Every test command goes through `tools/agent-workflow/test_slot.py`.
+- Mutate the changed lines (about 3 to 10 mutants); parsers and validators get property tests. Code that special-cases a test input is a defect even when green; a wrong test or an infeasible task is reported, not worked around ([test-plan](docs/test-plan.md)).
 
 ## 8. GPU, concurrency and services
 
-- **No fixed hardware.** Every GPU stage runs on one or many GPUs from the profile without source edits; device count, VRAM budget and workers are profile values.
-- **VRAM discipline:** before a GPU job record the VRAM in use per device and who holds it (`nvidia-smi`); if another session holds it, wait. After the job VRAM is back at that baseline and none of your processes holds a GPU; a difference is a defect to report.
-- **Parallel and resumable:** independent work runs concurrently through a bounded queue and worker pool; every offline stage is idempotent per input content hash and tool revisions and resumes at the first unfinished item (R-017).
-- **Model calls** go to the configured provider over HTTP with every request field stated in the profile. The local backend is the default; a cloud provider (Claude or Gemini) is used only when the profile selects it and the user has granted a number of requests, with its key read from a file under `.secrets/` (R-018); unsupported parameters are dropped with a recorded warning; speed is measured, never claimed ([docs/rules/VLM_CALL_RULES.md](docs/rules/VLM_CALL_RULES.md), [docs/serving.md](docs/serving.md)).
-- **Lifecycle:** load on demand and stop every server, worker and subprocess you started as soon as its queue drains, after any outcome. A warm pool needs a user-approved profile.
+- **No fixed hardware:** device count, VRAM budget and workers are profile values. **VRAM discipline:** record VRAM per device and its holder before a GPU job; if another session holds it, wait; afterwards VRAM is back at that baseline.
+- **Parallel and resumable:** bounded queues and worker pools; every offline stage is idempotent per input content hash and tool revisions and resumes at the first unfinished item (R-017).
+- **Model calls** go to the configured provider over HTTP with every field stated in the profile; the local backend is the default; a cloud provider (Claude or Gemini) is used only when the profile selects it and the user has granted a number of requests (R-018, [VLM_CALL_RULES](docs/rules/VLM_CALL_RULES.md)). Speed is measured, never claimed.
+- **Lifecycle:** stop every server, worker and subprocess you started as soon as its queue drains, after any outcome.
 
 ## 9. Documentation and decisions
 
-- Update affected docs in the same change as the code; `tasks/STATUS.md` keeps done, blocked, failed, skipped and `not_run` distinct.
-- Record unspecified decisions, deviations, assumptions and rejected alternatives in [docs/implementation-notes.md](docs/implementation-notes.md). A proposal stays a proposal until the user accepts it, and an unrun test is `not_run`.
-- Every user decision enters [tasks/DECISIONS_INDEX.md](tasks/DECISIONS_INDEX.md) in the same session with an `applied:` marker.
-- Read the digest of [tasks/LESSONS_LEARNED.md](tasks/LESSONS_LEARNED.md) before a task; a recurring mistake adds a prevention rule.
-- **Token economy:** state each fact once, in its owning file, and link. Live files hold the present state; closed history goes verbatim to `tasks/archive/`. Character budgets: [tools/agent-workflow/doc_budgets.json](tools/agent-workflow/doc_budgets.json).
+- `tasks/STATUS.md` keeps done, blocked, failed, skipped and `not_run` distinct. Decisions, deviations and rejected alternatives go to [implementation-notes](docs/implementation-notes.md) (a worker writes them in its task file; the PM moves them). A proposal stays a proposal until the user accepts it.
+- Every user decision enters [DECISIONS_INDEX](tasks/DECISIONS_INDEX.md) in the same session with an `applied:` marker. Read the digest of [LESSONS_LEARNED](tasks/LESSONS_LEARNED.md) before a task.
+- **Token economy:** state each fact once, in its owning file, and link; closed history goes verbatim to `tasks/archive/`; budgets in [doc_budgets.json](tools/agent-workflow/doc_budgets.json).
 
 ## 10. Project requirements
 
-- **Scope:** implement [docs/architecture.md](docs/architecture.md) and the [plan](tasks/IMPLEMENTATION_PLAN.md): a prompt enhancer that turns a user's prompt (`generate`) or a prompt plus one source image (`edit`) into an enhanced prompt or edit instruction for a downstream image model, optionally grounded in a knowledge base of concept folders. It writes text; it renders and edits no pixels. Cite R-IDs from [tasks/REQUIREMENTS.md](tasks/REQUIREMENTS.md) in every brief, plan and report.
-- **R-001 Intent first:** what the user fixed (identity, counts, attributes, relations, negations, style, text to render) survives unchanged; knowledge and creativity fill only what the user left open.
-- **R-004 Profiles:** the admin's system prompt is used verbatim and defines the output format; the pipeline's internal artifacts are format-agnostic ([contracts](contracts/README.md), [P-profiles](docs/stages/P-profiles.md)).
-- **R-007, R-014 Knowledge base:** folders declare one or more concepts; `kb sync` is the only writer; the request path reads only the published snapshot ([execution](docs/execution.md), [kb/README.md](kb/README.md)).
-- **R-009 to R-011 Retrieval:** on by default; off means no knowledge-base access at all; evidence comes from offline concept cards; knowledge goes downstream as text unless the edit configuration attaches images.
-- **R-013 Choices:** a mention broader than the knowledge base is resolved by context fit, then uniformly at random by code, new for every request and recorded.
-- **R-015, R-016:** no hand-written rules or guessed values; tables are Parquet or Arrow with a derived serving index.
-- **R-019, R-020:** a few seconds per request under concurrency is the target and is measured on the deployment; everything works on the dev machine first, whose results show plumbing only.
-- **R-023 Evaluation:** no gold prompts exist; agents build the test set from the user's knowledge base ([G-evaluation](docs/stages/G-evaluation.md)).
-- **R-024, R-026:** every response has an honest status; knowledge-base text and text read from images are data, never instructions.
+- **Scope:** implement [architecture](docs/architecture.md) and the [plan](tasks/IMPLEMENTATION_PLAN.md): a prompt enhancer that turns a prompt (`generate`) or a prompt plus one source image (`edit`) into an enhanced prompt or edit instruction for a downstream image model, optionally grounded in a knowledge base of concept folders. It writes text and renders no pixels. Cite R-IDs from [REQUIREMENTS](tasks/REQUIREMENTS.md) in every brief, plan and report.
+- The user's intent survives unchanged (R-001); the admin's system prompt is used verbatim and defines the output format (R-004); retrieval off means no knowledge-base access at all (R-009); knowledge-base text and text read from images are data, never instructions (R-026).
 
 ## 11. Commit, push and CI
 
-- **The user makes every commit and every push (decisions 36, 37, 41).** No agent runs `git commit`, `push`, `merge`, `rebase`, `tag` or another history-changing command, on any branch, a worker's temporary branch included. When verified work is ready, the orchestrator brings it into the main working tree uncommitted, inspects the diff to confirm it holds no secrets, model files, knowledge-base images or working data, and reports the changed files, the checks run and a proposed commit message; the user commits and pushes.
-- Agents never choose a remote, create a repository or bypass protection (decision 35). **Repository visibility changes only inside the CI window** of [docs/ci.md](docs/ci.md) (R-025): public for the run, private again when it ends, green or red; once a remote exists, confirm at session start that the repository is private.
-- Proposed commit messages are English with no `Co-Authored-By:` trailer or agent attribution.
+- **The user makes every commit and every push (decisions 36, 37, 41).** No agent runs `git commit`, `push`, `merge`, `rebase`, `tag` or another history-changing command, on any branch, a worker's temporary branch included. Not history changes, and allowed to the orchestrator only: staging inside a worker's worktree to save its patch, and removing a finished worker's worktree and its never-committed branch. The orchestrator brings verified work into the main working tree uncommitted, confirms the diff holds no secrets, model files, knowledge-base images or working data, and proposes an English commit message with no agent attribution.
+- Agents never choose a remote, create a repository or bypass protection (decision 35). **Repository visibility changes only inside the CI window** of [docs/ci.md](docs/ci.md): public for the run, private again when it ends, green or red (R-025).
 
 ## 12. Start and finish
 
-- **Start:** read this file, [tasks/STATUS.md](tasks/STATUS.md) and the documents your task names. Orchestrator only: also [.agents/ORCHESTRATION.md](.agents/ORCHESTRATION.md) and [.agents/policy/PM_POLICY.md](.agents/policy/PM_POLICY.md). On a new machine, a fresh copy, or when hooks, skills or tools misbehave, run `python tools/agent-workflow/setup_project.py check` (skill `agent-setup`).
-- **Finish** with a scoped report: behaviour, the actual commands and their output, `not_run`, changed files, open issues, Git status.
+- **Start:** read this file, [tasks/STATUS.md](tasks/STATUS.md) and the documents your task names. On a new machine or when hooks, skills or tools misbehave: `python tools/agent-workflow/setup_project.py check` (skill `agent-setup`).
+- **Finish** with the template's Completion report: behaviour, the actual commands and their output, `not_run`, changed files, open issues.
 
-## 13. Project management and multi-agent policy
+## 13. Multi-agent work
 
-- Dispatch (models per CLI and role, effort, review routing, quotas): [.agents/policy/PM_POLICY.md](.agents/policy/PM_POLICY.md). Briefs follow the [template](.agents/policy/AGENT_TASK_TEMPLATE.md), include the role pack for the worker's role and the wrapper for its CLI ([.agents/policy/cli/](.agents/policy/cli/)), and end with the verbatim [footer](.agents/policy/AGENT_BRIEF_FOOTER.md). The user's standing rules: [.agents/policy/USER_STANDING_RULES.md](.agents/policy/USER_STANDING_RULES.md).
-- **Reports** use the assignment's format (ORCHESTRATION section 8.4); the full report goes in the task file with the [handoff-report](.agents/skills/handoff-report/SKILL.md) sections and the four labels: **Current status**, **What was already done**, **What the next agent must do**, **What must not be repeated**.
-- Keep user requirements, PM proposals, agent findings and live evidence apart; only the user promotes a proposal; state the model and effort that were actually set.
-- **Review:** a fresh agent that did not write the change reviews it once: correctness, failure paths, security, configuration audit, lifecycle, tests, docs. Findings carry severity, file:line, reproduction, observed versus expected and a minimal fix; only proven P0-P2 defects block. The implementer fixes the full list in one attempt; re-review covers the delta. High-risk work (security, evidence binding, authorization, GPU or process lifecycle, architecture) gets a pre-mortem and two reviewers of different families. At most three counted fix rounds, then one question to the user.
-- **Run each check once** on the same bytes; update docs once, at acceptance; hand off on one page.
-- **Cold read (R-028):** after documentation is written or restructured, fresh Haiku, Sonnet and Opus readers report what they understood and what was unclear; the PM fixes the text and relays their questions to the user (PM_POLICY section 8).
+- The orchestrator follows [PM_POLICY](.agents/policy/PM_POLICY.md) (models, quota, briefs, review, integration) and [ORCHESTRATION](.agents/ORCHESTRATION.md) (assignment, state, cleanup). The user's standing rules: [USER_STANDING_RULES](.agents/policy/USER_STANDING_RULES.md).
+- A worker works inside its brief's Scope toward its Goal and Done check, follows its role pack and the [footer](.agents/policy/AGENT_BRIEF_FOOTER.md), lists anything else under `Noticed, not done`, and never reviews its own change.
 
 <!-- ORCHESTRATION:START -->
 ### Agent orchestration (orchestrator only; if you are an assigned agent, skip this block)
@@ -115,15 +88,13 @@ Release 0.1, 2026-11-11. **This file is the single rule source** for Claude Code
   - DELEGATE (default): delegate to Claude/Codex/Antigravity agents following `.agents/ORCHESTRATION.md`.
   - SOLO: the orchestrator does everything itself, creates no agent and delegates nothing.
   - Only the user changes the mode. On a permanent change request, update the "CURRENT MODE" line in AGENTS.md (CLAUDE.md imports it).
-- In DELEGATE mode: before assigning work, read `.agents/ORCHESTRATION.md` and follow it. After a compaction, or when unsure of a rule, read it again.
-- Agent state: `.agents/registry.json`. Log: `.agents/log.md`.
+- In DELEGATE mode: before assigning work, read `.agents/ORCHESTRATION.md` and `.agents/policy/PM_POLICY.md` and follow them. After a compaction, or when unsure of a rule, read them again.
+- Agent state: `cli_worker.py status --all --json` and `## IN-FLIGHT` in `.tmp/pm-state/pm-continuation.md`. Log: `.agents/log.md`.
 <!-- ORCHESTRATION:END -->
 
 <!-- AGENT-WORKER:START -->
-### When you are an assigned agent (dev or QA)
-- You may receive several consecutive tasks in one session. Each message starting with [NEW TASK], [QA FEEDBACK], [EVALUATE] or [RETEST] is a separate piece of work.
-- Work inside the current task's scope. Change earlier work only when the message asks; if you must, give the reason in the report.
-- Report in the format the assignment message asks for.
-- Keep the model, effort and session configuration you were started with.
-- Create sub-agents only when the assignment message asks for it.
+### When you are an assigned agent
+- You work on one task. A message starting with [NEW TASK: <task> phase <n>], [QA FEEDBACK], [EVALUATE] or [RETEST] continues that task.
+- Work inside the current Scope; change earlier work only when the message asks, and give the reason in the report.
+- Report in the template's Completion report format; keep the model, effort and session configuration you were started with; create sub-agents only when the message asks.
 <!-- AGENT-WORKER:END -->
