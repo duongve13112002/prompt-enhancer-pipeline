@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -103,6 +105,90 @@ def test_long_section_is_cut_and_flagged(hook, monkeypatch, capsys) -> None:
     hook.CONFIG.write_text(json.dumps(settings), encoding="utf-8")
     text = run(hook, monkeypatch, capsys, {"session_id": "s-pm", "source": "compact"})
     assert "[cut at 30 characters" in text
+
+
+def tmp_config(hook, tmp_path: Path, monkeypatch, **override: object) -> None:
+    values = {"sweep_age_hours": 72, "archive_retention_hours": 336, "scan_timeout_seconds": 2}
+    path = tmp_path / "cleanup_config.json"
+    path.write_text(json.dumps({**values, **override}), encoding="utf-8")
+    monkeypatch.setattr(hook, "CLEANUP_CONFIG", path)
+    # The fixture's busy worker has no cwd, which makes ownership unreadable (fail closed): use an empty registry.
+    (hook.STATE / "cli-workers.json").write_text("{}", encoding="utf-8")
+
+
+def test_tmp_line_reports_size_and_orphans_without_deleting(
+    hook, monkeypatch, capsys, tmp_path
+) -> None:
+    tmp_config(hook, tmp_path, monkeypatch, sweep_age_hours=5)
+    old = tmp_path / ".tmp" / "old-scratch"
+    old.mkdir()
+    (old / "f.bin").write_bytes(b"x" * 10)
+    stamp = time.time() - 10 * 3600
+    os.utime(old, (stamp, stamp))
+    text = run(hook, monkeypatch, capsys, {"session_id": "s-pm", "source": "startup"})
+    assert ".tmp size 0.00 GB; orphans older than 5 h: 1" in text
+    assert (old / "f.bin").exists()
+
+
+def test_tmp_line_says_partial_when_the_scan_bound_is_hit(
+    hook, monkeypatch, capsys, tmp_path
+) -> None:
+    tmp_config(hook, tmp_path, monkeypatch, scan_timeout_seconds=3)
+    (tmp_path / ".tmp" / "a").mkdir()
+    ticks = iter(range(0, 10_000, 10))  # test double: every clock read advances 10 s, past the 3 s bound
+    monkeypatch.setattr(hook.time, "monotonic", lambda: next(ticks))
+    text = run(hook, monkeypatch, capsys, {"session_id": "s-pm", "source": "startup"})
+    assert "partial: scan stopped after" in text and ">= " in text
+
+
+def test_tmp_line_shares_one_deadline_with_the_ownership_reads(
+    hook, monkeypatch, capsys, tmp_path
+) -> None:
+    """QA finding 5: slow ownership I/O after the size scan must not pass as exact figures."""
+    tmp_config(hook, tmp_path, monkeypatch, scan_timeout_seconds=0.05)
+    old = tmp_path / ".tmp" / "old-scratch"
+    old.mkdir()
+    stamp = time.time() - 1000 * 3600
+    os.utime(old, (stamp, stamp))
+    real_load = hook.load_module
+
+    def slow_purge(path, name):  # test double: the note read takes longer than the whole budget
+        module = real_load(path, name)
+        if name == "purge_tmp":
+            original = module._read_inflight
+
+            def slow(note):
+                time.sleep(0.2)
+                return original(note)
+
+            module._read_inflight = slow
+        return module
+
+    monkeypatch.setattr(hook, "load_module", slow_purge)
+    text = run(hook, monkeypatch, capsys, {"session_id": "s-pm", "source": "startup"})
+    assert "partial: time bound reached" in text
+    assert "orphans older than 72 h: 1" not in text
+
+
+def test_tmp_line_marks_orphans_unknown_when_ownership_is_unreadable(
+    hook, monkeypatch, capsys, tmp_path
+) -> None:
+    tmp_config(hook, tmp_path, monkeypatch)
+    (hook.STATE / "agents.json").write_text("{broken", encoding="utf-8")
+    old = tmp_path / ".tmp" / "old-scratch"
+    old.mkdir()
+    stamp = time.time() - 1000 * 3600
+    os.utime(old, (stamp, stamp))
+    text = run(hook, monkeypatch, capsys, {"session_id": "s-pm", "source": "startup"})
+    assert "orphans older than 72 h: unknown" in text
+
+
+def test_tmp_line_names_a_missing_config_key(hook, monkeypatch, capsys, tmp_path) -> None:
+    path = tmp_path / "cleanup_config.json"
+    path.write_text(json.dumps({"sweep_age_hours": 72}), encoding="utf-8")
+    monkeypatch.setattr(hook, "CLEANUP_CONFIG", path)
+    text = run(hook, monkeypatch, capsys, {"session_id": "s-pm", "source": "startup"})
+    assert ".tmp cleanup not configured" in text and "archive_retention_hours" in text
 
 
 def test_missing_note_and_bad_input_still_exit_zero(hook, monkeypatch, capsys) -> None:

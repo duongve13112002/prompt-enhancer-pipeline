@@ -49,6 +49,7 @@ CONFIG = TOOLS / "memory_hooks.json"
 # Hooks run with `python -I`, which keeps the script directory off sys.path: sibling modules load by file path.
 CONFIG_MODULE = TOOLS / "memory_hooks_config.py"
 APPLIED_MODULE = TOOLS / "decisions_applied.py"
+CLEANUP_CONFIG = TOOLS / "cleanup_config.json"  # validated by purge_tmp.load_cleanup_config
 WORKER_ENV_FLAG = "CLAUDE_CODE_DISABLE_AUTO_MEMORY"
 DECISIONS_REL = "tasks/DECISIONS_INDEX.md"
 # Fail-safe of the base behaviour (safety-bound): when memory_hooks.json cannot supply the note settings, the agreements
@@ -273,6 +274,36 @@ def git_block(branch: str, timeout: int, max_branches: int, max_worktrees: int) 
     return "\n".join(parts)
 
 
+def tmp_line() -> str:
+    """One read-only line: size of `.tmp` and orphans past the configured age (decision 43). The size scan stops at
+    `scan_timeout_seconds`, shared with the ownership reads and the planning, and then says so; the orphan count skips the protected-tree walk (`sweep --dry-run` is exact)."""
+    purge = load_module(TOOLS / "purge_tmp.py", "purge_tmp")
+    purge.PROJECT = ROOT  # the module derives its root from its own path; the hook's root may differ (tests)
+    purge.ARCHIVE = ROOT / ".tmp" / "pm-archive"
+    try:
+        config = purge.load_cleanup_config(CLEANUP_CONFIG)
+    except purge.CleanupConfigError as exc:
+        return f".tmp cleanup not configured: {exc}"
+    tmp = ROOT / ".tmp"
+    if not tmp.is_dir():
+        return ".tmp: absent"
+    # One deadline for the size scan, the ownership reads and the candidate planning; past it the figures are partial.
+    deadline = time.monotonic() + config.scan_timeout_seconds
+    total, complete = purge._size_bounded(tmp, deadline)
+    gb = f"{total / 2**30:.2f} GB"
+    size = gb if complete else f">= {gb} (partial: scan stopped after {config.scan_timeout_seconds:g} s)"
+    items, planned = purge.plan_sweep_bounded(config.sweep_age_hours, refusals=False, deadline=deadline)
+    if any(item.status == "unknown" for item in items):
+        orphans = "unknown (ownership state unreadable)"
+    else:
+        count = sum(1 for item in items if item.status == "orphan")
+        orphans = str(count) if planned else f">= {count} (partial: time bound reached)"
+    return (
+        f".tmp size {size}; orphans older than {config.sweep_age_hours:g} h: {orphans} "
+        "(`purge_tmp.py sweep --dry-run` lists them)."
+    )
+
+
 def pending_block(index_text: str, from_decision: int, max_rows: int) -> str:
     rows = load_module(APPLIED_MODULE, "decisions_applied").scan(index_text, from_decision, ROOT)
     pending = [row.ident for row in rows if row.state == "pending"]
@@ -444,10 +475,15 @@ def main(argv: list[str] | None = None) -> int:
         Exception
     ) as exc:  # the agreements above must reach the session even if the budget check breaks
         budgets = [f"budget check failed: {type(exc).__name__}"]
+    try:
+        tmp_text = tmp_line()
+    except Exception as exc:  # never blocks the session start
+        tmp_text = f".tmp size check failed: {type(exc).__name__}"
     blocks += [
         ("configuration problems", "\n".join(dict.fromkeys(notes))),
         ("pending decisions", pending),
         ("branches and worktrees", git_text),
+        ("tmp cleanup", tmp_text),
         ("settled decisions", settled),
         ("newest decisions", newest),
         (

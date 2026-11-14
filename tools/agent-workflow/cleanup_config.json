@@ -1,0 +1,5 @@
+{
+  "sweep_age_hours": 72,
+  "archive_retention_hours": 336,
+  "scan_timeout_seconds": 2
+}
