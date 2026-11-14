@@ -53,5 +53,6 @@ Fill before the first edit: the new keys (sweep age, archive retention), their f
 - **Approach note:** a Gemini 3.8 Flash `medium` read-only job writes `.tmp/T-025/approach.md` first.
 - **Step 0:** Codex stops at Step 0 (two messages, cli/codex.md); the PM approves it (no permission or product meaning involved) and sends the go.
 - **Review:** ordinary work: Sonnet 5.5 `medium` (Antigravity first once T-024 lets it read an uncommitted patch).
+- **Reassigned 2026-11-14 (PM):** the Codex worker could not edit `tools/agent-workflow/` (`hooks/codex_guard.py:104-105` protects it, worktree copies included). Implementer now Claude Sonnet 5.5 `medium` (`cli_worker.py start --profile dev-medium`), with the Codex Step 0 and research as handoff; reviewer Codex `gpt-6.1-sol` `medium` (read-only), another family.
 - **Parallel:** beside T-024; T-026 waits for this task (shared SessionStart hook).
 - **Brief assembly:** `.agents/policy/cli/codex.md`, this file, `.agents/policy/roles/implementer.md`, `.agents/policy/AGENT_BRIEF_FOOTER.md` into `.tmp/T-025/brief.md`; lint it.

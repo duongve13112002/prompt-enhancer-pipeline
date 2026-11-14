@@ -59,5 +59,6 @@ Fill before the first edit: the 90% Claude line (existing setting or a new key),
 - **Approach note:** a Gemini 3.8 Flash `medium` read-only job writes `.tmp/T-026/approach.md` first.
 - **Step 0:** Codex stops at Step 0; the plan touches permissions (allow rules) and the computer's sleep, so the PM sends it to the user and waits.
 - **Review:** Sonnet 5.5 `medium` plus Gemini 3.8 Flash `medium` for the allow-rule part.
+- **Reassigned 2026-11-14 (PM):** a Codex worker cannot edit `tools/agent-workflow/` (`hooks/codex_guard.py:104-105`), so the implementer is Claude Opus 5.5 `high` (Claude wrapper, `--profile dev-large`) and the reviewers are Codex `gpt-6.1-sol` `high` (read-only) plus Gemini 3.8 Flash `medium` for the allow-rule part. The Codex lines above are superseded.
 - **Order:** starts after T-024 and T-025 are accepted.
 - **Brief assembly:** `.agents/policy/cli/codex.md`, this file, `.agents/policy/roles/implementer.md`, `.agents/policy/AGENT_BRIEF_FOOTER.md` into `.tmp/T-026/brief.md`; lint it.
