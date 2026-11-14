@@ -40,6 +40,16 @@ Task file: tasks/active/T-002-environment-report.md
 
 None, because this task only reads the machine and writes one report under `.tmp/T-002/`; the intended `data_root` path is an input given by the user and is not stored in any profile by this task.
 
+## PM assignment (2026-11-14, decision 63)
+
+- **Step 0:** the user approved it, so the plan is approved: put Step 0 atop the report and continue without waiting.
+- **Worker:** Codex `gpt-6.1-terra`, effort `medium` (PM_POLICY section 2, row "Implement: easy or medium, clear spec"), started after the Codex weekly reset at 2026-11-14T13:17:44Z. Review: a fresh Codex session on `gpt-6.1-sol` `medium`, because Claude is above 90% of its weekly window and Antigravity cannot review an uncommitted patch before T-024 (decision 51); the report says so.
+- **`data_root`:** `data/` in the repository; report the free space and file system of the drive that holds the checkout.
+- **Exception to the scout pack:** this task creates exactly one tracked file, `tools/env_report.py`; no other tracked file changes.
+- **`llama-server` and model files:** look for a `llama-server` binary on `PATH` and for model files under `models/`; report what is missing as `absent`; install and download nothing.
+- **Phase 2, after phase 1 is accepted:** rerun the tool tests on Windows through `tools/agent-workflow/test_slot.py` and report the passed, failed and skipped counts with the names of the failing tests (tasks/STATUS.md records 10 failures seen on Linux). Report only; fix nothing.
+- **GPU baseline seen by the PM at 2026-11-13T18:04Z:** `nvidia-smi` showed 0 MiB of 8151 MiB in use.
+
 ## Role: scout (read-only)
 
 - Read, search and summarise; change no tracked file.

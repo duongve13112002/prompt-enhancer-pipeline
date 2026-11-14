@@ -31,6 +31,8 @@ kb/*
 !kb/_example/
 evalset/*
 !evalset/README.md
+# The dev machine's knowledge base (decision 61): read only, never committed
+database/
 
 # Working data: kb_store, snapshots, evaluation tables, traces
 data/

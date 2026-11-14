@@ -15,7 +15,7 @@ Each command refuses at start when a key it reads still holds a sentinel or is m
 | Command | Does | Needs | Refuses |
 | --- | --- | --- | --- |
 | `kb status` | shows the current snapshot, pending changes and lint counts | `storage.kb_store` | nothing beyond a missing store |
-| `kb sync [--plan] [--only <folder>]` | runs K0 to K5 and publishes a snapshot; `--plan` stops after the plan | `knowledge.*`, pinned models and revisions for the roles K1 to K4 use, `sync.*` | a plan over the mass-deletion guard without `--force`; unpinned models (`pin_required`); folders whose name and description counts differ (reported, not indexed) |
+| `kb sync [--plan] [--only <folder>]` | runs K0 to K5 and publishes a snapshot; `--plan` stops after the plan | `knowledge.*`, pinned models and revisions for the roles K1 to K4 use, `sync.*` | a plan over the mass-deletion guard without `--force`; unpinned models (`pin_required`) |
 | `kb rollback <snapshot>` | moves the current pointer to a retained snapshot | the snapshot still retained | a snapshot already collected |
 | `kb gc` | removes unreferenced artifacts and snapshots past retention | `sync.*` retention keys | artifacts a retained snapshot references |
 | `kb audit` | samples card facts and stability labels for human checking (E16) | a published snapshot | nothing |

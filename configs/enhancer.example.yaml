@@ -15,10 +15,12 @@ status: template
 purpose: production                      # production | smoke (dev results never fit a sentinel, R-020)
 
 knowledge:                               # docs/stages/K0-sync.md, kb/README.md
-  root: deploy_required                  # the user's real knowledge base; the dev profile points at kb/_example
+  root: deploy_required                  # the user's real knowledge base; the dev profile points at database/ (decision 61)
   info_file:
     names: [infor.txt, info.txt]         # accepted names are configuration; this default is a PM proposal [P]
     encoding: utf-8
+    on_description_count_mismatch: model_assigns   # decision 59: a model assigns line 2's text to each name; the line is kept verbatim
+  image_extensions: [.jpg, .jpeg, .png, .webp]     # decision 60: only these and the info file are read, other files are ignored; example list [P]
   concept_separator: "|"                 # decision 9; splits line 1 (names) and line 2 (descriptions)
   naming:                                # decisions 30, 38, 39, docs/stages/K2-observe.md
     on_no_info_file: model_names_from_images
@@ -318,6 +320,6 @@ serving:                                 # docs/serving.md, R-019, decision 21
 
 evaluation:                              # G-evaluation, R-023, decision 22
   scenario_kinds: [single_concept, multi_concept, family_mention, variant_unspecified, no_match, negation, literal_text, edit_local, edit_global, edit_recompose, rag_off]
-  languages: [vi, en, ja, zh]            # configuration; the user's knowledge base decides the real list
+  languages: [vi, en, ja, zh]            # an example list, not a limit: scenarios fix no language and no input format (decision 56)
   split_by: concept                      # a concept never appears in both the fit and the test split; split values: fit, test
   min_items_per_class: design_required

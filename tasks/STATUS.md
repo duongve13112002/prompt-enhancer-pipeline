@@ -4,14 +4,17 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
 
 ## Current state
 
-- **Phase:** `INIT` (documentation and agent tooling; no pipeline code). Implementation starts only on an explicit user command.
+- **Phase:** `DISCOVERY` (documentation and agent tooling; no pipeline code). Implementation starts only on an explicit user command.
+- **Session 2026-11-14 (kickoff, decisions 54 to 63):** agent environment set up on the Windows dev machine (`setup_project.py check`: 20 ok, 0 warn, 0 fail; Python 3.12.10; claude 2.1.323, codex-cli 0.169.0, agy 1.5.8); repository confirmed private. `database/` is the dev knowledge base (43 folders, 47 concepts), Git-ignored. Decisions 59 and 60 changed the info-file contract (a model assigns line-2 text that does not split; only the info file and image extensions are read). **Cold read of these edits (R-028): not run**, Claude is above 90% of its weekly window.
+- **T-002:** Step 0 approved; starts on a Codex worker after the Codex weekly reset (2026-11-14T13:17:44Z); a one-shot wake is scheduled. **T-003:** inventory done; a hand-written silver sample of 55 scenarios passes its checks and the user accepted it, asking for harder scenarios where useful (decision 65, [task file](active/T-003-evaluation-set.md)); key check by another family `not_run`. The user deleted folder `Luc_quan_Mùa_hè` (decision 64): 42 folders, 46 concepts. The kickoff changes were committed and pushed by the orchestrator as a one-off (decision 66).
+- **Quota at 2026-11-13T18:11Z:** Claude weekly 97% (resets 2026-11-18T14:00Z); Codex weekly 97%; Antigravity Gemini weekly exhausted (resets 2026-11-13T23:54:06Z).
 - **Done 2026-11-11:** repository seeded (T-001): requirements R-001 to R-028, decisions 1 to 53, architecture, fifteen stage documents, contracts and schemas, example profiles, an example admin profile, knowledge-base and evaluation-set layouts, 72 research notes; tooling copied and bound through `.agents/project.json`; rules restructured per decision 24 (core rules, role packs, CLI wrappers; map in [docs/agents/rule-map.md](../docs/agents/rule-map.md)).
 - **Workflow revised 2026-11-13 (decisions 43 to 48):** the orchestrator cleans `.tmp` itself; Claude workers stop at 90% of Claude's window; scheduled wake at a known quota reset, resuming only approved tasks; one fresh worker per task; Codex image generation as a stand-in image model (T-034); AGENTS.md shortened and ORCHESTRATION rewritten for this repository's tools. Evidence: [N135](../docs/note/N135-quota-reset-and-scheduling.md), [N136](../docs/note/N136-codex-image-generation.md), [N137](../docs/note/N137-orchestration-guidance-review.md).
 - **Cold read (T-004, R-028):** see the task file [archive/T-004-cold-read.md](archive/T-004-cold-read.md) for the first round's readers, findings, fixes and the questions sent to the user.
 - **Tooling check at seeding:** `python3 -B -I tools/agent-workflow/setup_project.py check` in a Linux container: binding, instruction files, budgets, hook-read files, Git-ignore entries and foreign tokens OK; warnings for machine facts (no `.venv`, no Codex or agy CLI, no PowerShell, hooks not registered, no `.tmp/pm-state`); `setup_project.py apply` was not run because it renders machine-local settings.
 - **Not run:** nothing was implemented, measured or benchmarked. No live Claude, Codex or agy worker was started in this layout; hooks were not exercised in an interactive session. **Tool tests (2026-11-13, Linux container, Python 3, pytest in a scratch venv):** 3017 passed, 82 skipped, 10 failed; the same 10 fail on the earlier copy of this repository and the checked ones fail in the user's original project too (Windows-specific behaviour: process trees, PID times, links, path separators, PowerShell commands), so they are to be rerun on the Windows dev machine (task T-002 reports the result).
 - **Git and remote:** the user creates the GitHub repository, clones it, sets up `gh` and makes every commit and push (decisions 35 to 37 and 41); agents work inside that clone and only propose commit messages. The delivered zip holds the files only, with no Git data.
-- **Next:** T-002 (environment report, read-only) and T-003 (evaluation scenarios from the user's knowledge base), each when the user approves its Step 0; T-024 to T-026 before the first parallel code wave.
+- **Next:** run T-002; key check and user review for T-003; cold read of the session's document edits; T-024 to T-026 before the first parallel code wave.
 
 ## PM proposals in force, awaiting the user's explicit confirmation
 
@@ -29,7 +32,7 @@ Settled by experiments or by the implementing task: every profile value marked `
 
 ## Questions waiting for the user
 
-1. The path of the real knowledge base on the dev machine (T-003 starts with it; the repository holds only `kb/_example/`).
+1. Keep the Claude app open and the computer awake at 20:21 on 2026-11-14 (UTC+7) so the scheduled wake can start T-002, or open a new session after that time.
 2. Before any paid cloud call, the PM asks for the number of calls allowed and the key file in `.secrets/`.
 3. Targets for linking coverage (E1), latency on the deployment (E13) and card precision (E16): the user sets them after the first measurements (decision 34); the PM brings the numbers.
 4. Open questions from the cold read: listed in the T-004 task file ([archive/T-004-cold-read.md](archive/T-004-cold-read.md)).

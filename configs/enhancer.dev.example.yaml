@@ -7,7 +7,7 @@ status: template
 purpose: smoke
 
 knowledge:
-  root: kb/_example                      # the user's real knowledge base path replaces this (kb/README.md)
+  root: database                         # the dev machine's knowledge base (decision 61): Git-ignored, read only
 
 runtime:
   gpus: [0]
