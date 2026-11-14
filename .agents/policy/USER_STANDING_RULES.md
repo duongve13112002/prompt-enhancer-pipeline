@@ -1,6 +1,6 @@
 # User standing rules (injected whole at every PM session start)
 
-Only rules the user stated, one per line: `Sxx | rule | source | check`. `remembered only` = no mechanical gate yet. Decisions: `tasks/DECISIONS_INDEX.md`. Rules already in AGENTS.md are not repeated. S01 to S33 were carried from the user's earlier project (source column "seed rules" or a date before 2026-11-11); S05 and S08 to S12 named that project's runs, budgets and branches and are not used here; IDs are never reused.
+Only rules the user stated, one per line: `Sxx | rule | source | check`. `remembered only` = no mechanical gate yet. Decisions: `tasks/DECISIONS_INDEX.md`. Rules already in AGENTS.md are not repeated. S01 to S33 came from the user's earlier project ("seed rules" or a date before 2026-11-11); S05 and S08 to S12 are unused here; IDs are never reused.
 
 S01 | Never assume; unclear means ask. Ask only what is the user's: new product meaning, overriding a decision, spend beyond budget | seed rules 2026-10-22 | remembered only
 S02 | Do every decidable next step yourself; the user must not chase | seed rules 2026-10-11 "đừng để tui giục" | remembered only
@@ -17,17 +17,17 @@ S18 | Models and reviewers per `.agents/policy/PM_POLICY.md` section 2: Gemini 3
 S19 | Relay every worker finding in full, conflicts with decisions first; check a cited decision verbatim before relaying a question | seed rules | remembered only
 S20 | Each own mistake gets a line in LESSONS_LEARNED with its prevention rule or gate | seed rules 2026-10-17 | remembered only
 S21 | Scout audit for forgotten plan items once per wave and before a long absence | seed rules 2026-10-28 "thường xuyên kiểm tra plan" | `audit_brief.md`
-S22 | Periodic audit: Haiku 5.5 read-only scout, one-shot; daily while active and before GPU rounds; met / not met / cannot tell + evidence; the PM verifies every "not met" | seed rules 2026-10-29 | `audit_brief.md`, `audit_extract.py`
+S22 | Periodic audit: Haiku 5.5 read-only scout; daily while active and before GPU rounds; met / not met / cannot tell + evidence; the PM verifies every "not met" | seed rules 2026-10-29 | `audit_brief.md`, `audit_extract.py`
 S23 | Config everything: no source constant for a limit, window, provider or model; an absent key is refused | seed rules | config sweep tests
 S24 | Lean live files within their character budgets; repository text English, replies to the user in Vietnamese | seed rules | `doc_budgets.json` via `session_context.py`
 S25 | Facts from the store or the run record, never from memory | seed rules 2026-10-18 | remembered only
-S26 | Supervisor every 45 min while work is active (never above 50, never 120): it wakes the PM to check status and keeps the PM's prompt cache warm; procedure in PM_POLICY section 3 | seed rules; user 2026-11-10 | `pm_invariants.py`
+S26 | Supervisor every 45 min while work is active (never above 50): it wakes the PM and keeps its prompt cache warm; PM_POLICY section 3 | seed rules; user 2026-11-10 | `pm_invariants.py`
 S27 | No hardcode to pass, nor as a checker: anything that may vary is config or model; no per-language rules | seed rules 2026-11-07 | remembered only
 S28 | A status-update request also refreshes `tasks/STATUS.md` | seed rules | remembered only
 S29 | Wait for the user only on a truly important decision, else keep working | seed rules 2026-10-28 | remembered only
 S30 | Prefer the ambitious, experiment-proven option over the safest; budgets, gates and S01 unchanged | seed rules | remembered only
 S31 | No fix loops: root cause + full audit of the bug class BEFORE any fix; one complete fix | seed rules | `brief_lint.py` (RCA section in fix briefs)
-S32 | All three agent CLIs run on subscriptions: check the 5-hour and weekly usage before every dispatch round; use Codex and Antigravity until their quota runs out, Claude workers until 90% (the rest is the orchestrator's); a provider that reports no limit is not checked; move work to another provider; at a known reset time schedule a wake and resume only approved tasks | user 2026-11-10; changed 2026-11-13 (decisions 44, 46) | `usage_snapshot.py`
+S32 | All three agent CLIs run on subscriptions: check the 5-hour and weekly usage before every dispatch round; use Codex and Antigravity until their quota runs out, Claude workers until 90%; move work to another provider; at a known reset time schedule a wake and resume only approved tasks | user 2026-11-10; changed 2026-11-13 (decisions 44, 46) | `usage_snapshot.py`
 S33 | Goal of agent orchestration: the fewest tokens for the best quality | user 2026-11-10 | remembered only
 S34 | No hardcoding, no rule-based logic, no tricks: defaults and thresholds come from configuration, models and experiments | user 2026-11-11 (decision 18) | config sweep tests
 S35 | CI runs on the latest Ubuntu and on Windows; the repository is public only for the run and private again when it ends, green or red; confirm it is private at session start | user 2026-11-11 (decision 26) | remembered only (task T-022 adds the gate)
@@ -38,3 +38,4 @@ S39 | The orchestrator commits and pushes verified work itself, without asking a
 S40 | The orchestrator cleans `.tmp` itself: after each task, at session start and end, on every wake, orphan trees past the configured age; never protected trees | user 2026-11-13 (decision 43) | remembered only (task T-025 adds the sweep)
 S41 | Codex image generation tests the flow; generate only what a test needs and reuse images, because it spends the Codex subscription | user 2026-11-13 (decision 47) | remembered only
 S42 | Fix defects of existing agent tooling yourself, no task command needed; new tooling features stay in T-020 to T-026; report each fix, another family reviews it | user 2026-11-14 (decision 72) | remembered only
+S43 | Spread work by each CLI's strengths across Claude, Codex and Antigravity; where Codex and Claude fit equally, alternate or draw between them; no single agent does all the implementation | user 2026-11-14 (decision 83) | remembered only

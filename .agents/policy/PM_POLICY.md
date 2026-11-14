@@ -38,6 +38,7 @@ The orchestrator is whatever session the user opens; this policy does not choose
 | Docs, wording, config-value edit (`trivial`) | Haiku 5.5 `low` | `gpt-6-luna` `low` | Gemini 3.8 Flash `low` |
 
 - **Bold** is the default pick when quota allows; otherwise use the same row in another column.
+- **Spread the work (S43, decision 83):** pick by each CLI's strengths; where Codex and Claude fit a row equally, alternate between them or draw one (log the pick in `.agents/log.md`), so no single agent does all the implementation. Codex workers cannot edit `tools/agent-workflow/` (`hooks/codex_guard.py:104-105`), so tooling implementation goes to Claude and Codex reviews it.
 - **Escalation order (N093):** when a result is not good enough, first make sure the worker can verify its own work (a test, a build, a script in the done check); then raise effort one level; only then move to the next model up, starting it at a lower effort than the smaller model used.
 - **Ladder:** the PM names the task's row in the brief from its difficulty; a task starts there and moves one row down after a failed attempt or a recorded blocker; the fix-round cap of section 5 still applies. Effort `max` or Codex `ultra` is never used (Codex `ultra` is refused by `codex_backend.py`).
 - **Never** let a model review its own change or a change from its own session; prefer a reviewer from another family. Haiku never reviews code.
