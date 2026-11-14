@@ -1,6 +1,6 @@
 # One read-only Gemini job under the user account (PM_POLICY "Review-only runs"; Windows PowerShell 5.1).
 # Several may overlap, also with an AgyRunner job (probed 2026-11-06: 3 runs at once beside a runner job):
-# start one background call per job. The default permission policy applies: reads inside the workspace only,
+# start one background call per job. A session-only settings file allows reads inside the workspace only;
 # no writes, no shell commands, so the whole result is the reply, saved to _results/<JobId>.json.
 # Never add --dangerously-skip-permissions. Exits 2 when the job is INCOMPLETE; SUCCESS alone is never trusted.
 param(
@@ -28,9 +28,22 @@ if (-not $LintWaive) {
     if ($LASTEXITCODE -ne 0) { throw "Brief lint refused $brief (fix it or pass -LintWaive <reason>)" }
 }
 $results = Join-Path $root '.tmp\agy-work\_results'
-foreach ($suffix in '.done', '.json', '.stderr.txt') {
+# The first job of a fresh clone finds no _results folder; without it the reply is lost after the run.
+New-Item -ItemType Directory -Force -Path $results | Out-Null
+foreach ($suffix in '.done', '.json', '.stderr.txt', '.settings.json') {
     if (Test-Path -LiteralPath (Join-Path $results "$JobId$suffix")) { throw "Result for $JobId already exists" }
 }
+# Headless agy auto-denies every tool without an allow-rule (agy 1.5.8 stderr: "Add an allow-rule under
+# permissions.allow in settings.json (e.g. read_file(<target>))"). The session-only rule names this workspace,
+# so reads elsewhere stay denied; .secrets is denied explicitly. A file, because PowerShell 5.1 mangles quotes
+# in a native argument.
+$wsFull = (Resolve-Path -LiteralPath $ws).Path
+$settingsPath = Join-Path $results "$JobId.settings.json"
+$settings = [ordered]@{ permissions = [ordered]@{
+        allow = @("read_file($wsFull)")
+        deny  = @("read_file($(Join-Path $root '.secrets'))")
+    } }
+[IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
 $rules = ' Rules of this run: read only files in this folder; you cannot write files or run commands; use no web tool and no subagents; put your whole result in your final reply.'
 $agy = (Get-Command agy).Source
 $jsonPath = Join-Path $results "$JobId.json"
@@ -39,7 +52,7 @@ Push-Location -LiteralPath $ws
 # Windows PowerShell 5.1 turns native stderr into terminating errors under 'Stop'.
 $ErrorActionPreference = 'Continue'
 try {
-    $out = & $agy -p ($prompt.TrimEnd() + $rules) --model $Model --output-format json --print-timeout "${TimeoutMinutes}m" 2> $errPath
+    $out = & $agy -p ($prompt.TrimEnd() + $rules) --model $Model --output-format json --print-timeout "${TimeoutMinutes}m" --settings $settingsPath 2> $errPath
     $code = $LASTEXITCODE
 } finally {
     Pop-Location

@@ -37,3 +37,4 @@ S38 | Cloud models are optional backends chosen in the configuration (Claude, de
 S39 | The user makes every commit and every push; no agent commits, pushes or merges; the PM proposes the commit message | user 2026-11-11 (decisions 36, 37) | AGENTS.md section 11
 S40 | The orchestrator cleans `.tmp` itself: after each task, at session start and end, on every wake, orphan trees past the configured age; never protected trees | user 2026-11-13 (decision 43) | remembered only (task T-025 adds the sweep)
 S41 | Codex image generation tests the flow; generate only what a test needs and reuse images, because it spends the Codex subscription | user 2026-11-13 (decision 47) | remembered only
+S42 | Fix defects of the existing agent tooling found while running agents yourself, without waiting for a task command; new tooling features stay in T-020 to T-026; report each fix and have another family review it when one is available | user 2026-11-14 (decision 72) | remembered only

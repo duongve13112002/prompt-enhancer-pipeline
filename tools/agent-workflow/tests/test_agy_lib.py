@@ -416,6 +416,21 @@ def test_scripts_are_wired_to_the_helpers() -> None:
     assert "Depth 1" in text_of("scripts/agy-runner/agy-lib.ps1")
 
 
+def test_review_job_allows_workspace_reads_and_keeps_its_result() -> None:
+    # Defects found by the 2026-11-14 smoke run (decision 72): no _results folder, headless read_file denied,
+    # and GNU tar reading `D:` as a host.
+    review = text_of("tools/agent-workflow/gemini-review.ps1")
+    assert review.index("New-Item -ItemType Directory -Force -Path $results") < review.index("$jsonPath = ")
+    assert 'allow = @("read_file($wsFull)")' in review
+    assert "'.secrets'" in review[review.index("deny  = @(") :]
+    call = review[review.index("$out = & $agy") :].splitlines()[0]
+    assert "--settings $settingsPath" in call
+    assert "--dangerously-skip-permissions" not in call
+    ws = text_of("tools/agent-workflow/gemini-ws.ps1")
+    assert "tar -xf notes/head.tar" in ws and "tar -xf $tar" not in ws
+    assert ws.index("Push-Location -LiteralPath $ws") < ws.index("tar -xf notes/head.tar")
+
+
 def test_helpers_never_stop_tasks_or_touch_the_wrapper_and_gemini_store() -> None:
     lib = text_of("scripts/agy-runner/agy-lib.ps1")
     for forbidden in (

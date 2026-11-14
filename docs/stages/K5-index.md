@@ -6,7 +6,7 @@
 
 **Method.**
 - **Character n-grams** need no word segmentation, so one lexical index serves Vietnamese, Japanese, Chinese and mixed prompts without a per-language tokenizer [A]: no comparison of word segmentation against character n-grams for these languages was found.
-- **Rebuilt, not edited.** Each sync builds a fresh index for the new snapshot, because some approximate nearest-neighbour structures cannot delete entries ([N125](../note/N125-snapshots-and-vector-deletion.md)); no all-pairs comparison is made (R-016).
+- **Rebuilt, not edited.** Each sync builds a fresh index for the new snapshot, because some approximate nearest-neighbour structures cannot delete entries ([N125](../note/N125-snapshots-and-vector-deletion.md)); no all-pairs comparison is made (R-016). Production scale is unknown and may be far above 1,000 folders and 50,000 images (decision 71), so rebuild time, memory and query latency are benchmarked on synthetic catalogues beyond that size before the index type is fixed.
 - **Validation before publish:** every index entry points to a row of the snapshot, and sample queries (each concept's own name) return the concept.
 
 **Decisions and configuration keys.** `index.*`: engine and index type (`design_required`, with the options in N047 and N048), build parameters (`fit_from_bench`), n-gram length (`fit_from_gt`, E1).

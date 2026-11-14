@@ -51,7 +51,7 @@ Command: `.venv/Scripts/python.exe -B -I .tmp/T-003/kb_inventory.py --root datab
 ## Open
 
 - Key check by another family (Gemini 3.8 Flash `medium`, read-only) once Antigravity has quota: `not_run`.
-- The user accepted the sample on 2026-11-14 and asked for harder scenarios where useful (decision 65). Candidates for the next round: indirect mentions built only from a description, names without diacritics or romanised, typos, mentions in a script other than the name's, several negations in one prompt, long nested JSON prompts, prompts whose context makes every family member conflict, and edits that touch a concept the user also locks.
+- The user accepted the sample on 2026-11-14 and asked for harder scenarios where useful (decision 65). Candidates for the next round: indirect mentions built only from a description, names without diacritics or romanised, typos, mentions in a script other than the name's, several negations in one prompt, long nested JSON prompts, prompts whose context makes every family member conflict (decision 69: the key is a pick among all members, never `no_match`), a named variant in a contradicting scene (decision 69: the named variant stays, for example the spring-summer uniform in snow), ambiguous edit targets under `clarification.mode: best_effort` (decision 68: key status `degraded`, not `needs_clarification`), and edits that touch a concept the user also locks. family-01 stays valid under decision 69 (members that fit exist).
 - After decision 64 (folder `Luc_quan_Mùa_hè` deleted by the user) the sample was re-keyed: family-01 now lists one spring-summer member; check output `ok scenarios=55 ... concepts_used=34 of 46`; inventory `folders=42 files=1311 concepts=46 mismatch=9 no_info=0`.
 
 ## Noticed, not done

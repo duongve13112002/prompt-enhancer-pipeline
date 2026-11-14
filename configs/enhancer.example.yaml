@@ -98,6 +98,9 @@ resolution:
   trace_choice: true
   on_variant_unspecified: context_then_random   # decision 16
 
+clarification:
+  mode: best_effort                      # decision 68; best_effort (write the most plausible reading, status degraded) | ask (status needs_clarification)
+
 assembly:                                # S3
   scope_matrix:                          # role -> facet groups it may use; PM proposal [P], validated by experiment E9
     subject_identity: [identity]         # same table as docs/stages/S3-knowledge.md

@@ -14,7 +14,7 @@
 - `sectioned`: the file has sections marked `[META]`, `[SYSTEM]` and `[USER]`. The `[SYSTEM]` section is the system message and is used verbatim. The `[USER]` section is the user-turn template that contains the input variable. `[META]` is loader metadata: it is recorded in the manifest and mapped to a runtime parameter only when the backend supports it (for example a thinking switch), never guessed.
 - `plain`: the whole file is the system message and the brief is the user message.
 
-**What a manifest declares.** `template_format`; supported tasks (`generate`, `edit` or both); output kind (JSON, tags, prose or other) and its schema or grammar if any; output language; the template's input variable the Enhancement Brief fills; for edit, the output semantics; whether the downstream image model accepts reference images and how an image is referenced in text; quote semantics (for example quoted strings are literal text to render); validators for structural checks.
+**What a manifest declares.** `template_format`; supported tasks (`generate`, `edit` or both); output kind (JSON, tags, prose or other) and its schema or grammar if any; output language (decision 67: free text in any wording, interpreted by the model, never mapped by code; a language the system prompt states wins, else the drafter writes `English` for the admin to confirm or change); the template's input variable the Enhancement Brief fills; for edit, the output semantics; whether the downstream image model accepts reference images and how an image is referenced in text; quote semantics (for example quoted strings are literal text to render); validators for structural checks.
 
 **Decisions and configuration keys.** `profiles.root`, `profiles.default_profile_id`, the admin profile's `status`, `vlm.roles.manifest_drafter`. An edit request sent to a generate-only profile is refused with a clear error, never reformatted (decision 5). No width, height or aspect ratio enters the contract; bounding boxes are the profile's choice (R-005).
 
@@ -22,7 +22,8 @@
 - "Populate underspecified scenes" and "Built environments need text everywhere" against creativity settings that allow no new entities or text blocks, and against a user's "no text".
 - "Quoted strings: each is its own text element": the manifest records quote semantics as literal text, so the brief renders concept names without quotation marks.
 - "Banned hedge phrasings" and "Pick ONE and commit" against omitting what lacks evidence: missing identity evidence drops the attribute instead of picking a value.
-- The template has no edit contract, so the manifest lists `generate` only.
+- The user uses this one prompt for both generate and edit (decision 70). The prompt states no edit semantics, so the manifest records the user's: for an edit, the JSON describes the whole edited image, with unchanged parts as in the source image (`edit_output_semantics: whole_edited_image`, decision 73).
+- The prompt's aspect-ratio and bounding-box parts (`{{aspect_ratio}}` in the `[USER]` template) are a temporary example and are ignored (decision 70); R-005 stands.
 
 **Compute.** One drafting call per registration, plus golden tests through the full pipeline. Not implemented; nothing measured.
 

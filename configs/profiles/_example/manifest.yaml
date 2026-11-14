@@ -1,4 +1,4 @@
-# Example admin profile manifest for system_prompt.txt. Documentation only; nothing is implemented.
+# Example admin profile manifest for system_prompt.txt (the user's admin prompt `v1`, decision 70). Documentation only; nothing is implemented.
 # Drafted by a model at registration and confirmed by the admin (decision 6). The system prompt text is never edited.
 # Shape: contracts/schemas/profile_manifest.v0.schema.json. Meaning of each field: docs/stages/P-profiles.md.
 schema_version: 1
@@ -7,14 +7,14 @@ status: draft                           # draft | confirmed | active; only the a
 system_prompt_hash: computed_at_registration   # hash of system_prompt.txt, written by `profile register`
 template_format: sectioned              # [P] sectioned | plain. [SYSTEM] is the system message verbatim, [USER] the user-turn template
 meta:                                   # [P] the [META] section, recorded here; mapped to a runtime parameter only when the backend supports it
-  frozen: false
+  frozen: false                         # meaning not stated by the prompt; recorded only
   thinking_mode: disabled               # a thinking switch, sent only if the backend has one
-supported_tasks: [generate]             # decision 5: an edit request to this profile is refused
-output_kind: json                       # the system prompt describes the object: two top-level keys, single-line minified
+supported_tasks: [generate, edit]       # decision 70: one prompt for both tasks
+output_kind: json                       # the system prompt describes the object: three top-level keys (aspect_ratio, high_level_description, compositional_deconstruction), single-line minified
 output_schema_id: none                  # no schema file yet; the admin may add one under contracts/schemas/
-output_language: english                # prose fields; text to render stays verbatim
-edit_output_semantics: none             # generate-only profile
-template_variables: [original_prompt]   # the input variable of the [USER] section
+output_language: English                # decision 67: the prompt states it (prose in English; the `text` field keeps the user's characters)
+edit_output_semantics: whole_edited_image   # decision 73: the JSON describes the whole edited image; unchanged parts as in the source image
+template_variables: [aspect_ratio, original_prompt]   # the [USER] section; the aspect-ratio and bbox parts are a temporary example and ignored (decision 70); R-005 stands
 quote_semantics: literal_text           # a quoted string in the input becomes a text element, so a brief puts no quotes around concept names
 renderer:
   accepts_reference_images: false
@@ -22,6 +22,7 @@ renderer:
 validator:
   checks:
     - single_line_minified_json
+    - top_level_keys_in_order_as_listed_in_the_prompt
     - word_caps_as_listed_in_the_prompt   # the prompt states its own caps for the summary and each element description
     - bbox_range_0_to_1000_when_present
 conflicts:                              # found by `profile check`; each needs the admin's decision before activation

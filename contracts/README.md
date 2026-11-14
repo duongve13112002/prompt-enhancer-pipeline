@@ -55,7 +55,7 @@ Values are exact strings; the schema files use the same spelling.
 | task | `generate` (text prompt), `edit` (text prompt plus one source image) |
 | edit kind | `local_edit` (change one object, attribute, region or text), `global_transform` (medium, style, weather, lighting of the whole image), `subject_recompose` (a new image of this subject) |
 | link status | `resolved` (one concept), `family` (the mention is broader than the knowledge base, several candidates), `no_match` |
-| context fit | `fits`, `neutral`, `conflicts`: how well a candidate suits the prompt's context; decides `family` and variant choices (decisions 15 and 16) |
+| context fit | `fits`, `neutral`, `conflicts`: how well a candidate suits the prompt's context; orders `family` and variant choices and never empties them (decisions 15, 16 and 69) |
 | role | the part a concept plays in this request, assigned by the planner, not taken from the concept kind (R-008): `subject_identity`, `worn_garment`, `location`, `object`, `style_reference`, `other` |
 | concept kind | `character`, `clothing`, `place`, `object`, `style`, `other` |
 | facet groups | `identity`, `apparel`, `object`, `place`, `style`, `incidental`, `text_in_image`; a facet name is `<group>.<facet>` |
@@ -77,7 +77,7 @@ Values are exact strings; the schema files use the same spelling.
 | `success` | the output passed the structural checks and, where the risk rules ran it, the verifier, on the first draft |
 | `repaired` | a check failed, a bounded repair ran (`validation.max_repairs`), and every check then passed |
 | `degraded` | an output is returned but part of the pipeline was skipped or failed: planner schema failure falling back to the path without knowledge, retrieval failed, or repair exhausted and a fallback output returned |
-| `needs_clarification` | the planner found an ambiguous edit target, or a mention is a family match and `resolution.on_family_match` is `ask` (candidate concepts listed); no prompt is written. Where the candidate targets travel is `design_required` (they are in the trace) |
+| `needs_clarification` | only with `clarification.mode: ask` (decision 68): the planner found an ambiguous edit target, or a mention is a family match and `resolution.on_family_match` is `ask` (candidate concepts listed); no prompt is written. Where the candidate targets travel is `design_required` (they are in the trace) |
 | `failed` | no usable output: profile does not support the task (decision 5), source image cannot be decoded, backend error, deadline, truncation without a fallback |
 
 **Constraint types** and how each is checked ([S5](../docs/stages/S5-validate.md), R-027, R-015):

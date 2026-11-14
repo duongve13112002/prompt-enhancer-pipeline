@@ -1,5 +1,5 @@
 # Builds a Gemini workspace .tmp/agy-work/<Workspace> from a committed head: the tracked review
-# directories below (git archive, so no .secrets, no ignored files), plus notes/ with the task file,
+# directories and root files below (git archive, so no .secrets, no ignored files), plus notes/ with the task file,
 # delta.diff and stat.txt for Base..Head. Fails if the workspace exists or AgyRunner is busy (Windows PowerShell 5.1).
 # -ExtraNotes copies project files (earlier reviews, fix lists) into notes/ so prompts cite notes/<name> only;
 # each source must be a .md file inside the project root (no links, no path segment .secrets, models, .venv, .git).
@@ -45,13 +45,16 @@ if ($Sanitize) {
 New-Item -ItemType Directory -Path "$ws/notes", "$ws/out" | Out-Null
 $tar = "$ws/notes/head.tar"
 # Explicit allowlist (never .secrets, models, .venv or .tmp); directories absent from Head are skipped.
-$allow = 'src', 'tests', 'configs', 'scripts', 'tools', 'docs', 'tasks', 'contracts', 'prompts'
+$allow = 'src', 'tests', 'configs', 'scripts', 'tools', 'docs', 'tasks', 'contracts', 'prompts', 'AGENTS.md', 'README.md'
 $tracked = @(git -C $Worktree ls-tree --name-only $Head)
 $paths = @($allow | Where-Object { $tracked -contains $_ })
 if ($paths.Count -eq 0) { throw 'no reviewable directories in Head' }
 git -C $Worktree archive --format=tar -o $tar $Head @paths
 if ($LASTEXITCODE -ne 0) { throw 'git archive failed' }
-tar -xf $tar -C $ws
+# Relative archive path: Git for Windows' GNU tar, first on PATH when PowerShell starts from Git Bash, reads
+# `D:` in `-f D:/...` as a remote host and fails; the Windows tar and GNU tar both accept a relative path.
+Push-Location -LiteralPath $ws
+try { tar -xf notes/head.tar } finally { Pop-Location }
 if ($LASTEXITCODE -ne 0) { throw 'tar extract failed' }
 Remove-Item -LiteralPath $tar
 $utf8 = New-Object Text.UTF8Encoding $false
