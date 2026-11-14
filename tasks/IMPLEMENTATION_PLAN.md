@@ -14,7 +14,7 @@ Plan only. **Every code task (T-005 onward, the tooling tasks T-020 to T-026, an
 | T-006 | Storage layer: Parquet and Arrow tables, content-addressed artifacts, snapshot build, publish and rollback | feature | R-014, R-016, R-017 | T-005 | yes |
 | T-007 | K0 sync: scan, diff, plan, mass-deletion guard, info-file parsing, folders without an info file recorded with a pending name | feature | R-007, R-014 | T-006 | yes |
 | T-008 | K1 embeddings for images and concept text | feature | R-016 | T-007 | yes, dev GPU |
-| T-009 | Model client: provider adapters, capability probe, warn-and-continue, structured-output validation; tested against the dev server (E12) | feature | R-018 | T-005, T-002 | yes, dev GPU |
+| T-009 | Model client: provider adapters, capability probe, warn-and-continue, structured-output validation; one shared client-side image resize used by every model call, the K1 embedder of T-008 included (`vision.max_image_side`, `none` or a longer side, aspect ratio kept, no upscale, decision 84); tested against the dev server (E12) | feature | R-018 | T-005, T-002 | yes, dev GPU |
 | T-010 | K2 info-file assessment and folder naming by a model (decisions 30, 39, 40, E17) and observe, K3 cards with the lint report, `kb audit` | feature | R-007, R-010 | T-008, T-009 | yes, dev GPU |
 | T-011 | K4 aliases and K5 serving index | feature | R-015, R-016 | T-010 | yes |
 | T-012 | P profiles: register, manifest drafting, conflict lint, golden tests | feature | R-004 | T-009 | yes |

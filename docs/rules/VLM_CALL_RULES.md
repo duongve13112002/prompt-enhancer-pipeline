@@ -8,7 +8,7 @@ Read before changing a prompt, a model call, the client or the backend settings.
 4. **Thinking off on the request path** where the backend allows it; the switch name is a profile value ([serving](../serving.md), E10).
 5. **Unsupported parameters** are dropped with a recorded `PARAM_UNSUPPORTED` warning, and the effective request is stored, so every result stays bound to what was really sent.
 6. **Prompt versioning.** Every prompt has a `prompt_id`. A change is a new id and invalidates every fitted value that depends on it, because fitted values belong to one (model, prompt, image size) combination.
-7. **Image size.** Downscale before sending, to `vision.max_image_side`, because the server default can be far larger than a request needs.
+7. **Image size (decision 84).** Every image sent to any model (VLM roles, image embedder) goes through one client-side resize: `vision.max_image_side: none` sends the original; an integer N downscales so the longer side is N, keeping the aspect ratio, never upscaling. A role may override it with `image.max_side`. Experiments and benchmarks use 1024; with a cloud backend the cap also bounds the cost, because image tokens grow with pixels.
 8. **Data, not instructions.** Knowledge-base text, text read from images and captions go in as delimited data, never at an instruction position (R-026, [N131](../note/N131-image-prompt-injection.md)).
 9. **Structured output** is validated after the engine, because engines may ignore schema keywords silently. An invalid response is recorded (`SCHEMA_INVALID`), retried only as the stage design allows, and never repaired by guessing.
 10. **Independence.** A model never evaluates output, labels or scenarios that it produced itself.

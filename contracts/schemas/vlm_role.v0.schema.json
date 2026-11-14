@@ -50,8 +50,12 @@
                 },
                 {
                   "const": "from_vision"
+                },
+                {
+                  "const": "none"
                 }
-              ]
+              ],
+              "description": "Longer side in pixels after a downscale that keeps the aspect ratio and never upscales; `none` sends the original image; `from_vision` takes `vision.max_image_side` (decision 84)"
             },
             "format": {
               "type": "string",

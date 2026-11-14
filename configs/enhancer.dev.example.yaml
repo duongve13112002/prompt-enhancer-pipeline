@@ -13,8 +13,11 @@ runtime:
   gpus: [0]
   vram_budget_gb: 8                      # the user's dev GPU, decision 20; a profile value
 
+vision:
+  max_image_side: 1024                   # decision 84: experiments and benchmarks keep the longer side at 1024 (aspect ratio kept, no upscale)
+
 embedding:
-  chosen: embeddinggemma-2               # N104; the smoke choice for the dev machine, small enough to share the dev GPU; experiment E5 chooses for the full profile
+  chosen: embeddinggemma-2              # N104; the smoke choice for the dev machine, small enough to share the dev GPU; experiment E5 chooses for the full profile
 
 vlm:
   backends:

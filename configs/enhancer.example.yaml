@@ -151,7 +151,7 @@ validation:                              # S5
   fallbacks: [minimal_output_valid_for_contract, user_prompt_with_status_degraded, failed]   # tried in this order, docs/stages/S5-validate.md
 
 vision:                                  # S0
-  max_image_side: fit_from_bench         # a cap is needed: the model's default pixel cap is far above what latency allows, N102
+  max_image_side: none                   # decision 84: `none` sends the original image; an integer N downscales so the longer side is N, keeping the aspect ratio, never upscaling. Applies to every image sent to any model (VLM roles, image embedder); a role may override with `image.max_side`. Experiments and benchmarks use 1024 (N102: large originals cost latency and cloud tokens)
   format: jpeg
   quality: design_required
   transport: data_uri
@@ -243,7 +243,7 @@ vlm:                                     # R-018: rules name no model; models ar
       backend: main
       mode: generate
       prompt_id: observer_v0
-      image: {max_side: design_required, format: jpeg, quality: design_required, transport: data_uri}
+      image: {max_side: from_vision, format: jpeg, quality: design_required, transport: data_uri}
       max_tokens: design_required
       sampling: *sampling_default
       reasoning: {mode: design_required, effort: design_required, budget_tokens: design_required, template_kwargs_key: enable_thinking}
@@ -261,7 +261,7 @@ vlm:                                     # R-018: rules name no model; models ar
       backend: main
       mode: generate
       prompt_id: folder_namer_v0
-      image: {max_side: design_required, format: jpeg, quality: design_required, transport: data_uri}
+      image: {max_side: from_vision, format: jpeg, quality: design_required, transport: data_uri}
       max_tokens: design_required
       sampling: *sampling_default
       reasoning: {mode: design_required, effort: design_required, budget_tokens: design_required, template_kwargs_key: enable_thinking}

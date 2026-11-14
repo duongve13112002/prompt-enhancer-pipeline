@@ -16,7 +16,7 @@ The deployment model is a profile value (decision 20): Qwen3.8-27B in its FP8 fo
 | Thinking | On by default. Turn it off per request with `chat_template_kwargs {"enable_thinking": false}`, or at the server with a default for the chat-template arguments (the server form is to confirm against the installed version) | [N102](note/N102-qwen3-8-27b-serving-facts.md), [N121](note/N121-vllm-qwen38-serving.md) |
 | Sampling | The card recommends specific non-thinking sampling values, including a presence penalty. Whether that penalty harms JSON output, where keys repeat, is open: test with and without it (E11) | [N102](note/N102-qwen3-8-27b-serving-facts.md) |
 | Structured output | `response_format` with a JSON schema; the grammar backend is the server's choice | [N121](note/N121-vllm-qwen38-serving.md) |
-| Images | One visual token per 32x32 pixels; the default pixel cap is far above what a request needs, so the client downscales before sending (`vision.max_image_side`) | [N102](note/N102-qwen3-8-27b-serving-facts.md) |
+| Images | One visual token per 32x32 pixels; the default pixel cap is far above what a request needs, so the client can downscale before sending (`vision.max_image_side`: `none` by default, 1024 for experiments, decision 84) | [N102](note/N102-qwen3-8-27b-serving-facts.md) |
 | Recipe | The vendor recipe was verified for text serving only. Image plus schema plus thinking off is therefore the first smoke test on the deployment (E13) | [N121](note/N121-vllm-qwen38-serving.md), [N018](note/N018-vllm-qwen35-recipe.md) |
 | Throughput | No published figure for 45 to 48 GB cards. Measure it (E13) | [N121](note/N121-vllm-qwen38-serving.md) |
 
