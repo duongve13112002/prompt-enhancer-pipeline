@@ -107,6 +107,13 @@
         "minLength": 1
       }
     },
+    "template_values": {
+      "description": "Admin-confirmed fixed values for template variables other than the input variable (decision 81)",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
     "quote_semantics": {
       "type": "string",
       "minLength": 1

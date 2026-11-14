@@ -15,6 +15,8 @@ output_schema_id: none                  # no schema file yet; the admin may add 
 output_language: English                # decision 67: the prompt states it (prose in English; the `text` field keeps the user's characters)
 edit_output_semantics: whole_edited_image   # decision 73: the JSON describes the whole edited image; unchanged parts as in the source image
 template_variables: [aspect_ratio, original_prompt]   # the [USER] section; the aspect-ratio and bbox parts are a temporary example and ignored (decision 70); R-005 stands
+template_values:                         # decision 81: fixed values for variables other than the input variable
+  aspect_ratio: auto
 quote_semantics: literal_text           # a quoted string in the input becomes a text element, so a brief puts no quotes around concept names
 renderer:
   accepts_reference_images: false
