@@ -19,7 +19,8 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
 - **Git and remote:** the user created the GitHub repository and set up `gh` (decision 35); since decision 77 the orchestrator commits and pushes verified work itself (no force push), and workers never commit. The delivered zip holds the files only, with no Git data.
 - **T-025 accepted 2026-11-14:** `purge_tmp.py` gets `sweep` and `prune-archive`, `--dry-run` on every deleting command, and one gate (`Gate`) for all of them. The gate refuses protected trees; trees a busy worker, a task in flight or an unfinished Antigravity job owns; manifest-bound files of every root that can bind the target; and any path with a link on an ancestor. Ages live in `tools/agent-workflow/cleanup_config.json`, and the SessionStart line reports the `.tmp` size and the orphan count. Sonnet 5.5 implemented it in 3 fix rounds (the cap); the Codex review found 4 P1 and 1 P2, then 2 P1, then 1 P1, all fixed, and the final retest PASSES. Accepted residual risk: the Windows time-of-check link race.
 - **T-024:** the Codex review FAILED (7 P1, 1 P2: guard spellings `-C`/`GIT_DIR`/aliases/opaque names/option prefixes, workspace diff leak, spaced patch paths, pre-push marker race); Gemini Flash PASSED. Fix round 1 of 3 is running with a fresh Opus 5.5 high worker, because the first one passed 250K context.
-- **Next:** key check for T-003; T-024, then T-026 before the first parallel code wave.
+- **User answers before a long absence (2026-11-14):** T-024 may take up to 2 more fix rounds past the cap, limited to the remaining findings (decision 85). The PM approves the T-026 Step 0 if it touches no permission rule and no spend (decision 86). T-005 starts once T-024 is accepted (decision 87).
+- **Next:** T-024 retest (Gemini PASS, Codex running); then T-005, T-026, T-020 and T-021; the key check for T-003.
 
 ## PM proposals in force, awaiting the user's explicit confirmation
 
