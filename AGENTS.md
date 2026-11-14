@@ -69,7 +69,7 @@ Release 0.2, 2026-11-13. **The single rule source** for Claude Code (through `@A
 
 ## 11. Commit, push and CI
 
-- **The user makes every commit and every push (decisions 36, 37, 41).** No agent runs `git commit`, `push`, `merge`, `rebase`, `tag` or another history-changing command, on any branch, a worker's temporary branch included. Not history changes, and allowed to the orchestrator only: staging inside a worker's worktree to save its patch, and removing a finished worker's worktree and its never-committed branch. The orchestrator brings verified work into the main working tree uncommitted, confirms the diff holds no secrets, model files, knowledge-base images or working data, and proposes an English commit message with no agent attribution.
+- **The orchestrator commits and pushes; workers never do (decision 77).** A worker never runs `git commit`, `push`, `merge`, `rebase`, `tag` or another history-changing command, on any branch, because the orchestrator alone integrates and answers for what lands. The orchestrator also stages in a worker's worktree to save its patch and removes a finished worker's worktree and never-committed branch. It brings verified work into the main tree, confirms the diff holds no secrets, model files, knowledge-base images or working data, runs the pre-push checks, then commits (English message, no agent attribution) and pushes without asking. No force push and no rewrite of pushed history, so the user's clones never diverge.
 - Agents never choose a remote, create a repository or bypass protection (decision 35). **Repository visibility changes only inside the CI window** of [docs/ci.md](docs/ci.md): public for the run, private again when it ends, green or red (R-025).
 
 ## 12. Start and finish

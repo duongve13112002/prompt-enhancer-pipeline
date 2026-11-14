@@ -16,7 +16,7 @@ Continuous integration runs on GitHub Actions with the latest Ubuntu and Windows
 
 ## Visibility window procedure
 
-The user makes every commit and push (decision 37). The orchestrator is the only agent that changes visibility, and it opens the window only when the user asks for a run on a commit they have pushed. Steps:
+The orchestrator makes the commits and pushes (decision 77). It is also the only agent that changes visibility, and it opens the window only when the user asks for a run on a pushed commit. Steps:
 
 1. Refuse to start unless the working tree is clean, the local head equals the remote head of the branch (the user has pushed) and a pre-publication check passes: no file under `.secrets/`, `models/`, `data/`, `runs/` or the user's knowledge base is tracked, and a secret scan over the commits to be exposed finds nothing.
 2. Record the current visibility.
@@ -25,7 +25,7 @@ The user makes every commit and push (decision 37). The orchestrator is the only
 5. Switch the repository back to private in a step that always runs, whether the run is green, red, cancelled or timed out; then verify the visibility.
 6. Report the run result.
 
-A red run is fixed while the repository is private; the user commits and pushes the fix, and the window is then repeated.
+A red run is fixed while the repository is private; the orchestrator commits and pushes the fix, and the window is then repeated.
 
 ## Risks the user accepted and how the procedure limits them
 

@@ -134,7 +134,7 @@ After each round, 1-3 lines: which task went to which worker; new or continuing,
 
 - This file is the single source; it carries its update date on the first line and is never copied into AGENTS.md, CLAUDE.md or memory, and never imported (that would load it into every agent).
 - AGENTS.md holds only the two marker blocks `ORCHESTRATION` (with the `CURRENT MODE` line) and `AGENT-WORKER`; replace only the text between their markers.
-- After a rule change, report the files changed and the current mode; a change takes effect after `/clear`, `/compact` or a restart. The user commits rule files like any other change.
+- After a rule change, report the files changed and the current mode; a change takes effect after `/clear`, `/compact` or a restart. The orchestrator commits rule files like any other change (decision 77).
 
 ## 13. Project bindings
 
@@ -144,6 +144,6 @@ After each round, 1-3 lines: which task went to which worker; new or continuing,
 - **Antigravity:** read-only jobs run in parallel through `gemini-review.ps1`; jobs that write files run one at a time through `gemini-launch.ps1` and the `AgyRunner` (`scripts/agy-runner/`, Windows only); workspaces come from `gemini-ws.ps1 -Sanitize`, which today needs a committed head (task T-024). The orchestrator never reads the runner account's home. Every rule for a Claude worker binds an agy job too.
 - **Approach scout:** before a non-trivial, non-small implementation a read-only scout writes a short approach note; it is advice, never a decision; `brief_lint` refuses a feature brief without an `Approach note:` path ([PM_POLICY](policy/PM_POLICY.md) section 4).
 - **Tests** run through `tools/agent-workflow/test_slot.py`.
-- **No agent commits, pushes or merges** (AGENTS.md section 11). Files outside `.tmp` are deleted only after asking the user or a written analysis that they are garbage.
+- **Workers never commit, push or merge; the orchestrator commits and pushes integrated work** (AGENTS.md section 11, decision 77). Files outside `.tmp` are deleted only after asking the user or a written analysis that they are garbage.
 - **PID identity:** a recorded worker PID counts as alive only with the same process creation time (`cli_worker.py status`).
 - **GPU peers:** [policy/AGENT_PEER_RULES.md](policy/AGENT_PEER_RULES.md).

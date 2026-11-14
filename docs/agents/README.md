@@ -23,7 +23,7 @@ Overview for people and agents. Rules: [AGENTS.md](../../AGENTS.md). Dispatch: [
 
 ## Roles
 
-- **PM / orchestrator:** the agent you chat with (mode DELEGATE by default). Plans, writes briefs, delegates, reads every report, updates `tasks/STATUS.md`, proposes commit messages (the user commits and pushes).
+- **PM / orchestrator:** the agent you chat with (mode DELEGATE by default). Plans, writes briefs, delegates, reads every report, updates `tasks/STATUS.md`, commits and pushes integrated work (decision 77; workers never do).
 - **Workers** (implementer, reviewer, scout, researcher, runner): Claude `claude -p`, Codex or agy sessions; one fresh worker per task, kept only for that task's fix rounds and phases; inside its scope; never commit; Step 0 first.
 - **Cheap readers** (Haiku 5.5, `gpt-6-luna`, Gemini 3.8 Flash at `low`): search, digest logs and diffs, read web pages; their numbers are leads until a primary source is re-read.
 
@@ -37,7 +37,7 @@ All three CLIs run on subscriptions with a 5-hour window and a weekly limit. Bef
 2. The worker writes Step 0 (unknowns, at most 5 questions, plan with a checkable finish) and stops; the PM answers.
 3. The worker builds, writes a progress line about every 8 tool calls, stops when the done check passes, and reports with the [handoff format](../../.agents/skills/handoff-report/SKILL.md).
 4. A fresh agent of another family reviews once; the worker fixes the full list in one round (at most three counted rounds, then one question to the user).
-5. The PM saves the accepted patch, applies it to the main working tree uncommitted, updates docs once, records decisions and proposes a commit message; the user commits.
+5. The PM saves the accepted patch, applies it to the main working tree, updates docs once, records decisions, then commits and pushes (decision 77).
 6. The PM cleans up the worker, its worktree, its scratch and its chat history, and sweeps orphan `.tmp` trees (ORCHESTRATION section 4).
 
 ## Staying on target
