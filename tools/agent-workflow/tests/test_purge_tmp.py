@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -161,6 +162,75 @@ def junction(link: Path, target: Path) -> None:
     subprocess.run(
         ["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True
     )
+
+
+def worker_worktree(project: Path, name: str = "wt1") -> Path:
+    """A worker worktree as tools leave it: a `.git` file and its own `.tmp/pm-state` (test slots, guard log)."""
+    wt = make_worktree(project, name)
+    (wt / ".git").write_text("gitdir: elsewhere", encoding="utf-8")
+    state = wt / ".tmp" / "pm-state"
+    (state / "test-slots").mkdir(parents=True)
+    (state / "tool-guard.log").write_text("guard log", encoding="utf-8")
+    return wt
+
+
+def test_archive_remove_takes_a_worker_worktree_with_its_own_state_and_archives_its_reports(
+    pt: ModuleType,
+) -> None:
+    wt = worker_worktree(pt.PROJECT)
+    assert pt.archive_remove([str(wt)]) == 0
+    assert not wt.exists()
+    assert (pt.ARCHIVE / "wt1" / "pm-state" / "tool-guard.log").read_text(encoding="utf-8") == "guard log"
+
+
+def test_only_archive_remove_waives_a_worker_worktrees_own_state(pt: ModuleType) -> None:
+    wt = worker_worktree(pt.PROJECT)
+    assert pt.Gate(check_inflight=False, worker_state=True).check(wt) is None
+    verdict = pt.Gate(check_inflight=False).check(wt)  # sweep, purge-children, purge-older: no archive first
+    assert verdict is not None and "pm-state" in verdict[1]
+    assert pt.purge_children(str(wt.parent), [wt.name]) == 1 and wt.exists()
+
+
+@pytest.mark.parametrize(
+    "shape",
+    ["no .git file", ".git directory", "outside worktrees", "other protected name", "state nested deeper"],
+)
+def test_the_waiver_covers_only_the_worker_worktrees_own_state(pt: ModuleType, shape: str) -> None:
+    wt = worker_worktree(pt.PROJECT, "wt-" + shape.replace(" ", "-").replace(".", ""))
+    if shape == "no .git file":
+        (wt / ".git").unlink()
+    elif shape == ".git directory":
+        (wt / ".git").unlink()
+        (wt / ".git").mkdir()
+    elif shape == "outside worktrees":
+        moved = pt.PROJECT / ".tmp" / "elsewhere" / wt.name
+        moved.parent.mkdir(parents=True)
+        wt.rename(moved)
+        wt = moved
+    elif shape == "other protected name":
+        (wt / "runs").mkdir()
+    elif shape == "state nested deeper":
+        (wt / ".tmp" / "pm-state").rename(wt / ".tmp" / "keep")
+        (wt / ".tmp" / "keep" / "pm-state").mkdir()
+    assert pt.archive_remove([str(wt)]) == 1
+    assert wt.exists()
+
+
+def test_a_linked_state_dir_is_removed_as_a_link_and_its_target_stays(pt: ModuleType) -> None:
+    """A junction is never followed (T-025 design): the worktree goes, the link goes as a link, what it points to stays."""
+    if os.name != "nt":
+        pytest.skip("directory junctions need NTFS")
+    wt = worker_worktree(pt.PROJECT)
+    real = pt.PROJECT / ".tmp" / "pm-state" / "ledger"
+    real.mkdir(parents=True)
+    (real / "kept.json").write_text("{}", encoding="utf-8")
+    state = wt / ".tmp" / "pm-state"
+    shutil.rmtree(state)
+    junction(state, real)
+    assert pt.archive_remove([str(wt)]) == 0
+    assert not os.path.lexists(wt)
+    assert (real / "kept.json").read_text(encoding="utf-8") == "{}"
+    assert not (pt.ARCHIVE / "wt1" / "pm-state").exists()  # nothing is archived through a link
 
 
 def test_archive_remove_refuses_a_tree_holding_real_credentials(pt: ModuleType) -> None:

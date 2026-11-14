@@ -15,7 +15,9 @@ an unreadable ownership source refuses every deletion (fail closed). `sweep` nev
 
 Never deletes a protected tree: ledgers, evidence, credentials, models and environments (PROTECTED_NAMES at any depth
 below a target, links excluded) and any path that is, contains or lies inside the `cwd` of a busy CLI worker; each
-refusal is reported. An unreadable worker registry refuses every deletion. Never reads file contents of any path under
+refusal is reported. One waiver: `archive-remove` of a worker worktree (a direct child of `.tmp/worktrees` whose `.git`
+is a file) may delete that worktree's own `.tmp/pm-state` (test-slot counters, guard log and caches written by tools run
+inside it), after archiving its reports; every other protected name inside it still refuses. An unreadable worker registry refuses every deletion. Never reads file contents of any path under
 a `.secrets` directory: only the entry names of a nested `.secrets` are counted (never printed) to tell the checked-out
 placeholder `README.md` from real credentials. Links (symlinks, junctions) are never followed; deleting one removes
 only the link.
@@ -281,12 +283,25 @@ def _protected_ancestor(target: Path, exempt: Path | None = None) -> Path | None
     return None
 
 
-def _find_protected(target: Path, exempt: Path | None = None) -> Path | None:
+def _worker_state_dir(target: Path) -> Path | None:
+    """`<target>/.tmp/pm-state` when `target` is a worker worktree (a direct child of `.tmp/worktrees` whose `.git` is a
+    file): the worktree's own test-slot counters, guard log and caches, written by tools run inside it, not the
+    project's ledgers (those live in `<project>/.tmp/pm-state`). None for any other target."""
+    if target.parent != PROJECT / ".tmp" / "worktrees" or not (target / ".git").is_file():
+        return None
+    return target / ".tmp" / "pm-state"
+
+
+def _find_protected(
+    target: Path, exempt: Path | None = None, worker_state: bool = False
+) -> Path | None:
     """The first protected directory that deleting `target` would remove or touch: the target, an ancestor or a
-    nested one."""
+    nested one. `worker_state` (only `archive-remove`, which archives the reports first) waives the protected name
+    of a worker worktree's own `.tmp/pm-state`; every other protected name inside it still refuses."""
     ancestor = _protected_ancestor(target, exempt)
     if ancestor is not None:
         return ancestor
+    waived = _worker_state_dir(target) if worker_state else None
     for root, dirs, _files in _walk(target):
         for name in dirs:
             if not _protected_name(root, name):
@@ -294,6 +309,9 @@ def _find_protected(target: Path, exempt: Path | None = None) -> Path | None:
             nested = os.path.join(root, name)
             if name.casefold() in PLACEHOLDER_DIRS and _is_placeholder(nested):
                 continue
+            if waived is not None and os.path.normcase(nested) == os.path.normcase(str(waived)):
+                if not _is_link(nested):
+                    continue
             return Path(nested)
     return None
 
@@ -326,6 +344,7 @@ def _authorize(
     exempt: Path | None,
     manifests: set[Path],
     deep: bool,
+    worker_state: bool = False,
 ) -> tuple[str, str] | None:
     """(status, reason) when `target` must not be deleted, else None. Private: `Gate` supplies every input.
 
@@ -345,7 +364,7 @@ def _authorize(
         return "unknown", own.problem
     is_link = _is_link(target)
     if not is_link and deep:
-        nested = _find_protected(target, exempt)
+        nested = _find_protected(target, exempt, worker_state)
         if nested is not None:
             return "refused", f"protected tree {nested}"
     owner = _owner(target, own, check_inflight, is_link)
@@ -373,10 +392,12 @@ class Gate:
         deep: bool = True,
         strict: bool = False,
         deadline: float | None = None,
+        worker_state: bool = False,
     ) -> None:
         self.check_inflight = check_inflight
         self.exempt = exempt
         self.deep = deep
+        self.worker_state = worker_state
         self.own = load_ownership(deadline)
         if strict and self.own.problem:
             problem = self.own.problem
@@ -406,6 +427,7 @@ class Gate:
             exempt=self.exempt,
             manifests=self._manifests_for(absolute),
             deep=self.deep,
+            worker_state=self.worker_state,
         )
 
     def remove(self, target: Path) -> bool:
@@ -483,7 +505,8 @@ def _refuse_linked_directory(parent: Path) -> None:
 
 def archive_remove(paths: list[str], dry_run: bool = False) -> int:
     """Archive reports, then delete each worktree; returns how many targets were refused. A dry run changes nothing."""
-    gate = Gate(check_inflight=False, strict=True)
+    # A worker worktree's own `.tmp/pm-state` may go: `_archive_reports` copies its reports before the delete.
+    gate = Gate(check_inflight=False, strict=True, worker_state=True)
     refused = 0
     for raw in paths:
         worktree = _inside_project(Path(raw))
