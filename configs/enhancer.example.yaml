@@ -93,7 +93,7 @@ planner:                                 # S2
   catalogue_in_context: false            # the planner sees the shortlist only (N120)
 
 resolution:
-  on_family_match: context_then_random   # decision 15
+  on_family_match: context_then_random   # decisions 15, 69: context orders the candidates, never empties the set
   random_seed: per_request               # a new choice for every request
   trace_choice: true
   on_variant_unspecified: context_then_random   # decision 16

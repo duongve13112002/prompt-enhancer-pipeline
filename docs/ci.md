@@ -12,13 +12,13 @@ Continuous integration runs on GitHub Actions with the latest Ubuntu and Windows
 
 - GitHub Actions, a matrix of `ubuntu-latest` and `windows-latest`.
 - It runs the bounded CPU test suite and the tooling checks ([test-plan](test-plan.md)); no GPU, no model downloads, no secrets needed by the tests.
-- Triggered by manual dispatch only **[P]**: the user pushes (decision 37), and a push must not start a run while the repository is still private.
+- Triggered by manual dispatch only **[P]**: the orchestrator pushes (decision 77), and a push must not start a run while the repository is still private.
 
 ## Visibility window procedure
 
 The orchestrator makes the commits and pushes (decision 77). It is also the only agent that changes visibility, and it opens the window only when the user asks for a run on a pushed commit. Steps:
 
-1. Refuse to start unless the working tree is clean, the local head equals the remote head of the branch (the user has pushed) and a pre-publication check passes: no file under `.secrets/`, `models/`, `data/`, `runs/` or the user's knowledge base is tracked, and a secret scan over the commits to be exposed finds nothing.
+1. Refuse to start unless the working tree is clean, the local head equals the remote head of the branch (the commit is pushed) and a pre-publication check passes: no file under `.secrets/`, `models/`, `data/`, `runs/` or the user's knowledge base is tracked, and a secret scan over the commits to be exposed finds nothing.
 2. Record the current visibility.
 3. Switch the repository to public.
 4. Dispatch the workflow on that commit and wait for the run to finish, with a time limit.

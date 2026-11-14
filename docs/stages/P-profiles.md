@@ -22,6 +22,8 @@
 - "Populate underspecified scenes" and "Built environments need text everywhere" against creativity settings that allow no new entities or text blocks, and against a user's "no text".
 - "Quoted strings: each is its own text element": the manifest records quote semantics as literal text, so the brief renders concept names without quotation marks.
 - "Banned hedge phrasings" and "Pick ONE and commit" against omitting what lacks evidence: missing identity evidence drops the attribute instead of picking a value.
+
+**Settled readings of the example profile (not conflicts).**
 - The user uses this one prompt for both generate and edit (decision 70). The prompt states no edit semantics, so the manifest records the user's: for an edit, the JSON describes the whole edited image, with unchanged parts as in the source image (`edit_output_semantics: whole_edited_image`, decision 73).
 - The prompt's aspect-ratio and bounding-box parts (`{{aspect_ratio}}` in the `[USER]` template) are a temporary example and are ignored (decision 70); R-005 stands.
 

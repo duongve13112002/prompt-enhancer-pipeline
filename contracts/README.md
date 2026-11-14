@@ -68,7 +68,7 @@ Values are exact strings; the schema files use the same spelling.
 | fact origin | `info_file`, `override`, `generated` (a model wrote it, with its revision; this includes a concept name and description the `folder_namer` role produced for a folder without a usable info file); a name or description you wrote is never overwritten, with one exception: when a model judges an info file unclear (decision 40) and its names do not fit the images, the model's names are used, your text stays in the record, the sync report lists the folder, and `kb_overrides.yaml` still wins |
 | constraint types | see the table below |
 | left-out reasons | `OUT_OF_SCOPE` (role-by-facet matrix), `USER_LOCKED` (the user fixed it), `NEGATED_BY_USER`, `UNSTABLE` (label does not allow use), `VARIANT_NOT_CHOSEN`, `BUDGET` |
-| warnings | `PARAM_UNSUPPORTED` (field dropped for an engine), `SCHEMA_INVALID` (a response failed its schema), `TRUNCATED`, `SNAPSHOT_MISSING`, `PROFILE_CONFLICT`, `BUDGET_EXHAUSTED` (a cloud backend's request budget is spent and the role continued on the default backend) |
+| warnings | `PARAM_UNSUPPORTED` (field dropped for an engine), `SCHEMA_INVALID` (a response failed its schema), `TRUNCATED`, `SNAPSHOT_MISSING`, `PROFILE_CONFLICT`, `BUDGET_EXHAUSTED` (a cloud backend's request budget is spent and the role continued on the default backend), `CLARIFICATION_ASSUMED` **[P]** (an ambiguous request was answered with its most plausible reading under `clarification.mode: best_effort`; the trace names the reading, decision 68; enters the envelope schema's enum once accepted) |
 
 **Response status** (R-024): one per response; a truncated or failed output is never `success`.
 
@@ -76,7 +76,7 @@ Values are exact strings; the schema files use the same spelling.
 | --- | --- |
 | `success` | the output passed the structural checks and, where the risk rules ran it, the verifier, on the first draft |
 | `repaired` | a check failed, a bounded repair ran (`validation.max_repairs`), and every check then passed |
-| `degraded` | an output is returned but part of the pipeline was skipped or failed: planner schema failure falling back to the path without knowledge, retrieval failed, or repair exhausted and a fallback output returned |
+| `degraded` | an output is returned but part of the pipeline was skipped or failed: planner schema failure falling back to the path without knowledge, retrieval failed, or repair exhausted and a fallback output returned; also an ambiguous request answered with its most plausible reading under `clarification.mode: best_effort` (decision 68) |
 | `needs_clarification` | only with `clarification.mode: ask` (decision 68): the planner found an ambiguous edit target, or a mention is a family match and `resolution.on_family_match` is `ask` (candidate concepts listed); no prompt is written. Where the candidate targets travel is `design_required` (they are in the trace) |
 | `failed` | no usable output: profile does not support the task (decision 5), source image cannot be decoded, backend error, deadline, truncation without a fallback |
 

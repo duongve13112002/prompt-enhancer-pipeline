@@ -20,4 +20,6 @@ Read the Rules digest before every task (AGENTS.md section 9). Each line is a pr
 
 ## Recent entries
 
-None yet in this repository.
+- 2026-11-14, Antigravity scout returned an empty reply (approach-t025). Root cause: the PM's prompt named `.agents/ORCHESTRATION.md`, which was not inside the job's workspace, so the session rule `read_file(<workspace>)` denied the read. Prevention: an agy prompt names only paths inside its workspace; other files go in with `-ExtraNotes` and are named by their `notes/` path. Evidence: `.tmp/agy-work/_results/approach-t025.json` (empty response), rerun approach-t025b with `-ExtraNotes`.
+- 2026-11-14, a follow-up message to a running worker was refused by brief lint (missing footer and `Kind:`). Root cause: the message began with `[NEW TASK: ...]`, which the lint treats as a new brief. Prevention: a Step 0 approval or fix round starts with the task name or `[QA FEEDBACK: ...]`; `[NEW TASK]` only with a full brief. Evidence: `cli_worker.py send --name t025-codex-dev` output "brief lint refused send".
+- 2026-11-14, the T-002 worker spent its single authorized `nvidia-smi` call on `--help`, leaving the GPU facts unknown. Root cause: the brief authorized "one call" without naming it. Prevention: a brief that grants a limited command names the exact command line. Evidence: `.tmp/T-002/fix-01.md`.

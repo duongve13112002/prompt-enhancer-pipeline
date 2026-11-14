@@ -1,6 +1,6 @@
 # Agent Working Rules and Project Mission
 
-Release 0.2, 2026-11-13. **The single rule source** for Claude Code (through `@AGENTS.md` in [CLAUDE.md](CLAUDE.md)), Codex and Antigravity (`agy`). Edit only this file and keep sections 1-13 numbered: skills and tools cite them. It holds what every agent needs; role rules reach a worker through its brief ([.agents/policy/roles/](.agents/policy/roles/)); orchestrator rules live in [PM_POLICY](.agents/policy/PM_POLICY.md) and [ORCHESTRATION](.agents/ORCHESTRATION.md). Each rule gives its reason. Provenance: [DECISIONS_INDEX](tasks/DECISIONS_INDEX.md); where older rules went: [rule-map](docs/agents/rule-map.md).
+Release 0.2, 2026-11-14. **The single rule source** for Claude Code (through `@AGENTS.md` in [CLAUDE.md](CLAUDE.md)), Codex and Antigravity (`agy`). Edit only this file and keep sections 1-13 numbered: skills and tools cite them. It holds what every agent needs; role rules reach a worker through its brief ([.agents/policy/roles/](.agents/policy/roles/)); orchestrator rules live in [PM_POLICY](.agents/policy/PM_POLICY.md) and [ORCHESTRATION](.agents/ORCHESTRATION.md). Each rule gives its reason. Provenance: [DECISIONS_INDEX](tasks/DECISIONS_INDEX.md); where older rules went: [rule-map](docs/agents/rule-map.md).
 
 ## Gates
 
