@@ -92,6 +92,9 @@ def git_status() -> list[str]:
 
 
 def gemini_open_jobs() -> list[str]:
+    """Antigravity jobs without their exact finished marker `_results/<id>.done` (written last by gemini-review.ps1
+    and agy-job.ps1). A prefix match would count job `a` as finished when only `a-2.done` exists, and `<id>.json`
+    alone is written before the marker, so neither counts (same rule as purge_tmp.py)."""
     jobs = load_json(STATE / "agents.json")
     if not isinstance(jobs, list):
         return []
@@ -101,8 +104,9 @@ def gemini_open_jobs() -> list[str]:
         for j in jobs
         if isinstance(j, dict)
         and j.get("kind") == "gemini"
-        and j.get("id")
-        and not any(results.glob(f"{j['id']}*"))
+        and isinstance(j.get("id"), str)
+        and j["id"]
+        and not (results / f"{j['id']}.done").is_file()
     ]
 
 

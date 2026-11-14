@@ -92,18 +92,23 @@ def busy_worker(root: Path, pid: int | None = os.getpid()) -> None:
     )
 
 
-def note(root: Path, age_minutes: float) -> None:
+def note(root: Path, age_minutes: float, base: float = NOW) -> None:
+    """`base` is the clock the ages count from: the import-time NOW for in-process checks given `now=NOW`, the wall
+    clock (`time.time()`) for the hook run as a subprocess, which reads the real clock."""
     path = state(root) / "pm-continuation.md"
     path.write_text("note", encoding="utf-8")
-    stamp = NOW - age_minutes * 60
+    stamp = base - age_minutes * 60
     os.utime(path, (stamp, stamp))
 
 
-def result(root: Path, name: str, age_minutes: float = 1, job: str = "dev-1") -> Path:
+def result(
+    root: Path, name: str, age_minutes: float = 1, job: str = "dev-1", base: float = NOW
+) -> Path:
+    """`base` as in `note`."""
     path = root / ".tmp" / "cli-jobs" / job / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("done", encoding="utf-8")
-    stamp = NOW - age_minutes * 60
+    stamp = base - age_minutes * 60
     os.utime(path, (stamp, stamp))
     return path
 
@@ -684,11 +689,13 @@ def test_unread_result_is_named(world: Path) -> None:
 def test_read_of_the_result_silences_it_until_it_changes(world: Path) -> None:
     path = result(world, "001.result.md")
     quiet(world, event=read_event(path))
-    # A later rewrite by the worker is unread again.
-    stamp = NOW + 30
+    # A later rewrite by the worker is unread again. The read marker carries the real wall clock, so the rewrite
+    # is stamped from the clock now, not from the import-time NOW (a long suite run reaches this test after more
+    # than 30 s, which put NOW + 30 before the marker; T-002 phase 2).
+    stamp = time.time() + 30
     os.utime(path, (stamp, stamp))
     forget_check(world)
-    assert "001.result.md" in go(world, now=NOW + 40)
+    assert "001.result.md" in go(world, now=stamp + 10)
 
 
 def test_read_is_recorded_even_when_the_check_is_rate_limited(world: Path) -> None:
@@ -921,7 +928,7 @@ def hook(
 
 
 def test_process_prints_posttooluse_context_for_a_violation(world: Path, tmp_path: Path) -> None:
-    result(world, "001.result.md")
+    result(world, "001.result.md", base=time.time())
     proc = hook(world, json.dumps({"tool_name": "Bash"}), "--config", str(config(tmp_path)))
     assert proc.returncode == 0, proc.stderr
     body = json.loads(proc.stdout)["hookSpecificOutput"]
@@ -955,7 +962,7 @@ def test_process_state_dir_comes_from_the_environment_or_flag(world: Path, tmp_p
 
 
 def test_process_ignores_worker_sessions(world: Path, tmp_path: Path) -> None:
-    result(world, "001.result.md")
+    result(world, "001.result.md", base=time.time())
     proc = hook(
         world, json.dumps({"tool_name": "Bash"}), "--config", str(config(tmp_path)),
         env_extra={"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"},
@@ -1001,7 +1008,7 @@ def test_main_swallows_any_crash(
 def test_real_busy_worker_without_supervisor_end_to_end(world: Path, tmp_path: Path) -> None:
     """Uses the real process listing; the supervisor marker is one that no process on this machine carries."""
     busy_worker(world)
-    note(world, 1)
+    note(world, 1, base=time.time())
     cfg = config(tmp_path, supervisor_markers=["no-such-supervisor-7c1f.ps1"])
     proc = hook(world, json.dumps({"tool_name": "Bash"}), "--config", str(cfg))
     assert proc.returncode == 0, proc.stderr

@@ -48,7 +48,9 @@ def hook(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         ),
         encoding="utf-8",
     )
-    (tmp_path / ".tmp" / "agy-work" / "_results" / "job-done").mkdir(parents=True)
+    results = tmp_path / ".tmp" / "agy-work" / "_results"
+    results.mkdir(parents=True)
+    (results / "job-done.done").write_text("exit 0\n", encoding="utf-8")
     return module
 
 
@@ -65,6 +67,21 @@ def test_pm_session_appends_snapshot(hook, monkeypatch: pytest.MonkeyPatch) -> N
     assert "trigger=auto" in text
     assert "w-busy (sonnet, T1" in text and "w-idle" not in text
     assert "job-open (review" in text and "job-done" not in text
+
+
+def test_only_the_exact_done_marker_finishes_a_job(hook) -> None:
+    """A later job's marker (`job-open-2.done`), the reply file written before the marker (`job-open.json`) and a
+    directory named like the marker do not finish `job-open`."""
+    results = hook.ROOT / ".tmp" / "agy-work" / "_results"
+    (results / "job-open-2.done").write_text("exit 0\n", encoding="utf-8")
+    (results / "job-open.json").write_text("{}", encoding="utf-8")
+    (results / "job-open.done.tmp").write_text("", encoding="utf-8")
+    assert any(line.startswith("job-open (") for line in hook.gemini_open_jobs())
+    (results / "job-open.done").mkdir()
+    assert any(line.startswith("job-open (") for line in hook.gemini_open_jobs())
+    (results / "job-open.done").rmdir()
+    (results / "job-open.done").write_text("exit 0\n", encoding="utf-8")
+    assert not any(line.startswith("job-open (") for line in hook.gemini_open_jobs())
 
 
 def test_worker_session_is_skipped(hook, monkeypatch: pytest.MonkeyPatch) -> None:
