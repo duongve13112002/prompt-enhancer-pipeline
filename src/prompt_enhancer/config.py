@@ -88,6 +88,30 @@ def _validate_segments(value, path, key, *, allow_navigation=True):
             raise ConfigurationError(f'{path}: {key}: invalid path segment {part!r}')
 
 
+def _strip_extended_prefix(value):
+    """Drop a Windows extended-length prefix (`\\\\?\\` or `\\\\?\\UNC\\`) from a path string.
+
+    `ntpath.realpath` and `os.readlink` return it when a file vanishes between the two probes of realpath or
+    for a link target; without stripping, the containment check reads that spelling as outside the root."""
+    value = os.fspath(value)
+    if os.name != 'nt':
+        return value
+    if value.startswith('\\\\?\\UNC\\'):
+        return '\\\\' + value[8:]
+    if value.startswith('\\\\?\\'):
+        return value[4:]
+    return value
+
+
+def _is_deleted_name(resolved):
+    """True for NTFS's name of a delete-pending file (`<drive>\\$Extend\\$Deleted\\...`), which `realpath`
+    returns for a file that is unlinked while it is being resolved (T-006 race fix round 1, native probe)."""
+    if os.name != 'nt':
+        return False
+    parts = [part.lower() for part in Path(resolved).parts]
+    return parts[1:3] == ['$extend', '$deleted']
+
+
 def _resolve_within(candidate, root, forbidden, path, key):
     """Resolve links component by component without touching protected targets."""
     pending = list(candidate.relative_to(root).parts)
@@ -102,7 +126,15 @@ def _resolve_within(candidate, root, forbidden, path, key):
             link = os.readlink(target)
         except OSError as error:
             if error.errno in (errno.EINVAL, errno.ENOENT, errno.ENOTDIR):
-                current = Path(os.path.realpath(target))
+                # The readlink error says nothing about the object now in place: the realpath result is what
+                # is compared, so a link swapped in since resolves to another spelling and is refused. A file
+                # gone at realpath's second probe keeps the first probe's result with its `\\?\` prefix.
+                current = Path(_strip_extended_prefix(os.path.realpath(target)))
+                if _is_deleted_name(current):
+                    # NTFS's name for a delete-pending file; a junction to that spelling gives it too. A name
+                    # cannot prove which, so it is a plain refusal; store files that callers delete are removed
+                    # under the store lock, where this race cannot happen (T-006 race fix round 2).
+                    raise ConfigurationError(f'{path}: {key}: changed while it was resolved')
                 if not current.is_relative_to(root):
                     raise ConfigurationError(f'{path}: {key}: resolved outside project root')
                 parts = current.relative_to(root).parts
@@ -113,10 +145,7 @@ def _resolve_within(candidate, root, forbidden, path, key):
         if target in visited:
             raise ConfigurationError(f'{path}: {key}: link cycle')
         visited.add(target)
-        if os.name == 'nt' and link.startswith('\\\\?\\UNC\\'):
-            link = '\\\\' + link[8:]
-        elif os.name == 'nt' and link.startswith('\\\\?\\'):
-            link = link[4:]
+        link = _strip_extended_prefix(link)
         resolved = Path(os.path.abspath(target.parent / link))
         if not resolved.is_relative_to(root):
             raise ConfigurationError(f'{path}: {key}: resolved outside project root')

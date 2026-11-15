@@ -59,7 +59,7 @@ def test_interrupt_after_manifest_is_never_read(store, monkeypatch):
     old = publish(store, 'a')
     with pytest.raises(OSError, match='crash'):
         with store.writer() as writer:
-            monkeypatch.setattr(store_module.os, 'rename', lambda *a: (_ for _ in ()).throw(OSError('crash')))
+            monkeypatch.setattr(store_module, 'rename_entry', lambda *a, **k: (_ for _ in ()).throw(OSError('crash')))
             build_snapshot(writer, 'b')
     monkeypatch.undo()
     building = [p for p in (store.root / 'snapshots').iterdir() if p.name.startswith('.building-')]

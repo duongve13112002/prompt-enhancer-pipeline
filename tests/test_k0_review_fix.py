@@ -7,7 +7,7 @@ from prompt_enhancer.k0 import parse_info
 from prompt_enhancer import k0_scan
 from prompt_enhancer import __main__ as cli
 from prompt_enhancer.storage.store import PinnedSnapshot, Writer
-from prompt_enhancer.storage import _fs
+from prompt_enhancer.storage import _anchored, _fs
 from prompt_enhancer.storage._fs import FileLock
 from test_k0_config import config, load
 from test_k0_sync import fixture, run, tree
@@ -89,7 +89,7 @@ def test_checkpoint_reused_for_linked_root_spelling(fixture):
 
 def test_lock_acquisition_interrupt_closes_handle(tmp_path, monkeypatch):
     import os
-    lock = FileLock(tmp_path / 'interrupt.lock', 1, 0.01)
+    lock = _anchored.lock_file(tmp_path.resolve(), 'interrupt.lock', 1, 0.01)
     opened = []
     real_open = open
     def observe(*args, **kwargs):  # labelled handle-observation double
@@ -98,7 +98,7 @@ def test_lock_acquisition_interrupt_closes_handle(tmp_path, monkeypatch):
         return handle
     def interrupt(*args):  # labelled OS-lock interrupt double
         raise KeyboardInterrupt
-    monkeypatch.setattr(_fs, 'open', observe, raising=False)
+    monkeypatch.setattr(_anchored, 'open', observe, raising=False)  # the lock file's one open (round 3)
     monkeypatch.setattr(_fs.msvcrt if os.name == 'nt' else _fs.fcntl,
                         'locking' if os.name == 'nt' else 'flock', interrupt)
     with pytest.raises(KeyboardInterrupt):

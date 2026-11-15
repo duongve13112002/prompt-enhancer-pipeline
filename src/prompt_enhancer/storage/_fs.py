@@ -1,4 +1,4 @@
-"""Durable file writes, checksums, containment and OS file locks for the storage layer."""
+"""Checksums, table reads, containment and OS file locks for the storage layer (writes: `_anchored.py`)."""
 
 import hashlib
 import os
@@ -6,7 +6,6 @@ from pathlib import Path
 import re
 import time
 import unicodedata
-import uuid
 
 import pyarrow as pa
 import pyarrow.ipc as ipc
@@ -46,80 +45,8 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-def fsync_dir(path):
-    """Persist a rename on POSIX.
-
-    Windows cannot open a directory with os.open (measured: PermissionError, T-006 probe 10), so there the
-    durability of a completed os.replace/os.rename relies on NTFS journaling its metadata. This is an
-    assumption, not a measured guarantee (T-006 Completion report).
-    """
-    if os.name == 'nt':
-        return
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
-def _temporary(path):
-    return path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')
-
-
-def _commit(tmp, path):
-    try:
-        os.replace(tmp, path)
-    except OSError:
-        tmp.unlink(missing_ok=True)
-        raise
-    fsync_dir(path.parent)
-
-
-def atomic_write_bytes(path, data, check=None):
-    """Write to a temporary sibling, fsync, then replace: a reader sees the old or the new file, never half.
-
-    `check(size, sha256)` may refuse the content before anything is written."""
-    path = Path(path)
-    size, digest = len(data), hashlib.sha256(data).hexdigest()
-    if check is not None:
-        check(size, digest)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _temporary(path)
-    with open(tmp, 'wb') as handle:
-        handle.write(data)
-        handle.flush()
-        os.fsync(handle.fileno())
-    _commit(tmp, path)
-    return size, digest
-
-
-def write_table_file(path, table, fmt, check=None):
-    """Write one table durably; return (size_bytes, sha256) of the committed file.
-
-    `check(size, sha256)` may refuse the written bytes before they replace the target."""
-    path = Path(path)
-    if fmt not in SUFFIX:
-        raise StorageError(f'{path}: unknown table format {fmt!r}')
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _temporary(path)
-    try:
-        # PyArrow leaves a Python file object open (T-006 probe 1-2), so flush and fsync here.
-        with open(tmp, 'wb') as handle:
-            if fmt == 'parquet':
-                pq.write_table(table, handle, version=PARQUET_VERSION, compression=PARQUET_COMPRESSION)
-            else:
-                with ipc.new_file(handle, table.schema) as writer:
-                    writer.write_table(table)
-            handle.flush()
-            os.fsync(handle.fileno())
-        size, digest = tmp.stat().st_size, sha256_file(tmp)
-        if check is not None:
-            check(size, digest)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-    _commit(tmp, path)
-    return size, digest
+# Every write, rename, create and delete of a store file lives in `_anchored.py` (T-006 race fix round 3): this
+# module only reads, checks names and locks handles it is given.
 
 
 def read_table_file(path):
@@ -199,18 +126,22 @@ class FileLock:
     Windows uses msvcrt.locking (two handles conflict, even in one process: T-006 probe 9). POSIX uses
     fcntl.flock, which also conflicts between two open file descriptions of one process; that path is
     exercised only by the Linux CI run.
+
+    The lock has no open of its own: `opener()` returns the binary file object of the lock file (in the stores,
+    `_anchored.open_lock_file`, so the file is created and opened relative to verified directories; round 3,
+    P3-A). `path` is the spelled path, for messages and names.
     """
 
-    def __init__(self, path, timeout_s, poll_s):
+    def __init__(self, path, timeout_s, poll_s, *, opener):
         self.path = Path(path)
         self.timeout_s = timeout_s
         self.poll_s = poll_s
+        self._opener = opener
         self._handle = None
 
     def try_acquire(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            handle = open(self.path, 'a+b')
+            handle = self._opener()
         except PermissionError:
             # A sharing violation or a delete-pending file (Windows): not acquired. GC reads that as a live
             # lease, acquire() polls until its timeout; neither crashes nor declares the holder dead (round 3).

@@ -7,6 +7,7 @@ from .k0_checkpoint import (_FileCache, _REVISION, _TABLES, _VERSION, _bytes, _k
                             _matching, _merge_previous, _scan_previous)
 from .k0_scan import scan_source, validate_scan
 from .storage import StorageError
+from .storage.store import keep_outcome
 
 
 def _previous_for_plan(store):
@@ -21,28 +22,34 @@ def _previous_for_plan(store):
     lease_root = store.path('leases')
     existed = lease_root.exists()
     old_dirs = {path for _, path in store._children('leases')} if existed else set()
-    pinned = None
-    lease_dir = None
+    pinned = store.pin()
+    if pinned is None:
+        return {name: [] for name in _TABLES}
+    new_dir = (lease_root / pinned.snapshot_id) not in old_dirs
+
+    def remove_new_directories():
+        with store.store_lock():
+            # anchored removal: a lease directory swapped for a link since any check is refused, not followed
+            if new_dir:
+                try:
+                    store._remove(f'leases/{pinned.snapshot_id}', directory=True)
+                except OSError:
+                    pass  # another reader may hold a lease
+            if not existed:
+                try:
+                    store._remove('leases', directory=True)
+                except OSError:
+                    pass
+
+    outcome = None
     try:
-        pinned = store.pin()
-        if pinned is None:
-            return {name: [] for name in _TABLES}
-        lease_dir = lease_root / pinned.snapshot_id
-        return {name: pinned.read_rows(name) for name in _TABLES}
+        with pinned:  # a failed release never replaces this result or exception (P3-B)
+            return {name: pinned.read_rows(name) for name in _TABLES}
+    except BaseException as error:
+        outcome = error
+        raise
     finally:
-        if pinned is not None:
-            pinned.release()
-            with store.store_lock():
-                if lease_dir not in old_dirs:
-                    try:
-                        store.path(f'leases/{pinned.snapshot_id}').rmdir()
-                    except OSError:
-                        pass  # another reader may hold a lease
-                if not existed:
-                    try:
-                        store.path('leases').rmdir()
-                    except OSError:
-                        pass
+        keep_outcome(remove_new_directories, outcome)
 
 
 def sync(store, root, *, info_names, encoding, extensions, separator, workers, threshold,

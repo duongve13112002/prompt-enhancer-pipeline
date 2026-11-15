@@ -12,7 +12,8 @@ from storage_fixtures import data_rows, publish
 from prompt_enhancer import ConfigurationError, load_config
 from prompt_enhancer.config import _command_reads
 from prompt_enhancer.storage import StorageError, open_data_store, open_knowledge_store
-from prompt_enhancer.storage._fs import FileLock
+from prompt_enhancer.storage import _anchored as anchored
+from prompt_enhancer.storage._anchored import lock_file
 
 EXAMPLE = Path(__file__).resolve().parents[1] / 'configs' / 'enhancer.example.yaml'
 
@@ -92,7 +93,8 @@ def test_table_format_override_and_refusal(project_root, config):
 def test_lock_timeout_override_and_refusal(project_root, config):
     config['storage']['lock'] = {'timeout_s': 0.2, 'poll_s': 0.05}
     store = kb(project_root, config, 'kb status')
-    holder = FileLock(store.root / 'LOCK', 1, 0.01)
+    anchored.make_root(store.catalog.root, store.root)  # the anchored layer creates no root (T-006-int)
+    holder = lock_file(store.root, 'LOCK', 1, 0.01)
     holder.acquire()
     try:
         started = time.monotonic()
@@ -117,7 +119,8 @@ def test_lock_poll_override_and_refusal(project_root, config):
     config['storage']['lock'] = {'timeout_s': 3, 'poll_s': 0.5}
     store = kb(project_root, config, 'kb status')
     assert store.poll_s == 0.5
-    holder = FileLock(store.root / 'LOCK', 1, 0.01)
+    anchored.make_root(store.catalog.root, store.root)  # the anchored layer creates no root (T-006-int)
+    holder = lock_file(store.root, 'LOCK', 1, 0.01)
     holder.acquire()
     release = __import__('threading').Timer(0.3, holder.release)
     release.start()

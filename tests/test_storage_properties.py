@@ -1,6 +1,7 @@
 """Property tests: identity normalisation, rename-invariant keys, invalidation, link-resolved containment."""
 
 import os
+import subprocess
 import unicodedata
 
 from hypothesis import HealthCheck, assume, given, settings, strategies as st
@@ -8,7 +9,7 @@ import pytest
 from storage_fixtures import make_store
 
 from prompt_enhancer.storage import StorageError, artifact_key, concept_id, image_id, normalise_name, parse_retention
-from prompt_enhancer.storage._fs import inside
+from prompt_enhancer.storage._fs import check_segment, inside
 from prompt_enhancer.storage.identity import check_folder_id
 
 FAST = settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
@@ -47,26 +48,50 @@ def test_any_input_or_revision_change_invalidates(first, second, revisions, fiel
     assert artifact_key('observation', image_id(first), revisions) != base
 
 
+def _outside_link(link, target):
+    """A directory link that leaves the root: a symlink, else (Windows without the symlink right) a junction."""
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        if os.name != 'nt':
+            raise
+        done = subprocess.run(['cmd', '/c', 'mklink', '/J', str(link), str(target)], capture_output=True,
+                              creationflags=subprocess.CREATE_NO_WINDOW, timeout=30)
+        assert done.returncode == 0, done.stderr.decode(errors='replace')
+
+
+def _valid(part):
+    try:
+        check_segment(part)
+    except StorageError:
+        return False
+    return True
+
+
 @FAST
 @given(st.lists(st.sampled_from(['a', 'b', '..', '.', '', 'c:', 'ü', ' ', 'x\\y', 'link']), min_size=1, max_size=5))
 def test_link_resolved_containment(tmp_path_factory, parts):
-    root = tmp_path_factory.getbasetemp() / 'containment'
-    outside = tmp_path_factory.getbasetemp() / 'outside'
-    root.mkdir(exist_ok=True)
+    """Containment: `inside` returns a path below root or refuses; a name that passes through a link leaving the
+    root (`root/link` at depth 1, `root/a/link` at depth 2) is refused; any other valid name is accepted.
+
+    A name passes through a link only when the link is one of its leading components: `..` is refused by the
+    segment rule, so `a/link` is `root/a/link`, never `root/link` (retest 3 P3-A: the old expectation refused it)."""
+    base = tmp_path_factory.getbasetemp()
+    root, outside = base / 'containment', base / 'outside'
+    (root / 'a').mkdir(parents=True, exist_ok=True)
     outside.mkdir(exist_ok=True)
-    link = root / 'link'
-    if not os.path.lexists(link):
-        try:
-            link.symlink_to(outside, target_is_directory=True)
-        except OSError:
-            pass  # without symlink rights the escape case is not exercised on this machine
+    for link in (root / 'link', root / 'a' / 'link'):
+        if not os.path.lexists(link):
+            _outside_link(link, outside)
     relative = '/'.join(parts)
+    crosses = parts[:1] == ['link'] or parts[:2] == ['a', 'link']
     try:
         resolved = inside(root.resolve(), relative)
     except StorageError:
+        assert crosses or not all(map(_valid, parts)), relative  # no false refusal of a valid name
         return
     assert resolved.is_relative_to(root.resolve())
-    assert 'link' not in parts or not os.path.islink(link)
+    assert not crosses, f'{relative} passes through a link that leaves the root and was accepted'
 
 
 @FAST

@@ -17,7 +17,7 @@ import pytest
 from storage_fixtures import DIM, dataset, make_store, publish
 from test_storage_review_r1 import REV
 
-from prompt_enhancer.storage import StorageError, _fs, artifact_key
+from prompt_enhancer.storage import StorageError, _anchored as anchored, artifact_key
 from prompt_enhancer.storage import store as store_module
 from prompt_enhancer.storage.identity import check_artifact_path
 from prompt_enhancer.storage.tables import MANIFEST_SCHEMA
@@ -141,11 +141,12 @@ def _manifest_row(path, kind='file'):
 @pytest.mark.parametrize('form', sorted(aliases('index/names.txt')))
 def test_manifest_refuses_every_alias(project_root, tmp_path, form):
     store = make_store(project_root, tmp_path / 'kb')
-    directory = store.root / 'snap'  # `_manifest` takes a store-relative directory (fix round 4)
+    # `_manifest` takes a store-relative directory (fix round 4)
+    anchored.make_root(project_root.resolve(), store.root)  # the anchored layer creates no root (T-006-int)
 
     def write(rows):
-        _fs.write_table_file(directory / 'MANIFEST.parquet', pa.Table.from_pylist(rows, schema=MANIFEST_SCHEMA),
-                             'parquet')
+        anchored.write_table_file(store.root, 'snap/MANIFEST.parquet',
+                                  pa.Table.from_pylist(rows, schema=MANIFEST_SCHEMA), 'parquet')
     write([_manifest_row('index/names.txt')])
     assert len(store._manifest('snap')) == 1  # the control: without an alias this manifest is read
     for rows in ([_manifest_row('index/names.txt'), _manifest_row(aliases('index/names.txt')[form])],
@@ -159,8 +160,9 @@ def test_manifest_refuses_a_repeated_artifact(project_root, tmp_path):
     store = make_store(project_root, tmp_path / 'kb')
     artifact = 'artifacts/blob/ab/' + 'ab' * 32 + '.bin'
     rows = [_manifest_row(artifact, 'artifact'), _manifest_row(artifact, 'artifact')]
-    _fs.write_table_file(store.root / 'snap' / 'MANIFEST.parquet', pa.Table.from_pylist(rows, schema=MANIFEST_SCHEMA),
-                         'parquet')
+    anchored.make_root(project_root.resolve(), store.root)  # the anchored layer creates no root (T-006-int)
+    anchored.write_table_file(store.root, 'snap/MANIFEST.parquet', pa.Table.from_pylist(rows, schema=MANIFEST_SCHEMA),
+                              'parquet')
     with pytest.raises(StorageError, match='listed twice'):
         store._manifest('snap')
 
@@ -254,7 +256,7 @@ class Race:
 
     def __init__(self, monkeypatch):
         self.reached, self.go = threading.Event(), threading.Event()
-        for owner, name in ((_fs, '_commit'), (store_module, 'sha256_file')):
+        for owner, name in ((anchored, '_commit'), (store_module, 'sha256_file')):
             original = getattr(owner, name)
             monkeypatch.setattr(owner, name, self._hook(original))
 
@@ -408,13 +410,13 @@ def test_lease_open_permission_error_counts_as_live(project_root, tmp_path, monk
     old = publish(store, 'old')
     publish(store, 'new')
     lease = _stale_lease(store, old)
-    real_open = open
+    real_open = anchored.open_lock_file
 
-    def refusing_open(path, *args, **kwargs):
-        if str(path).endswith('.lease'):
-            raise PermissionError(13, 'simulated sharing violation', str(path))
-        return real_open(path, *args, **kwargs)
-    monkeypatch.setattr(_fs, 'open', refusing_open, raising=False)
+    def refusing_open(root, relative, **kwargs):  # labelled double: the store's one lock-file open refuses
+        if relative.endswith('.lease'):
+            raise PermissionError(13, 'simulated sharing violation', relative)
+        return real_open(root, relative, **kwargs)
+    monkeypatch.setattr(anchored, 'open_lock_file', refusing_open)
     with store.writer() as writer:
         report = writer.gc()
     assert report.leased == [old] and old not in report.collected and lease.exists()

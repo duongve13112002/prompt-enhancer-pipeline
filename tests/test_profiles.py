@@ -1,7 +1,9 @@
 """P stage: parsing, registration, confirmation, conflict lint, golden check and the read API."""
 
 import asyncio
+import errno
 import json
+import os
 import shutil
 import time
 
@@ -13,7 +15,8 @@ from prompt_enhancer.config import COMMAND_READS, ConfigurationError, _parse_man
 from prompt_enhancer.model_client import ModelCallError
 from prompt_enhancer.profile_prompt import ProfileError, parse_meta, parse_structure, sha256_tag
 from prompt_enhancer.profiles import check_profile, confirm_profile, register_profile, resolve_profile
-from prompt_enhancer.storage._fs import FileLock
+from prompt_enhancer.storage import _anchored
+from prompt_enhancer.storage._anchored import lock_file
 
 from profile_fixtures import (EXAMPLE, ROOT, SECTIONED, DrafterDouble, RunnerDouble, bundle, config_data, draft,
                               example_draft, install_prompts, load, set_manifest, write_golden)
@@ -597,7 +600,7 @@ def test_check_lock_wait_follows_storage_lock(tmp_path, project_root):
     folder, config = _checkable(tmp_path, project_root, data=data)
     run(check_profile(config, 'p1', RunnerDouble(), project_root=project_root))
     before = (folder / 'activation.json').read_bytes()
-    holder = FileLock(folder / 'check.lock', 1, 0.1)  # another process's check, by its OS lock
+    holder = lock_file(folder.resolve(), 'check.lock', 1, 0.1)  # another process's check, by its OS lock
     assert holder.try_acquire()
     try:
         clock = time.monotonic()
@@ -627,33 +630,47 @@ def test_check_lock_refusal(tmp_path, project_root, failure):
         run(check_profile(config, 'p1', RunnerDouble(), project_root=project_root))
 
 
-@pytest.mark.parametrize('link', ['supported', 'unsupported'])
+_POSIX_LINKAT = pytest.mark.skipif(os.name == 'nt', reason='Windows publishes by a no-replace rename on the '
+                                   "temporary's handle; the hard-link fallback is POSIX only (Linux CI)")
+
+
+def _no_hard_links(calls):
+    """Test double: `linkat` fails as on a file system without hard links."""
+    def link(*args, **kwargs):
+        calls.append(args)
+        raise OSError(errno.EPERM, 'hard links unsupported (test double)')
+    return link
+
+
+@pytest.mark.parametrize('link', ['supported', pytest.param('unsupported', marks=_POSIX_LINKAT)])
 def test_register_never_replaces_an_interposed_manifest(tmp_path, project_root, monkeypatch, link):
     """F2: an admin write between the early guard and publication is kept byte for byte."""
     admin = b'# the admin wrote this meanwhile\nstatus: confirmed\n'
     folder = bundle(tmp_path, 'p1', SECTIONED)
     config = load(tmp_path, project_root, config_data(tmp_path), 'profile register')
-    real_link = profiles.os.link
+    real_publish, calls = _anchored._publish, []
 
-    def interposed(source, target):
+    def interposed(*args):  # scheduling double: the admin writes after the temporary exists, before its commit
         (folder / 'manifest.yaml').write_bytes(admin)
         if link == 'unsupported':
-            raise OSError('hard links unsupported (test double)')
-        return real_link(source, target)
-    monkeypatch.setattr(profiles.os, 'link', interposed)
+            monkeypatch.setattr(_anchored.os, 'link', _no_hard_links(calls))
+        return real_publish(*args)
+    monkeypatch.setattr(_anchored, '_publish', interposed)
     with pytest.raises(ProfileError, match='PROFILE_EXISTS.*kept as written'):
         run(register_profile(config, 'p1', DrafterDouble(draft()), project_root=project_root))
     assert (folder / 'manifest.yaml').read_bytes() == admin
+    assert len(calls) == (link == 'unsupported')  # the fallback ran, and refused the existing name too
     # No temporary file is left; `check.lock` is the bundle lock register now holds (fix round 2).
     assert sorted(path.name for path in folder.iterdir()) == ['check.lock', 'manifest.yaml', 'system_prompt.txt']
 
 
+@_POSIX_LINKAT
 def test_register_publishes_without_hard_links(tmp_path, project_root, monkeypatch):
-    """F2 fallback: exclusive creation publishes the same bytes where the file system has no hard links."""
-    def unsupported(source, target):
-        raise OSError('hard links unsupported (test double)')
-    monkeypatch.setattr(profiles.os, 'link', unsupported)
+    """F2 fallback: anchored exclusive creation publishes the same bytes where `linkat` fails (forced)."""
+    calls = []
+    monkeypatch.setattr(_anchored.os, 'link', _no_hard_links(calls))
     folder, result, _ = register(tmp_path, project_root)
+    assert calls  # the forced linkat failure was reached, so the bytes come from the fallback
     assert yaml.safe_load((folder / 'manifest.yaml').read_bytes()) == result['manifest']
     assert sorted(path.name for path in folder.iterdir()) == ['check.lock', 'manifest.yaml', 'system_prompt.txt']
 
@@ -958,7 +975,7 @@ def test_bundle_lock_serializes_writers(tmp_path, project_root, writer):
         register(tmp_path, project_root, data=data)
     before = sorted(path.name for path in folder.iterdir())
     manifest = (folder / 'manifest.yaml').read_bytes() if writer == 'confirm' else None
-    holder = FileLock(folder / 'check.lock', 1, 0.1)
+    holder = lock_file(folder.resolve(), 'check.lock', 1, 0.1)
     assert holder.try_acquire()
     try:
         clock = time.monotonic()

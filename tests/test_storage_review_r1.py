@@ -122,15 +122,15 @@ def test_f3_hold_after_gc_selection_is_refused(project_root, tmp_path, monkeypat
     store = make_store(project_root, tmp_path / 'kb', keep=0)
     old = publish(store, 'old')
     publish(store, 'new')
-    real, refused = store_module.shutil.rmtree, []
+    real, refused = store_module.remove_entry, []
 
-    def rmtree_after_hold(path, *args, **kwargs):
-        if Path(path).name == old:
+    def remove_after_hold(root, relative, **kwargs):  # scheduling hook: GC's first removal of the old snapshot
+        if relative.startswith(f'snapshots/{old}/') and not refused:
             with pytest.raises(StorageError, match='cannot be held: deleting') as error:
                 store.hold(old, 'late', LATER)
             refused.append(str(error.value))
-        return real(path, *args, **kwargs)
-    monkeypatch.setattr(store_module.shutil, 'rmtree', rmtree_after_hold)
+        return real(root, relative, **kwargs)
+    monkeypatch.setattr(store_module, 'remove_entry', remove_after_hold)
     with store.writer() as writer:
         report = writer.gc()
     assert refused and report.collected == [old]
@@ -154,7 +154,13 @@ def test_f3_failed_delete_stays_deleting_and_is_retried(project_root, tmp_path, 
     store = make_store(project_root, tmp_path / 'kb', keep=0)
     old = publish(store, 'old')
     publish(store, 'new')
-    monkeypatch.setattr(store_module.shutil, 'rmtree', lambda *a, **k: (_ for _ in ()).throw(PermissionError('busy')))
+    real_remove = store_module.remove_entry
+
+    def busy(root, relative, **kwargs):  # labelled double: a foreign handle blocks every snapshot-entry removal
+        if relative.startswith('snapshots/'):
+            raise PermissionError('busy')
+        return real_remove(root, relative, **kwargs)
+    monkeypatch.setattr(store_module, 'remove_entry', busy)
     with store.writer() as writer:
         assert writer.gc().skipped[0][0] == old
     monkeypatch.undo()
@@ -326,7 +332,8 @@ def test_f5_registry_write_recovers_from_a_crash_at_any_step(project_root, tmp_p
         for row in rows.values():
             row['source_scan_summary'] = {'marker': 'new'}
         calls = {'n': 0}
-        originals = {name: getattr(store_module, name) for name in ('write_table_file', 'atomic_write_bytes', '_unlink')}
+        originals = {name: getattr(store_module, name)
+                     for name in ('write_table_file', 'atomic_write_bytes', 'remove_entry')}
 
         def crashing(name):
             def call(*args, **kwargs):

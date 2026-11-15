@@ -19,7 +19,7 @@ from test_storage_review_r2 import build
 
 from prompt_enhancer.storage import DataStore, PinnedSnapshot, StorageError, artifact_key
 from prompt_enhancer.storage import store as store_module
-from prompt_enhancer.storage._fs import FileLock
+from prompt_enhancer.storage._anchored import lock_file
 
 LATER = datetime.now(timezone.utc) + timedelta(days=1)
 OTHER = artifact_key('blob', 'another input', REV)
@@ -426,7 +426,7 @@ def pinned_read(store, s, link):
 def lease_release(store, s, link):
     """The link appears after the pin: release removes its lease file only through the path rule."""
     real = link(f'leases/{s.new}')
-    lease = FileLock(real / 'reader.lease', store.timeout_s, store.poll_s).acquire()
+    lease = lock_file(real.resolve(), 'reader.lease', store.timeout_s, store.poll_s).acquire()
     link.remember()
     with link.refused():
         PinnedSnapshot(store, s.new, [], lease).release()

@@ -10,6 +10,10 @@ without replacing one (F2); a writer computes its bytes before its last comparis
 manifest writer reads its bytes back and refuses any change of value (RT2); activation binds every file, schema,
 value and code fingerprint the verdict depends on, and resolve verifies each (F4, F5, RT4).
 
+Every bundle create, write, lock-file open and delete goes through `storage._anchored` with the resolved project
+root as its root (T-006-int): each component is opened relative to its verified parent at the act, so a link or
+junction swapped into the bundle or above it is refused, never followed.
+
 Known limit: an external editor takes no lock, so an edit of `manifest.yaml` that lands between confirm's last
 comparison and its atomic replace is lost; a check in the same window fails closed (resolve refuses).
 """
@@ -20,7 +24,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib import metadata
 import json
-import os
 from pathlib import Path
 import platform
 import sys
@@ -36,7 +39,8 @@ from .profile_lint import (ADDENDUM_ID, DECISIONS, conflict_findings, input_vari
                            resolve_key, template_findings)
 from .profile_prompt import (ProfileError, load_prompt, parse_meta, parse_structure, placeholders, sha256_tag,
                              system_message, user_template)
-from .storage._fs import FileLock, StorageError, _temporary, atomic_write_bytes, fsync_dir
+from .storage._anchored import atomic_write_bytes, lock_file, publish_new_bytes, remove_entry
+from .storage._fs import StorageError, check_segment
 from .storage.store import _settings as _storage_settings
 
 
@@ -79,7 +83,23 @@ def _bundle(config, profile_id, project_root):
     if profile_id in profiles['exclude']:
         raise ProfileError('PROFILE_EXCLUDED', f'{profile_id!r} is listed in profiles.exclude')
     base = _inside(profiles['root'], root)
-    return _inside(base / profile_id, root)
+    bundle = _inside(base / profile_id, root)
+    _anchored_name(root, bundle)  # a folder the anchored writes would refuse is refused before any work
+    return bundle
+
+
+def _anchored_name(root, path):
+    """`path` (resolved by `_inside`) as the name every bundle write uses below the project root, the anchored
+    root of profile bundles (T-006-int): each component is opened relative to its verified parent at the act, so
+    a link or junction swapped in anywhere below the project root is refused. A component outside the portable
+    segment rule (`check_segment`) is refused, never rewritten (StorageError)."""
+    parts = path.relative_to(root).parts
+    try:
+        for part in parts:
+            check_segment(part)
+    except StorageError as error:
+        raise StorageError(f'{path}: {error}') from error
+    return '/'.join(parts)
 
 
 def _errors(schema, value):
@@ -216,31 +236,20 @@ def _structure(prompt):
     return structure
 
 
-def _publish_new(path, data):
+def _publish_new(root, path, data):
     """Publish a complete file at `path` only if none exists there (F2); raise FileExistsError otherwise.
 
-    A hard link of a fsynced temporary sibling is atomic and never replaces its target on NTFS and POSIX file
-    systems. Where the file system has no hard links, exclusive creation keeps the no-replace guarantee, but a
-    reader may then see a partial file while it is written.
+    `_anchored.publish_new_bytes` below the project root: a fsynced temporary committed without replace (Windows
+    rename on its handle, POSIX `linkat`), so a reader sees no file or the whole file. Where the file system has
+    no hard links, anchored exclusive creation keeps the no-replace guarantee, but a reader may then see a partial
+    file while it is written.
     """
-    tmp = _temporary(path)
-    try:
-        with open(tmp, 'xb') as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.link(tmp, path)
-        except FileExistsError:
-            raise
-        except OSError:
-            with open(path, 'xb') as handle:
-                handle.write(data)
-                handle.flush()
-                os.fsync(handle.fileno())
-        fsync_dir(path.parent)
-    finally:
-        tmp.unlink(missing_ok=True)
+    publish_new_bytes(root, _anchored_name(root, path), data)
+
+
+def _write_bundle_file(root, path, data):
+    """Replace one bundle file atomically, anchored below the project root (T-006-int)."""
+    atomic_write_bytes(root, _anchored_name(root, path), data)
 
 
 async def register_profile(config, profile_id, drafter, *, project_root):
@@ -305,7 +314,7 @@ async def register_profile(config, profile_id, drafter, *, project_root):
     data = _dump_manifest(manifest)
     await _acquire(lock, profile_id)
     try:  # the no-replace link is the last comparison: it publishes only where no manifest exists
-        _publish_new(_inside(bundle / MANIFEST_FILE, root), data)
+        _publish_new(root, _inside(bundle / MANIFEST_FILE, root), data)
     except FileExistsError as error:
         raise ProfileError('PROFILE_EXISTS', f'{profile_id}: {MANIFEST_FILE} appeared during registration; '
                            'it is kept as written') from error
@@ -369,7 +378,7 @@ def _confirm_locked(bundle, root, decisions):
     # lock, so an edit between this comparison and the atomic replace is still lost.
     if _read_bytes(path, 'PROFILE_CHANGED') != manifest_raw:
         raise ProfileError('PROFILE_CHANGED', f'{MANIFEST_FILE} changed during confirmation; it is kept as written')
-    atomic_write_bytes(path, data)
+    _write_bundle_file(root, path, data)
     return manifest
 
 
@@ -436,7 +445,8 @@ def _bundle_lock(config, bundle, root, command):
         _, _, settings = _storage_settings(config, command, root)
     except StorageError as error:
         raise ConfigurationError(f'config: {error}') from error
-    return FileLock(_inside(bundle / CHECK_LOCK_FILE, root), settings['timeout_s'], settings['poll_s'])
+    name = _anchored_name(root, _inside(bundle / CHECK_LOCK_FILE, root))
+    return lock_file(root, name, settings['timeout_s'], settings['poll_s'], create=True)
 
 
 def _busy(lock, profile_id):
@@ -559,7 +569,10 @@ async def check_profile(config, profile_id, runner, *, project_root):
 
 async def _check_locked(config, profile_id, runner, bundle, root):
     # A previous activation never survives a new check, whatever its outcome.
-    _inside(bundle / ACTIVATION_FILE, root).unlink(missing_ok=True)
+    try:
+        remove_entry(root, _anchored_name(root, _inside(bundle / ACTIVATION_FILE, root)))
+    except FileNotFoundError:
+        pass
     schemas = _schema_snapshot(root)  # read before the manifest, so the final comparison covers its validation
     manifest, manifest_raw, prompt = _read_bundle(bundle, root)
     if manifest['profile_id'] != profile_id:
@@ -601,7 +614,7 @@ async def _check_locked(config, profile_id, runner, bundle, root):
         results.append(entry)
     report = {'profile_id': profile_id, 'runner': str(runner.identity), 'cases': results}
     report_bytes = json.dumps(report, ensure_ascii=False, indent=2).encode('utf-8') + b'\n'
-    atomic_write_bytes(_inside(bundle / GOLDEN_RESULTS_FILE, root), report_bytes)
+    _write_bundle_file(root, _inside(bundle / GOLDEN_RESULTS_FILE, root), report_bytes)
     failed = [entry['id'] for entry in results if not entry['passed']]
     if failed:
         raise ProfileError('PROFILE_GOLDEN_FAILED', f'golden tests failed: {failed}', results=results)
@@ -626,7 +639,7 @@ async def _check_locked(config, profile_id, runner, bundle, root):
             or (current_addendum and current_addendum['sha256']) != (addendum and addendum['sha256']):
         raise ProfileError('PROFILE_CHANGED', 'the profile or an input of its check changed during the check; '
                            'run it again')
-    atomic_write_bytes(_inside(bundle / ACTIVATION_FILE, root), record)
+    _write_bundle_file(root, _inside(bundle / ACTIVATION_FILE, root), record)
     return {'activation': activation, 'results': results}
 
 

@@ -133,15 +133,11 @@ def _valid_id(value):
 
 
 def _previous(store):
-    pinned = None
-    try:
-        pinned = store.pin()
-        if pinned is None:
-            return {name: [] for name in _TABLES}
+    pinned = store.pin()
+    if pinned is None:
+        return {name: [] for name in _TABLES}
+    with pinned:  # a failed release never replaces this result or exception (T-006 race round 3, P3-B)
         return {name: pinned.read_rows(name) for name in _TABLES}
-    finally:
-        if pinned is not None:
-            pinned.release()
 
 
 def _scan_previous(rows):

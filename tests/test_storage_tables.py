@@ -7,7 +7,8 @@ import pytest
 from storage_fixtures import DIM, T0, data_rows, dataset
 
 from prompt_enhancer.storage import SPECS, Catalog, StorageError, artifact_key, check_references, concept_id, image_id
-from prompt_enhancer.storage._fs import SUFFIX, read_table_file, write_table_file
+from prompt_enhancer.storage._anchored import write_table_file
+from prompt_enhancer.storage._fs import SUFFIX, read_table_file
 
 
 @pytest.fixture
@@ -36,8 +37,8 @@ def test_round_trip_every_table(catalog, tmp_path, fmt):
     assert set(rows) == set(SPECS) and len(SPECS) == 16
     for name, expected in rows.items():
         table = catalog.build(name, expected, DIM if SPECS[name].vector else None)
-        path = tmp_path / f'{name}{SUFFIX[fmt]}'
-        write_table_file(path, table, fmt)
+        path = tmp_path.resolve() / f'{name}{SUFFIX[fmt]}'
+        write_table_file(path.parent, path.name, table, fmt)
         back = read_table_file(path)
         catalog.validate(name, back)
         assert back.schema.equals(table.schema, check_metadata=True), name
@@ -144,8 +145,8 @@ def test_document_and_json_columns_validated_on_read(catalog, tmp_path):
     table = catalog.build('eval_scenarios', data_rows()['eval_scenarios'])
     index = table.schema.get_field_index('generator')
     broken = table.set_column(index, table.schema.field('generator'), pa.array(['{"role":"writer"}'], pa.large_string()))
-    path = tmp_path / 'eval_scenarios.parquet'
-    write_table_file(path, broken, 'parquet')
+    path = tmp_path.resolve() / 'eval_scenarios.parquet'
+    write_table_file(path.parent, path.name, broken, 'parquet')
     with pytest.raises(StorageError, match='generator'):
         catalog.validate('eval_scenarios', read_table_file(path))
     not_json = table.set_column(index, table.schema.field('generator'), pa.array(['{'], pa.large_string()))
