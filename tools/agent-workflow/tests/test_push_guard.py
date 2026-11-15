@@ -23,7 +23,10 @@ from conftest import git
 from hypothesis import given
 from hypothesis import strategies as st
 
-CFG = gc.load()
+SHIPPED = gc.load()
+# The marker logic is tested on its own here: the git guard's write forms (T-024 round 2) would refuse the bare
+# `git push` spellings these cases use; test_tool_guard.py tests that guard.
+CFG = {**SHIPPED, "git_guard": {**SHIPPED["git_guard"], "mode": "off"}}
 MARKER_DIR = ".tmp/pm-state/prepush-ok"
 SCRIPT = Path(__file__).resolve().parents[1] / "prepush_mark.py"
 spec = importlib.util.spec_from_file_location("prepush_mark", SCRIPT)
@@ -92,7 +95,8 @@ def test_push_without_marker_is_blocked_and_names_sha_and_lint(proj: Path, comma
     assert got == "B", messages
     text = "\n".join(messages)
     assert head(proj) in text
-    assert CFG["push_guard"]["lint_command"] in text
+    assert CFG["push_guard"]["check_command"] in text
+    assert "tools/agent-workflow/prepush_check.py" in text  # a tracked script (T-024 item 5)
 
 
 @pytest.mark.parametrize("command", BLOCKED)
@@ -397,23 +401,56 @@ def test_commit_and_push_in_one_command_is_blocked_even_with_the_old_marker(proj
     )  # the push runs at the marked HEAD
 
 
-def test_undeterminable_repository_fails_open(
+def test_undeterminable_repository_fails_closed(
     proj: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """T-024 final (F22, PD2): a push whose repository, HEAD or branch the guard cannot read is refused."""
     monkeypatch.setenv(
         "GIT_CEILING_DIRECTORIES", str(tmp_path)
     )  # tmp_path may sit inside a work tree
     not_a_repo = tmp_path / "plain"
     not_a_repo.mkdir()
-    assert verdict(proj, "git push", cwd=not_a_repo)[0] == "A"
-    assert verdict(proj, "git -C $DIR push")[0] == "A"
-    assert verdict(proj, "cd $DIR && git push")[0] == "A"
-    assert verdict(proj, "git --git-dir=x push")[0] == "A"
+    mark(proj, head(proj))  # the start repository is marked: only the unprovable part refuses
+    got, messages = verdict(proj, "git push", cwd=not_a_repo)
+    assert got == "B" and "cannot read HEAD" in "\n".join(messages)
+    assert "chosen at run time" in "\n".join(verdict(proj, "git -C $DIR push")[1])
+    assert verdict(proj, "cd $DIR && git push")[0] == "B"
+    assert "--git-dir" in "\n".join(verdict(proj, "git --git-dir=x push")[1])
+    # Read and repair commands next to the word stay open.
+    for command in ("git status", "git log --grep=push", "cd $DIR && git log --grep push", "git push --dry-run"):
+        assert verdict(proj, command)[0] == "A", command
 
 
 def test_force_push_stays_blocked_by_the_git_guard_with_a_marker(proj: Path) -> None:
     mark(proj, head(proj))
-    assert verdict(proj, "git push --force")[0] == "B"
+    assert verdict(proj, "git push --force", cfg=SHIPPED)[0] == "B"
+    assert verdict(proj, "git push origin main", cfg=SHIPPED)[0] == "A"  # the one push form, marked
+
+
+FORCE_SPELLINGS = [
+    "git push --force origin main",
+    "git push -f origin main",
+    "git push origin main --force",
+    "git push --force-with-lease origin main",
+    "git push --force-if-includes origin main",
+    "git push --forc origin main",
+    "git push origin +main",
+    "git push origin +main:main",
+    "git push -uf origin main",
+    "git push --mirror origin",
+    "git push --delete origin main",
+    "git push origin :main",
+    "git -c push.default=matching push",
+]
+
+
+@pytest.mark.parametrize("command", FORCE_SPELLINGS)
+def test_pd3_the_structural_guard_refuses_every_force_spelling_with_a_marker(proj: Path, command: str) -> None:
+    """PD3 evidence: with the marker present and the shipped config, the git guard (pm mode) refuses each spelling
+    the settings glob `git push * --force*` covered, and more; the plain form passes."""
+    mark(proj, head(proj))
+    assert verdict(proj, command, cfg=SHIPPED)[0] == "B", command
+    assert verdict(proj, "git push origin main", cfg=SHIPPED)[0] == "A"
 
 
 def test_other_commands_and_modes_are_untouched(proj: Path) -> None:
@@ -421,7 +458,7 @@ def test_other_commands_and_modes_are_untouched(proj: Path) -> None:
     assert verdict(proj, "echo push")[0] == "A"
     assert verdict(proj, "git log --grep=push")[0] == "A"
     # A worker never pushes: its own rule blocks it, this check stays out of the way.
-    assert verdict(proj, "git push", mode="worker")[0] == "B"
+    assert verdict(proj, "git push", mode="worker", cfg=SHIPPED)[0] == "B"
     assert not tg.check_push(
         tg.Context(
             {"tool_name": "Bash", "tool_input": {"command": "git push"}, "cwd": str(proj)},
@@ -439,10 +476,10 @@ def test_mode_off_and_warn_overrides(proj: Path) -> None:
         assert verdict(proj, "git push", cfg=cfg)[0] == expect, mode
 
 
-def test_override_marker_dir_and_lint_command(proj: Path) -> None:
+def test_override_marker_dir_and_check_command(proj: Path) -> None:
     cfg = copy.deepcopy(CFG)
     cfg["push_guard"]["marker_dir"] = "custom/ok"
-    cfg["push_guard"]["lint_command"] = "run-my-lint"
+    cfg["push_guard"]["check_command"] = "run-my-lint"
     got, messages = verdict(proj, "git push", cfg=cfg)
     assert got == "B"
     assert "run-my-lint" in "\n".join(messages)
@@ -452,24 +489,63 @@ def test_override_marker_dir_and_lint_command(proj: Path) -> None:
     assert verdict(proj, "git push", cfg=cfg)[0] == "A"
 
 
-def test_a_crash_in_the_check_fails_open_and_is_logged(
+def test_a_crash_in_the_check_fails_closed_and_is_logged(
     proj: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """F22 (PD2). Test double (labelled): `_push_reasons` replaced by a function that raises."""
+
     def boom(_ctx: Any) -> list[str]:
         raise RuntimeError("boom")
 
+    mark(proj, head(proj))
     monkeypatch.setattr(tg, "_push_reasons", boom)
     monkeypatch.setattr(tg, "CRASH_LOG", tmp_path / "crash.log")
-    assert verdict(proj, "git push")[0] == "A"
+    got, messages = verdict(proj, "git push origin main")
+    assert got == "B" and "push check failed (RuntimeError)" in "\n".join(messages)
     assert "push_guard" in (tmp_path / "crash.log").read_text(encoding="utf-8")
+    assert verdict(proj, "git status")[0] == "A"  # no push word: the check never runs
+    assert verdict(proj, "git log -3")[0] == "A"
 
 
-def test_git_failure_fails_open(proj: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def broken(*_a: Any, **_k: Any) -> Any:
-        raise OSError("no git")
+def test_a_crash_outside_the_check_body_fails_closed_for_a_push(
+    proj: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F22: the check's trigger is the word `push`, so evaluate() blocks when the whole check raises. Test double
+    (labelled): `check_push` replaced through the checks table."""
 
-    monkeypatch.setattr(subprocess, "run", broken)
-    assert verdict(proj, "git push")[0] == "A"
+    def boom(_ctx: Any) -> list[str]:
+        raise RuntimeError("boom")
+
+    real = tg.checks
+    monkeypatch.setattr(
+        tg, "checks", lambda ctx: [(s, boom if s == "push_guard" else c, t) for s, c, t in real(ctx)]
+    )
+    monkeypatch.setattr(tg, "CRASH_LOG", tmp_path / "crash.log")
+    assert verdict(proj, "git push origin main")[0] == "B"
+    assert verdict(proj, "git status")[0] == "W"  # no push word: the crash only warns
+
+
+@pytest.mark.parametrize("failure", ["oserror", "timeout", "rc", "garbage"])
+def test_git_failure_fails_closed(proj: Path, monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    """F22: git missing, timing out, failing or printing something that is no object id refuses the push. Test
+    double (labelled): `subprocess.run` replaced inside tool_guard only for the push source reading."""
+    mark(proj, head(proj))
+    real_run = subprocess.run
+
+    def broken(cmd: Any, *a: Any, **k: Any) -> Any:
+        if "for-each-ref" not in cmd:
+            return real_run(cmd, *a, **k)
+        if failure == "oserror":
+            raise OSError("no git")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(cmd, 1)
+        out = b"" if failure == "rc" else b"* not-an-id\n"
+        return subprocess.CompletedProcess(cmd, 1 if failure == "rc" else 0, out, b"")
+
+    monkeypatch.setattr(tg.subprocess, "run", broken)
+    got, messages = verdict(proj, "git push origin main")
+    assert got == "B" and "cannot read HEAD" in "\n".join(messages), messages
+    assert verdict(proj, "git status")[0] == "A"
 
 
 @pytest.mark.parametrize(

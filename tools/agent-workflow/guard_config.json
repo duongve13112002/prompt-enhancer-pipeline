@@ -37,9 +37,11 @@
       "check-attr", "whatchanged", "show-branch", "version", "help", "config", "worktree", "branch",
       "tag", "remote", "reflog", "stash"
     ],
-    "merge_subcommands": ["merge", "add"],
     "allowed_config_keys": ["color.ui", "core.quotepath", "core.autocrlf", "core.safecrlf", "diff.noprefix", "log.showsignature", "i18n.logoutputencoding", "core.longpaths"],
-    "worktrees_dir": ".tmp/worktrees"
+    "worktrees_dir": ".tmp/worktrees",
+    "push_remote": "origin",
+    "push_branch": "main",
+    "patch_dir": ".tmp/pm-state/patches"
   },
   "inline_interp": {
     "mode": "block",
@@ -62,7 +64,10 @@
   "push_guard": {
     "mode": "block",
     "marker_dir": ".tmp/pm-state/prepush-ok",
-    "lint_command": "powershell -File .tmp/pm-scripts/prepush_lint.ps1 (PM-local; writes the marker through tools/agent-workflow/prepush_mark.py only when every section is clean)"
+    "check_command": "python -B -I tools/agent-workflow/prepush_check.py <repo> (writes the marker through tools/agent-workflow/prepush_mark.py only when every part is clean)",
+    "check_timeout_seconds": 300,
+    "forbidden_path_prefixes":[".secrets", "models", "database", "data"],
+    "forbidden_suffixes": [".gguf", ".safetensors", ".bin", ".pt", ".pth", ".ckpt", ".onnx"]
   },
   "question_guard": {
     "mode": "warn",

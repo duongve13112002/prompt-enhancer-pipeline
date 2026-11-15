@@ -13,7 +13,7 @@ You change nothing. The PM verifies every "not met" you report, so give evidence
 
 ## Inputs (read only)
 
-1. `.tmp/pm-state/audit/user-words-<DATE>.md`: what the user typed since <SINCE>. This is the only place you read the
+1. `.tmp/audit/user-words-<DATE>.md`: what the user typed since <SINCE>. This is the only place you read the
    user's words. Never open a raw transcript `*.jsonl` and never open `.secrets/`.
 2. `.agents/policy/USER_STANDING_RULES.md`: the rules to check, one per line `Sxx | rule | source | check`.
 3. `tasks/DECISIONS_INDEX.md` (newest 15 rows; for a condensed row ending in "..." open the verbatim row in
@@ -35,7 +35,7 @@ You change nothing. The PM verifies every "not met" you report, so give evidence
 
 ## Output
 
-Write ONE file, `.tmp/pm-state/audit/audit-<DATE>.md`, in English (quote the user's words verbatim and unchanged):
+Write ONE file, `.tmp/audit/audit-<DATE>.md`, in English (quote the user's words verbatim and unchanged):
 
 ```
 # Audit <DATE> (auditor: Haiku 5.5, read-only; user words since <SINCE>)

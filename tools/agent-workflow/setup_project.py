@@ -54,7 +54,8 @@ TOOL_READ_FILES = (
     ".agents/policy/AGENT_PEER_RULES.md",
     "docs/note/README.md",
 )
-GITIGNORE_ENTRIES = (".tmp/", ".venv/", ".secrets/*", ".agents/registry.json", ".agents/log.md", SETTINGS_LOCAL)
+# `.agents/registry.json` of the earlier rules is gone (decision 48): worker state lives under `.tmp/pm-state/`.
+GITIGNORE_ENTRIES = (".tmp/", ".venv/", ".secrets/*", ".agents/log.md", SETTINGS_LOCAL)
 MARKERS = ("<!-- ORCHESTRATION:START -->", "<!-- ORCHESTRATION:END -->", "<!-- AGENT-WORKER:START -->",
            "<!-- AGENT-WORKER:END -->")
 TEXT_SUFFIXES = {".md", ".py", ".json", ".toml", ".yaml", ".yml", ".ps1", ".txt", ".cfg", ".ini"}
@@ -357,6 +358,12 @@ def check_foreign(root: Path, cfg: project_config.ProjectConfig, files: list[Pat
     if not cfg.foreign_bindings:
         return [Result("OK", "foreign", "no previous-project tokens configured")]
     hits: list[str] = []
+    # This checkout's own absolute path is a binding of this project, not of the previous one, even when a foreign
+    # token is a prefix of it (rendered settings name the root; a checkout under the old project's parent folder).
+    # Only a whole path component counts: `<root>-old` or `<root>2` is a sibling folder, so it stays visible to the
+    # token check (review of the S42 fix, retest 6 F1).
+    forms = sorted({root.as_posix(), str(root)}, key=len, reverse=True)
+    own = re.compile(r"(?<![\w.-])(?:" + "|".join(re.escape(f) for f in forms) + r")(?![\w.-])")
     for path in files:
         rel = _rel(path, root)
         if any(rel == ex or (ex.endswith("/") and rel.startswith(ex)) for ex in cfg.foreign_scan_exclude):
@@ -365,7 +372,8 @@ def check_foreign(root: Path, cfg: project_config.ProjectConfig, files: list[Pat
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for number, line in enumerate(text.splitlines(), 1):
+        for number, raw in enumerate(text.splitlines(), 1):
+            line = own.sub("", raw)
             for token in cfg.foreign_bindings:
                 if token in line:
                     hits.append(f"{rel}:{number} {token}")

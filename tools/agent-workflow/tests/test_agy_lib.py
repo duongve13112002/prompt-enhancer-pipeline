@@ -401,9 +401,9 @@ def test_scripts_are_wired_to_the_helpers() -> None:
         ws.index("Python for -Sanitize not found")
         < ws.index("New-Item -ItemType Directory")
         < ws.index("Copy-Item")
-        < ws.index("& $Python -B -I")
+        < ws.index("Invoke-Native $Python (@('-B', '-I'")
     )
-    assert "agy_sanitize.py" in ws[ws.index("& $Python -B -I") :]
+    assert "agy_sanitize.py" in ws[ws.index("Invoke-Native $Python (@('-B', '-I'") :]
     assert (TOOLS / "agy_sanitize.py").is_file()
     invoke = text_of("scripts/agy-runner/invoke-job.ps1")
     assert "Assert-AgyIdle" in invoke and "Get-AgyIncompleteReason" in invoke and "exit 2" in invoke
@@ -427,8 +427,9 @@ def test_review_job_allows_workspace_reads_and_keeps_its_result() -> None:
     assert "--settings $settingsPath" in call
     assert "--dangerously-skip-permissions" not in call
     ws = text_of("tools/agent-workflow/gemini-ws.ps1")
-    assert "tar -xf notes/head.tar" in ws and "tar -xf $tar" not in ws
-    assert ws.index("Push-Location -LiteralPath $ws") < ws.index("tar -xf notes/head.tar")
+    extract = "Invoke-Native tar @('-xf', 'notes/head.tar')"  # relative archive path, run from inside the workspace
+    assert extract in ws and "tar -xf $tar" not in ws
+    assert ws.index("Push-Location -LiteralPath $ws") < ws.index(extract)
 
 
 def test_helpers_never_stop_tasks_or_touch_the_wrapper_and_gemini_store() -> None:

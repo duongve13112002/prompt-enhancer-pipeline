@@ -4,7 +4,7 @@ Each worker is one persistent CLI conversation. The PM starts it with a brief an
 talking to it with `send` (same session id), so the 1-hour prompt cache is reused.
 Workers get an explicit tool allowlist without Agent/Task/Workflow (no subagents), MCP
 servers per --mcp (default: unchanged; minimal: none), and permission rules passed through
---settings. Only the PM commits or pushes.
+--settings. Workers never commit, push or merge; the orchestrator commits and pushes (decision 77).
 
 Usage (run through the PowerShell tool with run_in_background; --profile <role> is the normal path, decision 379):
   python -B cli_worker.py start --name w1 --profile dev-small --model sonnet --effort high --cwd <worktree> --message-file <brief>
@@ -38,11 +38,24 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 # Native Windows exposes this builtin independently of mutable sys.platform/os.name strings.
 NATIVE_WINDOWS = hasattr(sys, "getwindowsversion")
-REGISTRY = ROOT / ".tmp" / "pm-state" / "cli-workers.json"
+# The PM state directory, by the hooks' rule (hooks/ctx_nudge.py, git_ledger.ledger_dir): AGENT_WORKFLOW_STATE_DIR,
+# else <ROOT>/.tmp/pm-state. Everything the launcher later trusts to judge a worker lives here, where neither the
+# shell guard nor the native write denies let a worker write (T-024 final round, CX2 and Gemini P3).
+STATE_ENV = "AGENT_WORKFLOW_STATE_DIR"  # protocol-bound: shared with every hook
+
+
+def state_root() -> Path:
+    """The state directory now (ROOT and the environment read at call time, so a test's ROOT override follows)."""
+    return Path(os.environ.get(STATE_ENV) or ROOT / ".tmp" / "pm-state")
+
+
+STATE = state_root()
+REGISTRY = STATE / "cli-workers.json"
 LOCK = REGISTRY.with_suffix(".lock")
 JOBS = ROOT / ".tmp" / "cli-jobs"
-# Same directory as hooks/ctx_nudge.py DEFAULT_INBOX (the hook's state root is <ROOT>/.tmp/pm-state).
-INBOX = ROOT / ".tmp" / "pm-state" / "inbox"
+# Same directory as hooks/ctx_nudge.py DEFAULT_INBOX.
+INBOX = STATE / "inbox"
+LINT_WAIVERS_NAME = "lint-waivers.jsonl"  # artifact-bound: read by the PM
 # Claude Code keeps each session as <projects>/<cwd-slug>/<session_id>.jsonl plus a <session_id>/ directory;
 # only `retire --purge-transcript` deletes them.
 CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
@@ -55,11 +68,13 @@ REPLACE_WAIT_SECONDS = 0.05
 # Tail of a live log read by `status`: the last assistant event is far smaller than this.
 LOG_TAIL_BYTES = 262144
 # The normal subagent tool set (decision 233), minus orchestration, scheduling, cross-session and publishing tools.
+# NotebookEdit is withheld (T-024 final round, CX6; PM decision pending user review): no primary source or bounded
+# live check shows that the Edit/Write deny rules govern it, so it is not offered until one does.
 TOOLS = (
-    "Bash,Edit,Glob,Grep,Monitor,NotebookEdit,PowerShell,Read,ReportFindings,Skill,TaskStop,ToolSearch,"
+    "Bash,Edit,Glob,Grep,Monitor,PowerShell,Read,ReportFindings,Skill,TaskStop,ToolSearch,"
     "WebFetch,WebSearch,Write,ListMcpResourcesTool,ReadMcpResourceTool,ReadMcpResourceDirTool"
 )
-DENIED_TOOLS = "Agent,Task,Workflow,SendMessage,ListAgents,CronCreate,CronDelete,RemoteTrigger,ScheduleWakeup,PushNotification,Artifact,ArtifactComments,ArtifactData,DesignSync,EnterWorktree,ExitWorktree"
+DENIED_TOOLS = "Agent,Task,Workflow,SendMessage,ListAgents,CronCreate,CronDelete,RemoteTrigger,ScheduleWakeup,PushNotification,Artifact,ArtifactComments,ArtifactData,DesignSync,EnterWorktree,ExitWorktree,NotebookEdit"
 
 
 def permission_path(path: Path) -> str:
@@ -70,44 +85,140 @@ def permission_path(path: Path) -> str:
     return "/" + posix
 
 
-SETTINGS = {
-    "permissions": {
-        "allow": [
-            *TOOLS.split(","),
-            "mcp__claude_ai_Context7",
-            "mcp__claude_ai_Hugging_Face__hub_repo_search",
-            "mcp__claude_ai_Hugging_Face__hub_repo_details",
-            "mcp__claude_ai_Claude_Docs__read",
-            "mcp__claude_ai_Claude_Docs__query",
-            "mcp__claude_ai_Claude_Docs__guide",
-        ],
-        "deny": [
-            "Read(**/.secrets/**)",
-            "Edit(**/.secrets/**)",
-            "Write(**/.secrets/**)",
-            "Grep(**/.secrets/**)",
-            "Glob(**/.secrets/**)",
-            f"Read({permission_path(ROOT)}/.secrets/**)",
-            # Read-only research connectors only: no Drive, no document writes, no HF filesystem or Spaces.
-            "mcp__claude_ai_Google_Drive",
-            "mcp__claude_ai_Claude_Docs__create",
-            "mcp__claude_ai_Claude_Docs__delete",
-            "mcp__claude_ai_Claude_Docs__update",
-            "mcp__claude_ai_Claude_Docs__batch",
-            "mcp__claude_ai_Claude_Docs__export",
-            "mcp__claude_ai_Hugging_Face__hf_fs",
-            "mcp__claude_ai_Hugging_Face__dynamic_space",
-            "mcp__claude_ai_Hugging_Face__hf_whoami",
-            "mcp__plugin_bio-research_biorxiv",
-            "mcp__plugin_bio-research_c-trials",
-            "mcp__plugin_bio-research_chembl",
-            "mcp__plugin_bio-research_consensus",
-            "mcp__plugin_bio-research_ot",
-            "mcp__plugin_bio-research_pubmed",
-            "mcp__plugin_pdf-viewer_pdf",
-        ],
-    }
-}
+# Claude Code permission-rule names of the built-in file writers the worker is offered (protocol-bound). The only other
+# built-in writer, NotebookEdit, is not offered at all (TOOLS, DENIED_TOOLS), so no unverified rule shape is relied on.
+NATIVE_WRITE_TOOLS = ("Edit", "Write")
+
+
+def _git_link_dirs(root: Path) -> list[Path]:
+    """The Git directories outside `root` that `root/.git` names when it is a link file (`gitdir: <path>`, the layout of
+    a linked worktree): its private directory and, under `<common>/worktrees/`, the common directory. Read
+    structurally, no git process: the rules are built at import."""
+    link = root / ".git"
+    try:
+        text = link.read_text(encoding="utf-8") if link.is_file() else ""
+    except (OSError, UnicodeDecodeError):
+        return []
+    found: list[Path] = []
+    for line in text.splitlines():
+        if line.startswith("gitdir: "):  # protocol-bound: gitrepository-layout(5) link file
+            private = (root / line[len("gitdir: ") :].strip()).resolve()
+            found.append(private)
+            if private.parent.name == "worktrees":
+                found.append(private.parent.parent)
+    return found
+
+
+def protected_write_rules(root: Path, state_dir: Path, tooling: Path, home: Path) -> list[str]:
+    """Deny rules for native file writes (T-024 final round, F05 and PD1): Git internals of every checkout under the
+    root, the tooling, the policy folders and the whole PM state directory. Hooks write that directory from their own
+    Python process, which these rules do not govern. Built from the given and the resolved spelling of each path,
+    since the rule matcher's link handling is not documented here (report-D)."""
+
+    def forms(path: Path) -> list[str]:
+        return list(dict.fromkeys(permission_path(p) for p in (path, path.resolve())))
+
+    # Relative rules apply under the worker's cwd; the absolute ones also cover the root it reaches with --add-dir.
+    # Git internals and `.claude/` (the CLI reads settings, hooks and skills from its working folder, so a worktree's
+    # copy governs the worker) are denied in every checkout. The tooling and `.agents/` only in the main tree: the
+    # hooks run from there (HOOKS and the rendered absolute paths), so a worktree copy is data a tooling task may edit
+    # (PM decision pending user review, T-024 package D QA feedback).
+    patterns = ["**/.git", "**/.git/**", "**/.claude/**"]
+    for base in forms(root):
+        for tail in (".git", ".git/**", ".claude/**"):
+            patterns += [f"{base}/{tail}", f"{base}/**/{tail}"]
+        patterns += [f"{base}/tools/agent-workflow/**", f"{base}/.agents/**"]
+    for folder in (tooling, state_dir, home / ".claude", *_git_link_dirs(root)):
+        patterns += [f"{base}/**" for base in forms(folder)]
+    unique = list(dict.fromkeys(patterns))
+    return [f"{tool}({pattern})" for tool in NATIVE_WRITE_TOOLS for pattern in unique]
+
+
+HOOKS = Path(__file__).resolve().parent / "hooks"
+
+
+def git_ledger() -> Any:
+    """hooks/git_ledger.py (round 5): the compared state and the orchestrator's write ledger."""
+    spec = importlib.util.spec_from_file_location("git_ledger", HOOKS / "git_ledger.py")
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load {HOOKS / 'git_ledger.py'}")
+    sys.path.insert(0, str(HOOKS))  # git_ledger imports guard_config next to it
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def state_dir(root: Path) -> Path:
+    """The PM state directory the hooks use: the parent of hooks/git_ledger.py's `ledger_dir` (PD1: derived, so an
+    AGENT_WORKFLOW_STATE_DIR override moves the protection with it)."""
+    return Path(git_ledger().ledger_dir(root)).parent
+
+
+_SETTINGS_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def worker_settings(legacy: bool = False) -> dict[str, Any]:
+    """The worker permission settings (`SETTINGS`, or `LEGACY_SETTINGS` with the prefix git denies), built on first
+    use and then the same object: the state directory comes from hooks/git_ledger.py, which `status`, `retire` and the
+    supervisor's copies never need (T-024 final round)."""
+    key = "legacy" if legacy else "guarded"
+    if key not in _SETTINGS_CACHE:
+        base = {"permissions": {"allow": list(_ALLOW), "deny": [
+            *_DENY_HEAD,
+            # T-024: Git internals, tooling, policy folders and the PM state (its Git ledger excuses ref changes).
+            *protected_write_rules(ROOT, state_dir(ROOT), Path(__file__).resolve().parent, Path.home()),
+            *_DENY_TAIL,
+            *(LEGACY_GIT_DENIES if legacy else []),
+        ]}}
+        _SETTINGS_CACHE[key] = base
+    return _SETTINGS_CACHE[key]
+
+
+def __getattr__(name: str) -> Any:
+    """`SETTINGS` and `LEGACY_SETTINGS` stay readable as module attributes (PEP 562), built lazily."""
+    if name == "SETTINGS":
+        return worker_settings()
+    if name == "LEGACY_SETTINGS":
+        return worker_settings(legacy=True)
+    raise AttributeError(name)
+
+
+_ALLOW = (
+    *TOOLS.split(","),
+    "mcp__claude_ai_Context7",
+    "mcp__claude_ai_Hugging_Face__hub_repo_search",
+    "mcp__claude_ai_Hugging_Face__hub_repo_details",
+    "mcp__claude_ai_Claude_Docs__read",
+    "mcp__claude_ai_Claude_Docs__query",
+    "mcp__claude_ai_Claude_Docs__guide",
+)
+_DENY_HEAD = (
+    "Read(**/.secrets/**)",
+    "Edit(**/.secrets/**)",
+    "Write(**/.secrets/**)",
+    "Grep(**/.secrets/**)",
+    "Glob(**/.secrets/**)",
+    f"Read({permission_path(ROOT)}/.secrets/**)",
+)
+_DENY_TAIL = (
+    # Read-only research connectors only: no Drive, no document writes, no HF filesystem or Spaces.
+    "mcp__claude_ai_Google_Drive",
+    "mcp__claude_ai_Claude_Docs__create",
+    "mcp__claude_ai_Claude_Docs__delete",
+    "mcp__claude_ai_Claude_Docs__update",
+    "mcp__claude_ai_Claude_Docs__batch",
+    "mcp__claude_ai_Claude_Docs__export",
+    "mcp__claude_ai_Hugging_Face__hf_fs",
+    "mcp__claude_ai_Hugging_Face__dynamic_space",
+    "mcp__claude_ai_Hugging_Face__hf_whoami",
+    "mcp__plugin_bio-research_biorxiv",
+    "mcp__plugin_bio-research_c-trials",
+    "mcp__plugin_bio-research_chembl",
+    "mcp__plugin_bio-research_consensus",
+    "mcp__plugin_bio-research_ot",
+    "mcp__plugin_bio-research_pubmed",
+    "mcp__plugin_pdf-viewer_pdf",
+)
 
 
 # Prefix git denies for workers without the tool guard (started before it existed, or `--tool-guard off`); they are not a
@@ -118,14 +229,7 @@ LEGACY_GIT_DENIES = [
     "PowerShell(git commit*)",
     "PowerShell(git push*)",
 ]
-LEGACY_SETTINGS = {
-    "permissions": {
-        **SETTINGS["permissions"],
-        "deny": [*SETTINGS["permissions"]["deny"], *LEGACY_GIT_DENIES],
-    }
-}
-GIT_GUARD_MODES = ("readonly", "merge")
-HOOKS = Path(__file__).resolve().parent / "hooks"
+GIT_GUARD_MODES = ("readonly",)  # the merge mode was removed by decision 77 (T-024)
 MCP_MODES = ("default", "minimal")
 # Advisor aliases accepted by `claude --advisor`; the CLI itself rejects a pairing the main model does not allow.
 ADVISORS = ("off", "opus", "fable", "sonnet")
@@ -148,7 +252,7 @@ PROFILE_OPTIONAL = ("model", "effort")
 CACHE_TTLS = ("5m", "1h")
 BACKENDS = ("claude", "codex")
 # One JSONL row per worker turn (usage_snapshot.append_ledger); same state directory as the registry.
-LEDGER = ROOT / ".tmp" / "pm-state" / "worker-ledger.jsonl"
+LEDGER = STATE / "worker-ledger.jsonl"
 # Turn limit of a Claude worker when `--timeout-minutes` is not given (a Codex worker takes its role's value).
 DEFAULT_TIMEOUT_MINUTES = 300
 
@@ -363,7 +467,7 @@ def hook_settings(cfg: dict[str, Any]) -> dict[str, Any]:
     Without the tool guard (older workers, `--tool-guard off`) the prefix git denies stay as the fallback."""
     wants_nudge = cfg.get("ctx_nudge", "off") != "off" or cfg.get("loop_window", 0) > 0
     tool_guard = bool(cfg.get("tool_guard"))
-    settings = SETTINGS if tool_guard else LEGACY_SETTINGS
+    settings = worker_settings(legacy=not tool_guard)
     if (
         not cfg.get("process_guard")
         and not wants_nudge
@@ -378,12 +482,8 @@ def hook_settings(cfg: dict[str, Any]) -> dict[str, Any]:
             {"matcher": "Bash|PowerShell", "hooks": [_hook(py, "process_guard.py")]}
         ]
     if tool_guard:
-        merge = cfg.get("git_guard") == "merge"
-        guard_args = (
-            ["--git-mode", "worker-merge", "--worktree", str(cfg["cwd"])]
-            if merge
-            else ["--git-mode", "worker"]
-        )
+        # Workers never merge (decision 77): a record that still says `git_guard: merge` gets the read-only guard.
+        guard_args = ["--git-mode", "worker"]
         hooks.setdefault("PreToolUse", []).append(
             {
                 "matcher": "Bash|PowerShell|Monitor",
@@ -436,14 +536,14 @@ def now() -> str:
 # case or a `Kind:` header. Feedback and retest messages without a `Kind:` header keep the always-rules only.
 LINT_WAIVE_HELP = (
     "launch although brief_lint reports findings; the reason is required and logged to "
-    ".tmp/pm-state/lint-waivers.jsonl"
+    f"lint-waivers.jsonl in the state directory ({STATE_ENV}, else .tmp/pm-state)"
 )
 
 
 def lint_gate(command: str, name: str, message: str, waive: str | None) -> None:
     """Refuse to launch on a brief_lint finding (T-MEM); `--lint-waive "<reason>"` logs the override instead.
 
-    A crash of the linter itself is shown loudly and logged, and does not block the PM."""
+    A crash of the linter itself is logged and refuses the launch with its reason (fail closed, T-024 final round)."""
     try:
         spec = importlib.util.spec_from_file_location(
             "brief_lint", Path(__file__).resolve().parent / "brief_lint.py"
@@ -460,13 +560,12 @@ def lint_gate(command: str, name: str, message: str, waive: str | None) -> None:
             footer = (ROOT / ".agents" / "policy" / "AGENT_BRIEF_FOOTER.md").read_text(encoding="utf-8-sig")
         findings = lint.lint_message(message, full=full, footer=footer, task_file_text=task_text)
         findings = sorted([*findings, *extra], key=lambda f: (f.line, f.rule))
-    except Exception as exc:  # a broken linter must not stop the PM; the gap is visible and logged
-        print(
-            f"WARNING: brief lint crashed ({type(exc).__name__}); NOT applied to {name}",
-            file=sys.stderr,
-        )
+    except Exception as exc:  # fail closed (T-024 final round): an unchecked brief never starts a worker
         log_waiver({"command": command, "worker": name, "lint_error": type(exc).__name__})
-        return
+        raise SystemExit(
+            f"brief lint crashed ({type(exc).__name__}: {exc}); {command} {name} refused: repair "
+            "tools/agent-workflow/brief_lint.py (--lint-waive covers findings, not a crash)"
+        ) from None
     if not findings:
         return
     lines = [f"  {f.line}: [{f.rule}] {f.message}" for f in findings]
@@ -490,7 +589,7 @@ def lint_gate(command: str, name: str, message: str, waive: str | None) -> None:
 
 
 def log_waiver(entry: dict[str, Any]) -> None:
-    path = ROOT / ".tmp" / "pm-state" / "lint-waivers.jsonl"
+    path = state_root() / LINT_WAIVERS_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"time": now(), **entry}, ensure_ascii=False) + "\n")
@@ -741,6 +840,300 @@ def stop_worker(proc: subprocess.Popen[Any], created: float | None) -> None:
     itself through the Popen handle (which keeps the PID ours), never a bare PID."""
     if not kill_tree(proc.pid, created) and proc.poll() is None:
         proc.kill()
+
+
+# T-024 final round, F17 (decision 100): every process a turn starts ends before the final Git snapshot, including
+# processes that detach, start a new session or lose their parent. Windows: the worker starts suspended inside a job
+# object that kills every member when it is terminated and allows no breakaway. Linux: the launcher is a child
+# subreaper, so every orphan of the worker's tree is re-parented to it and stopped. Values below are protocol-bound
+# (winnt.h, winbase.h, tlhelp32.h, linux/prctl.h).
+CREATE_SUSPENDED = 0x00000004
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
+JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS = 1
+PROCESS_SET_QUOTA, PROCESS_TERMINATE = 0x0100, 0x0001
+THREAD_SUSPEND_RESUME = 0x0002
+TH32CS_SNAPTHREAD = 0x00000004
+ERROR_INVALID_PARAMETER = 87  # OpenProcess of a PID no process holds
+PR_SET_CHILD_SUBREAPER = 36
+# Poll interval while waiting for stopped processes to be gone (safety-bound; the wait itself is bounded by the
+# validated git_timeout_seconds, the same bound as the snapshot settle).
+STOP_POLL_SECONDS = 0.05
+
+
+class ContainmentError(OSError):
+    """The worker could not be placed where every process it starts can be stopped: the turn is refused."""
+
+
+def _kernel32() -> Any:
+    import ctypes
+    from ctypes import wintypes
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)  # a private instance: declared types stay local
+    k.CreateJobObjectW.restype = wintypes.HANDLE
+    k.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    k.SetInformationJobObject.restype = wintypes.BOOL
+    k.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    k.QueryInformationJobObject.restype = wintypes.BOOL
+    k.QueryInformationJobObject.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p
+    ]
+    k.AssignProcessToJobObject.restype = wintypes.BOOL
+    k.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    k.TerminateJobObject.restype = wintypes.BOOL
+    k.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    k.OpenProcess.restype = wintypes.HANDLE
+    k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k.OpenThread.restype = wintypes.HANDLE
+    k.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k.ResumeThread.restype = wintypes.DWORD
+    k.ResumeThread.argtypes = [wintypes.HANDLE]
+    k.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    k.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    k.CloseHandle.restype = wintypes.BOOL
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    return k
+
+
+def _win_error(what: str) -> ContainmentError:
+    import ctypes
+
+    code = ctypes.get_last_error()  # type: ignore[attr-defined, unused-ignore]  # Windows only
+    return ContainmentError(f"{what} failed (Windows error {code})")
+
+
+class WindowsJob:
+    """A job object holding one worker's whole process tree (Windows 8 or later nests it inside any job the launcher
+    already runs in). No breakaway flag is set, so a child created with CREATE_BREAKAWAY_FROM_JOB fails to start
+    instead of leaving the job; `close` terminates every member."""
+
+    def __init__(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        class Basic(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class Extended(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", Basic),
+                ("IoInfo", ctypes.c_uint64 * 6),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        self.k = _kernel32()
+        self.handle = self.k.CreateJobObjectW(None, None)
+        if not self.handle:
+            raise _win_error("CreateJobObjectW")
+        limits = Extended()
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not self.k.SetInformationJobObject(
+            self.handle, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS, ctypes.byref(limits), ctypes.sizeof(limits)
+        ):
+            error = _win_error("SetInformationJobObject")
+            self.k.CloseHandle(self.handle)
+            raise error
+
+    def adopt(self, pid: int) -> None:
+        """Put the suspended process `pid` into the job, then let it run. A PID that no process holds has nothing to
+        contain; any other failure raises ContainmentError (the caller kills the suspended child)."""
+        import ctypes
+        from ctypes import wintypes
+
+        process = self.k.OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, False, pid)
+        if not process:
+            if ctypes.get_last_error() == ERROR_INVALID_PARAMETER:  # type: ignore[attr-defined, unused-ignore]
+                return
+            raise _win_error("OpenProcess")
+        try:
+            if not self.k.AssignProcessToJobObject(self.handle, process):
+                raise _win_error("AssignProcessToJobObject")
+        finally:
+            self.k.CloseHandle(process)
+
+        class Entry(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ThreadID", wintypes.DWORD),
+                ("th32OwnerProcessID", wintypes.DWORD),
+                ("tpBasePri", wintypes.LONG),
+                ("tpDeltaPri", wintypes.LONG),
+                ("dwFlags", wintypes.DWORD),
+            ]
+
+        self.k.Thread32First.restype = self.k.Thread32Next.restype = wintypes.BOOL
+        self.k.Thread32First.argtypes = self.k.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(Entry)]
+        snap = self.k.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+        if not snap or snap == wintypes.HANDLE(-1).value:
+            raise _win_error("CreateToolhelp32Snapshot")
+        try:
+            entry = Entry()
+            entry.dwSize = ctypes.sizeof(Entry)
+            more = self.k.Thread32First(snap, ctypes.byref(entry))
+            while more:
+                if entry.th32OwnerProcessID == pid:
+                    thread = self.k.OpenThread(THREAD_SUSPEND_RESUME, False, entry.th32ThreadID)
+                    if not thread:
+                        raise _win_error("OpenThread")
+                    try:
+                        if self.k.ResumeThread(thread) == 0xFFFFFFFF:
+                            raise _win_error("ResumeThread")
+                    finally:
+                        self.k.CloseHandle(thread)
+                more = self.k.Thread32Next(snap, ctypes.byref(entry))
+        finally:
+            self.k.CloseHandle(snap)
+
+    def active(self) -> int:
+        import ctypes
+        from ctypes import wintypes
+
+        class Accounting(ctypes.Structure):
+            _fields_ = [
+                ("TotalUserTime", ctypes.c_int64),
+                ("TotalKernelTime", ctypes.c_int64),
+                ("ThisPeriodTotalUserTime", ctypes.c_int64),
+                ("ThisPeriodTotalKernelTime", ctypes.c_int64),
+                ("TotalPageFaultCount", wintypes.DWORD),
+                ("TotalProcesses", wintypes.DWORD),
+                ("ActiveProcesses", wintypes.DWORD),
+                ("TotalTerminatedProcesses", wintypes.DWORD),
+            ]
+
+        info = Accounting()
+        if not self.k.QueryInformationJobObject(
+            self.handle, JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS, ctypes.byref(info), ctypes.sizeof(info), None
+        ):
+            raise _win_error("QueryInformationJobObject")
+        return int(info.ActiveProcesses)
+
+    def close(self, bound: float) -> list[str]:
+        """Terminate every member, wait up to `bound` seconds for them to be gone, release the job; the problems."""
+        problems: list[str] = []
+        try:
+            if not self.k.TerminateJobObject(self.handle, 1):
+                problems.append(str(_win_error("TerminateJobObject")))
+            deadline = time.monotonic() + bound
+            left = self.active()
+            while left and time.monotonic() < deadline:
+                time.sleep(STOP_POLL_SECONDS)
+                left = self.active()
+            if left:
+                problems.append(f"{left} process(es) of the worker's job still ran {bound} s after it was terminated")
+        except ContainmentError as exc:
+            problems.append(str(exc))
+        finally:
+            self.k.CloseHandle(self.handle)  # KILL_ON_JOB_CLOSE: closing the last handle ends what is left
+        return problems
+
+
+def posix_children(parent: int, proc: Path = Path("/proc")) -> list[tuple[int, str, float | None]]:
+    """(pid, state, start) of every process whose parent is `parent`, from `/proc/<pid>/stat` (field 4 is the parent,
+    counted after the last `)` of `comm`)."""
+    btime = proc_btime(proc)
+    ticks = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 0  # type: ignore[attr-defined, unused-ignore]
+    found = []
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            text = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue  # ended while listing
+        rest = text.rpartition(")")[2].split()
+        if len(rest) < 20 or not rest[1].isdigit() or int(rest[1]) != parent:
+            continue
+        start = btime + int(rest[19]) / ticks if btime is not None and ticks and rest[19].isdigit() else None
+        found.append((int(entry.name), rest[0], start))
+    return found
+
+
+class TurnContainment:
+    """Where one worker turn's processes live, so that all of them can be stopped after any exit of the turn.
+
+    Windows: a job object (the child is created suspended, adopted, then resumed). Linux: the launcher is made a child
+    subreaper (prctl), so a descendant whose parent ends is re-parented to the launcher instead of init; `close` stops
+    the launcher's children started since the turn began, reaps them, and repeats for the children they leave. Other
+    platforms have neither mechanism and are refused (R-025 supports Windows and Linux)."""
+
+    def __init__(self) -> None:
+        self.job: WindowsJob | None = None
+        self.since = time.time()
+        if NATIVE_WINDOWS:
+            self.job = WindowsJob()
+        elif sys.platform.startswith("linux"):
+            import ctypes
+
+            libc = ctypes.CDLL(None, use_errno=True)
+            if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+                raise ContainmentError(f"prctl(PR_SET_CHILD_SUBREAPER) failed (errno {ctypes.get_errno()})")
+        else:
+            raise ContainmentError(f"no process containment on {sys.platform}: workers run on Windows or Linux")
+
+    def creationflags(self) -> int:
+        return CREATE_SUSPENDED if self.job is not None else 0
+
+    def adopt(self, proc: subprocess.Popen[Any]) -> None:
+        if self.job is None:
+            return
+        try:
+            self.job.adopt(proc.pid)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                proc.kill()  # still suspended: it has started nothing
+            raise
+
+    def close(self, bound: float) -> list[str]:
+        """Stop every process of the turn that is still running; the problems (empty when all are gone)."""
+        if self.job is not None:
+            return self.job.close(bound)
+        deadline = time.monotonic() + bound
+        slack = PROCESS_TIME_TOLERANCE_SECONDS
+
+        def turn_children() -> list[tuple[int, str]]:
+            # The launcher's own children started since the turn began: the worker, and its descendants re-parented
+            # here when their parent ended. Ours until reaped, so a PID cannot be reused before the kill.
+            return [
+                (pid, state)
+                for pid, state, start in posix_children(os.getpid())
+                if start is None or start >= self.since - slack
+            ]
+
+        while True:
+            found = turn_children()
+            if not found:
+                return []
+            for pid, state in found:
+                if state not in ("Z", "X"):
+                    with contextlib.suppress(OSError):
+                        os.kill(pid, signal.SIGKILL)
+            waiting = {pid for pid, _ in found}
+            while waiting and time.monotonic() < deadline:
+                for pid in list(waiting):
+                    try:
+                        if os.waitpid(pid, os.WNOHANG)[0]:  # type: ignore[attr-defined, unused-ignore]  # POSIX
+                            waiting.discard(pid)
+                    except ChildProcessError:
+                        waiting.discard(pid)
+                if waiting:
+                    time.sleep(STOP_POLL_SECONDS)
+            if time.monotonic() >= deadline:
+                left = [pid for pid, _ in turn_children()]
+                return [f"process(es) {left} of the worker still ran {bound} s after the stop"] if left else []
 
 
 class RegistryLock:
@@ -1172,8 +1565,285 @@ def update_entry(
     return True
 
 
-def mark_error(name: str, status: str, session_id: str) -> None:
-    update_entry(name, session_id, {"status": status}, drop=PROCESS_KEYS)
+def mark_error(name: str, status: str, session_id: str, only_busy: bool = False) -> None:
+    """End the turn's `busy` state with an error status (only while the entry is still `busy` when `only_busy`). A
+    Git history flag stays the status: it is sticky until the PM retires the worker (T-024 F16)."""
+    with RegistryLock():
+        data = load()
+        entry = data.get(name)
+        if not isinstance(entry, dict) or entry.get("session_id") != session_id:
+            return
+        if only_busy and entry.get("status") != "busy":
+            return
+        if only_busy and entry.get("backend") == "codex":
+            try:
+                sibling("codex_backend").require_worker(entry)
+            except sibling("codex_backend").StaleWorkerError:
+                return  # a stale stored row is never rewritten (no silent repair); `send` refuses it anyway
+        entry["status"] = GIT_HISTORY_CHANGED if entry.get("git_changes") else status
+        for key in PROCESS_KEYS:
+            entry.pop(key, None)
+        save(data)
+
+
+# T-024 round 4 (class F, detection at Git itself): the shell guard cannot prove what opaque inline code or a program
+# found on a changed PATH runs, so every worker turn is bracketed by a snapshot of its repository's refs and reflogs.
+GIT_HISTORY_CHANGED = "git_history_changed"  # protocol-bound: the status the PM's integration refuses
+# T-024 F16 and CX2: a turn's starting state and audit identity live in the protected state directory (next to the
+# registry, so a REGISTRY override moves them too); the registry entry pins the audit id and the file's SHA-256, so a
+# missing, changed or foreign file is itself a finding. Names are artifact-bound.
+AUDIT_DIR_NAME = "git-audits"
+AUDIT_ID = re.compile(r"[0-9a-f]{32}")  # uuid4().hex
+
+
+def audit_dir() -> Path:
+    return REGISTRY.parent / AUDIT_DIR_NAME
+
+
+def audit_path(audit_id: str, state: str = "open") -> Path:
+    """`<id>.json` while the turn runs, `<id>.closed.json` once its audit is recorded, `<id>.flagged.json` kept as
+    evidence after an unaudited turn was flagged."""
+    return audit_dir() / (f"{audit_id}.json" if state == "open" else f"{audit_id}.{state}.json")
+
+
+def sha256_text(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def audit_finding(entry: dict[str, Any]) -> str | None:
+    """Why the entry's last turn has no recorded Git audit, None when it has one (or no turn recorded an audit).
+    The audit is proven only by a closed file whose bytes match the hash the registry pinned and whose session is the
+    entry's; anything else (still open, missing, changed, another session, damaged pin) is a finding."""
+    pin = entry.get("git_audit")
+    if pin is None:
+        return None
+    if not isinstance(pin, dict) or not isinstance(pin.get("id"), str) or not AUDIT_ID.fullmatch(pin["id"]):
+        return "the registry's audit record of the last turn is damaged"
+    turn = f"turn {pin.get('log')}"
+    for state in ("closed", "open"):
+        path = audit_path(pin["id"], state)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            return f"the start state of {turn} cannot be read ({type(exc).__name__})"
+        if sha256_text(text) != pin.get("sha256"):
+            return f"the start state of {turn} was changed after the turn began"
+        try:
+            owner = json.loads(text).get("session_id")
+        except (ValueError, AttributeError):
+            owner = None
+        if owner != entry.get("session_id"):
+            return f"the start state of {turn} belongs to another session"
+        if state == "closed":
+            return None
+        return f"{turn} was never audited (its launcher ended before the audit)"
+    return f"the start state of {turn} is missing"
+
+
+def repository_evidence(cwd: str | Path) -> Path | None:
+    """The first `.git` entry (directory, link file or dangling link) at `cwd` or above it, None when there is none:
+    git discovers a repository upwards, so only the absence of every such entry proves there is none (T-024 F15)."""
+    here = Path(os.path.abspath(cwd))
+    for folder in (here, *here.parents):
+        if os.path.lexists(folder / ".git"):
+            return folder / ".git"
+    return None
+
+
+def git_snapshot(cwd: str | Path, timeout: int) -> dict[str, Any] | None:
+    """The compared Git state at `cwd` (round 5, class K; git_ledger.snapshot): every ref with its symref target, the
+    root refs of every Git directory, every registered worktree's HEAD, a fingerprint (count and SHA-256) of every
+    reflog, and the orchestrator ledger's fingerprint. None only outside Git: where a
+    `.git` entry exists but git reads no repository, the result is a problem, never "no repository" (T-024 F15)."""
+    snap: dict[str, Any] | None = git_ledger().snapshot(cwd, timeout)
+    if snap is None:
+        found = repository_evidence(cwd)
+        if found is not None:
+            return {"problem": f"git reads no repository at {Path(cwd).as_posix()} although {found.as_posix()} exists"}
+    return snap
+
+
+def settled_snapshot(
+    cwd: str | Path, since: float, timeout: float
+) -> tuple[dict[str, Any] | None, float, float, list[str]]:
+    """Read the state while no orchestrator write runs (round 6, class M; F14 for the first reading): read it, wait
+    for orchestrator writes begun in [since, end of the reading] to reach the ledger, and read again when one was
+    pending or still running during the reading. All waits share `timeout`; past it the last reading is returned with
+    the writes that did not settle. Returns (state, reading start, reading end, unsettled write ids)."""
+    gl = git_ledger()
+    deadline = time.monotonic() + timeout
+    while True:
+        read_start = time.time()
+        snap = git_snapshot(cwd, int(timeout))
+        read_end = time.time()
+        busy = gl.settle(ROOT, since, read_end, max(0.0, deadline - time.monotonic()))
+        busy += gl.overlapping(gl.entries(ROOT), read_start, read_end)
+        if not busy or time.monotonic() >= deadline:
+            return snap, read_start, read_end, sorted(set(busy))
+
+
+def git_changes(
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+    window: tuple[float, float] = (0.0, 0.0),
+    session: str | None = None,
+    until: float | None = None,
+) -> list[str]:
+    """The turn's Git changes that the orchestrator's ledger does not explain (round 5, class J)."""
+    gl = git_ledger()
+    return gl.unexplained(before, after, window, gl.entries(ROOT), session, until)
+
+
+def turn_git_changes(worker: dict[str, Any], before: dict[str, Any] | None, t0: float, timeout: int) -> list[str]:
+    """After a turn (its processes have ended): the changes nobody but the worker explains, judged on a state read
+    while no orchestrator write was running (round 6, class M). Each round reads the state, waits for orchestrator
+    writes begun since the turn started to reach the ledger, and reads again when a write was pending or still
+    running during the reading (it may show an intermediate state no entry chains to). All waits share one bound,
+    `git_timeout_seconds`; past it the turn is judged on the last reading and the reason names the unsettled write."""
+    t1 = time.time()
+    after, _, read_end, busy = settled_snapshot(worker["cwd"], t0, timeout)
+    changes = git_changes(before, after, (t0, t1), worker.get("session_id"), read_end)
+    if busy and changes:
+        changes.insert(
+            0,
+            f"orchestrator Git write(s) {', '.join(busy)} begun during the turn did not settle within "
+            f"{timeout} s (git_timeout_seconds), so the state was judged mid-write",
+        )
+    return changes
+
+
+def open_git_audit(name: str, worker: dict[str, Any], log: Path, timeout: int) -> dict[str, Any]:
+    """Before the turn's process starts: read the starting state once no orchestrator write runs (F14; writes begun
+    at any earlier time count, since one may straddle the start), refuse a repository git cannot read (F15), and
+    persist that state in the protected state directory and pin its id and hash on the registry entry (F16, CX2), so
+    a launcher that dies before the audit, or a removed or changed file, leaves a finding."""
+    snap, read_start, _, busy = settled_snapshot(worker["cwd"], 0.0, timeout)
+    if snap is not None and "problem" in snap:
+        mark_error(name, "error refused", worker["session_id"])
+        raise SystemExit(
+            f"worker {name}: the Git state at {worker['cwd']} could not be read before the turn ({snap['problem']}); "
+            "the turn was not started (only a directory with no repository runs without a snapshot)"
+        )
+    audit = {
+        "id": uuid.uuid4().hex,
+        "t0": read_start,
+        "before": snap,
+        "unsettled": busy,
+        "timeout": timeout,
+        "session_id": worker["session_id"],
+        "log": log.name,
+    }
+    text = json.dumps(audit, sort_keys=True)
+    audit["sha256"] = sha256_text(text)
+    try:
+        audit_dir().mkdir(parents=True, exist_ok=True)
+        with audit_path(audit["id"]).open("x", encoding="utf-8") as out:
+            out.write(text)
+    except OSError as exc:
+        mark_error(name, "error refused", worker["session_id"])
+        raise SystemExit(f"worker {name}: the turn's starting Git state could not be saved ({exc})") from None
+    pin = {"id": audit["id"], "log": log.name, "sha256": audit["sha256"]}
+    if not update_entry(name, worker["session_id"], {"git_audit": pin}):
+        audit_path(audit["id"]).unlink(missing_ok=True)
+        raise SystemExit(f"worker {name}: the registry entry changed before the turn; the turn was not started")
+    return audit
+
+
+def close_git_audit(
+    name: str,
+    worker: dict[str, Any],
+    audit: dict[str, Any],
+    leftovers: list[str],
+    result_file: Path,
+    failure: BaseException | None,
+) -> list[str]:
+    """After every exit of the turn (its processes already stopped, F17): judge the Git changes and persist the flag on
+    the registry entry before anything else is written (F16). A failed audit or a process that outlived the stop is
+    itself a flag (fail closed). After a failure the entry also leaves `busy` and the result file gets the section."""
+    try:
+        changes = turn_git_changes(worker, audit["before"], audit["t0"], audit["timeout"])
+    except Exception as exc:  # the turn's own exception, if any, still propagates
+        changes = [f"the Git audit after the turn failed ({type(exc).__name__}: {exc})"]
+    if audit["unsettled"] and changes:
+        changes.insert(
+            0,
+            f"orchestrator Git write(s) {', '.join(audit['unsettled'])} still ran {audit['timeout']} s "
+            "(git_timeout_seconds) into the turn start, so the starting state may be mid-write",
+        )
+    changes += [f"a process of the turn outlived its stop, so Git may change after the audit: {p}" for p in leftovers]
+    start = audit_path(audit["id"])
+    try:
+        intact = sha256_text(start.read_text(encoding="utf-8")) == audit["sha256"]
+    except OSError:
+        intact = False
+    if not intact:  # the judgement above used the in-memory state; the evidence itself was tampered with
+        changes.append(f"the start state of turn {audit['log']} was removed or changed during the turn")
+    owned = False
+    if changes or failure is not None:
+        with RegistryLock():
+            data = load()
+            w = data.get(name)
+            owned = isinstance(w, dict) and w.get("session_id") == worker["session_id"]
+            if owned:
+                if changes:
+                    w["git_changes"] = [*w.get("git_changes", []), *changes][-50:]
+                    w["status"] = GIT_HISTORY_CHANGED
+                if failure is not None:
+                    for key in (*PROCESS_KEYS, "current_log", "git_audit"):
+                        w.pop(key, None)
+                    if w.get("status") == "busy":
+                        w["status"] = f"error {type(failure).__name__}"
+                save(data)
+            elif changes:
+                print(f"WARNING: worker {name}: registry entry changed during the turn; Git flag not recorded",
+                      file=sys.stderr)
+    if changes:
+        print(f"WARNING: the turn changed Git refs or reflogs: {'; '.join(changes[:5])}", file=sys.stderr)
+        if failure is not None:
+            with contextlib.suppress(OSError):
+                append_git_section(result_file, changes)
+    # The flag, if any, is recorded. After a failure the registry no longer pins the audit: drop the file. Otherwise
+    # mark it closed; the turn's final registry update drops the pin and the file (finish_git_audit).
+    if failure is not None and owned:
+        start.unlink(missing_ok=True)
+    elif intact:
+        os.replace(start, audit_path(audit["id"], "closed"))
+    return changes
+
+
+def finish_git_audit(w: dict[str, Any]) -> str | None:
+    """In the turn's final registry update: drop the audit pin; returns the id whose closed file to delete after
+    the save."""
+    pin = w.pop("git_audit", None)
+    return pin.get("id") if isinstance(pin, dict) and isinstance(pin.get("id"), str) else None
+
+
+def drop_closed_audit(audit_id: str | None) -> None:
+    if audit_id and AUDIT_ID.fullmatch(audit_id):
+        audit_path(audit_id, "closed").unlink(missing_ok=True)
+
+
+def append_git_section(result_file: Path, changes: list[str]) -> None:
+    with result_file.open("a", encoding="utf-8") as out:
+        out.write(
+            "\n\n## git_history_changed (cli_worker turn snapshot, T-024)\n\n" + "".join(f"- {c}\n" for c in changes)
+        )
+
+
+def flag_history_change(w: dict[str, Any], changes: list[str], result_file: Path) -> bool:
+    """After the result text: add the turn's Git changes (already persisted on the registry entry by
+    close_git_audit) to the result file, and keep the entry's status flagged (sticky until the PM retires the
+    worker); True when the entry is flagged."""
+    if changes:
+        append_git_section(result_file, changes)
+    if w.get("git_changes"):
+        w["status"] = GIT_HISTORY_CHANGED
+        return True
+    return False
 
 
 def status_rows(include_retired: bool) -> list[dict[str, Any]]:
@@ -1199,6 +1869,12 @@ def status_rows(include_retired: bool) -> list[dict[str, Any]]:
             "profile": w.get("profile"),
             "last_used": w.get("last_used"),
         }
+        if w.get("git_changes"):
+            row["git_changes"] = w["git_changes"]  # T-024 round 4: refs or reflogs a turn changed
+        if not (w.get("status") == "busy" and entry_process_state(w, "launcher")[1] == ALIVE):
+            finding = audit_finding(w)
+            if finding:
+                row["git_audit_open"] = finding  # T-024 F16/CX2: the last turn has no proven Git audit; do not integrate
         if w.get("status") == "busy":
             # `*_alive` is True/False only when the identity is proven either way; None is "no PID" or "unknown"
             # (see `*_state`, which tells them apart).
@@ -1250,12 +1926,20 @@ def launch_turn(
     log: Path,
     timeout_minutes: float,
     stdin_file: Path | None = None,
+    leftovers: list[str] | None = None,
+    stop_seconds: float | None = None,
 ) -> int:
     """Run one worker turn's process, its output in `log`; returns the exit code (-9 after a timeout kill).
 
     The recorded PID and creation time make `send` refuse while the child runs, even if this launcher is killed;
-    a timeout or an interrupted launcher stops the child's whole process tree (sandbox children included)."""
+    a timeout or an interrupted launcher stops the child's whole process tree (sandbox children included). After
+    every exit (normal, error, interrupt, timeout) every process the turn started is stopped (F17, TurnContainment),
+    waiting at most `stop_seconds` (default: the validated git_timeout_seconds); what still runs is appended to
+    `leftovers`, which the turn's Git audit flags."""
+    bound = guard_config()["git_timeout_seconds"] if stop_seconds is None else stop_seconds
+    containment: TurnContainment | None = None
     try:
+        containment = TurnContainment()
         with log.open("w", encoding="utf-8") as out, contextlib.ExitStack() as stack:
             stdin = stack.enter_context(stdin_file.open("rb")) if stdin_file else subprocess.DEVNULL
             proc = subprocess.Popen(
@@ -1266,7 +1950,9 @@ def launch_turn(
                 stderr=subprocess.STDOUT,
                 stdin=stdin,
                 start_new_session=os.name != "nt",
+                creationflags=containment.creationflags(),
             )
+            containment.adopt(proc)
             created = own_start(proc.pid)
             recorded: dict[str, Any] = {"worker_pid": proc.pid}
             if created is not None:
@@ -1288,6 +1974,16 @@ def launch_turn(
         # A launcher that dies here (missing executable, Ctrl-C) must not leave the worker `busy` forever.
         mark_error(name, f"error {type(exc).__name__}", worker["session_id"])
         raise
+    finally:
+        if containment is not None:
+            try:
+                problems = containment.close(bound)
+            except Exception as exc:  # never mask the turn's own exception; the audit flags the gap
+                problems = [f"the worker's processes could not be stopped ({type(exc).__name__}: {exc})"]
+            for problem in problems:
+                print(f"WARNING: {problem}", file=sys.stderr)
+            if leftovers is not None:
+                leftovers.extend(problems)
     return rc
 
 
@@ -1442,8 +2138,21 @@ def run_codex_turn(
     home, stale = Path(cx["home"]), worker["_usage"]["stale_minutes"]
     session_file_limit = worker["_usage"]["session_file_limit"]
     before = snap.ledger_usage(snap.codex_snapshot(home, time.time(), stale, session_file_limit))
+    git_timeout = guard_config()["git_timeout_seconds"]
+    audit = open_git_audit(name, worker, log, git_timeout)
     started = time.monotonic()
-    rc = launch_turn(name, worker, cmd, env, log, timeout_minutes, stdin_file=prompt_file)
+    survivors: list[str] = []
+    failure: BaseException | None = None
+    try:
+        rc = launch_turn(
+            name, worker, cmd, env, log, timeout_minutes, stdin_file=prompt_file, leftovers=survivors,
+            stop_seconds=git_timeout,
+        )
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        git_changed = close_git_audit(name, worker, audit, survivors, result_file, failure)
     seconds = time.monotonic() - started
     leftovers = clean_scratch(cx, worker["cwd"])
     if leftovers:
@@ -1507,13 +2216,18 @@ def run_codex_turn(
             thread_id=thread_id,
             minutes_last_turn=round(seconds / 60, 1),
         )
+        if flag_history_change(w, git_changed, result_file):
+            ok = False
+            problems.append(GIT_HISTORY_CHANGED)
         if given is not None:
             w["codex_usage_total"] = given
             w.pop("codex_usage_gap", None)
         else:
             # This turn's tokens will arrive inside a later cumulative total.
             w["codex_usage_gap"] = gap + 1
+        audit_done = finish_git_audit(w)
         save(data)
+    drop_closed_audit(audit_done)
     record_ledger(
         {**worker, "thread_id": thread_id},
         name,
@@ -1549,15 +2263,27 @@ def run_turn(
     log = job_dir / f"{log_number:03d}.jsonl"
     result_file = job_dir / f"{log_number:03d}.result.md"
     cmd = build_command(worker, message, resume)
+    git_timeout = guard_config()["git_timeout_seconds"]
+    audit = open_git_audit(name, worker, log, git_timeout)
     started = time.monotonic()
-    rc = launch_turn(
-        name,
-        worker,
-        cmd,
-        child_env(worker.get("cache_ttl", "1h"), worker.get("autocompact_window")),
-        log,
-        timeout_minutes,
-    )
+    survivors: list[str] = []
+    failure: BaseException | None = None
+    try:
+        rc = launch_turn(
+            name,
+            worker,
+            cmd,
+            child_env(worker.get("cache_ttl", "1h"), worker.get("autocompact_window")),
+            log,
+            timeout_minutes,
+            leftovers=survivors,
+            stop_seconds=git_timeout,
+        )
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        git_changed = close_git_audit(name, worker, audit, survivors, result_file, failure)
     result, context, cost = None, None, None
     model_usage: dict[str, Any] = {}
     first_read = None
@@ -1602,7 +2328,12 @@ def run_turn(
             last_model_usage=model_usage,
             minutes_last_turn=round((time.monotonic() - started) / 60, 1),
         )
+        flagged = flag_history_change(w, git_changed, result_file)
+        audit_done = finish_git_audit(w)
         save(data)
+    drop_closed_audit(audit_done)
+    if flagged:
+        rc = rc or 1  # the PM reviews the changed refs before integrating this worktree
     # Claude usage windows are a PM-written file, not collected per turn: before/after stay null (documented).
     record_ledger(
         worker,
@@ -1718,8 +2449,8 @@ def main() -> int:
         "--git-guard",
         choices=GIT_GUARD_MODES,
         default="readonly",
-        help="readonly: read-only git; merge: also `git merge --no-commit --no-ff` and `git add` in --cwd (a worktree "
-        "under .tmp/worktrees/); default %(default)s",
+        help="readonly: read-only git, the only mode (workers never commit, push or merge, decision 77); "
+        "default %(default)s",
     )
     s.add_argument(
         "--task-file",
@@ -1890,6 +2621,8 @@ def main() -> int:
     message = Path(a.message_file).read_text(encoding="utf-8-sig")
     lint_gate(a.cmd, a.name, message, a.lint_waive)
     usage_settings = turn_usage_settings(a, codex_start)
+    unaudited: list[str] = []
+    proven: list[str] = []
     with RegistryLock():
         data = load()
         if a.cmd == "start":
@@ -1911,13 +2644,6 @@ def main() -> int:
                 raise SystemExit("cwd must be inside the project root")
             worktrees = (ROOT / guard_config()["git_guard"]["worktrees_dir"]).resolve()
             task_file = validate_task_file(a.task_file, cwd, worktrees)
-            if a.git_guard == "merge":
-                if a.tool_guard != "on":
-                    raise SystemExit("--git-guard merge needs --tool-guard on")
-                if not cwd.is_relative_to(worktrees) or cwd == worktrees:
-                    raise SystemExit(
-                        f"--git-guard merge needs --cwd inside a worktree under {worktrees}"
-                    )
             if codex_start is not None:
                 # A fresh binding: new registry id, no thread id until the first turn reports one (a retired name
                 # restarted never resumes its predecessor's thread).
@@ -1958,6 +2684,17 @@ def main() -> int:
                     raise SystemExit(f"worker {a.name} is not available")
                 # The launcher and its child are gone without recording the end of the turn: resumable.
                 print(f"WARNING: {a.name} was busy but its launcher (pid {pid}) is gone; resuming")
+            finding = audit_finding(w)
+            pinned = w.get("git_audit")
+            if finding:
+                # T-024 F16/CX2: a turn without a proven Git audit is judged as changing Git (fail closed); its start
+                # state, if any, stays in the state directory as `<id>.flagged.json` for the PM's review.
+                w["git_changes"] = [*w.get("git_changes", []), f"{finding}; compare it by hand"][-50:]
+                print(f"WARNING: {a.name}: {finding}: flagged {GIT_HISTORY_CHANGED}", file=sys.stderr)
+            # Counted once: the pin leaves the entry; a proven audit's closed file goes, unproven evidence is kept.
+            w.pop("git_audit", None)
+            if isinstance(pinned, dict) and isinstance(pinned.get("id"), str) and AUDIT_ID.fullmatch(pinned["id"]):
+                (unaudited if finding else proven).append(pinned["id"])
             if a.effort:
                 w["effort"] = (
                     sibling("codex_backend").validate_effort("--effort", a.effort)
@@ -1993,19 +2730,30 @@ def main() -> int:
         if launcher_created is not None:
             w["launcher_created"] = launcher_created
         save(data)
+        for audit_id in proven:
+            drop_closed_audit(audit_id)
+        for audit_id in unaudited:  # flagged and saved: whatever evidence exists is kept under a name not read again
+            for state in ("open", "closed"):
+                if audit_path(audit_id, state).exists():
+                    os.replace(audit_path(audit_id, state), audit_path(audit_id, "flagged"))
     timeout = (
         a.timeout_minutes
         if a.timeout_minutes is not None
         else w.get("timeout_minutes", DEFAULT_TIMEOUT_MINUTES)
     )
-    return run_turn(
-        a.name,
-        {**w, "_usage": usage_settings},
-        message,
-        resume=a.cmd == "send",
-        timeout_minutes=timeout,
-        log_number=log_number,
-    )
+    try:
+        return run_turn(
+            a.name,
+            {**w, "_usage": usage_settings},
+            message,
+            resume=a.cmd == "send",
+            timeout_minutes=timeout,
+            log_number=log_number,
+        )
+    except BaseException as exc:
+        # T-024 F16: whatever fails after the entry was marked busy, it never stays busy (a flag stays the status).
+        mark_error(a.name, f"error {type(exc).__name__}", w["session_id"], only_busy=True)
+        raise
 
 
 def claude_entry(a: argparse.Namespace, cwd: Path, task_file: str | None) -> dict[str, Any]:

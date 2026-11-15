@@ -11,7 +11,7 @@ never read into the digest. Secrets typed into a message are masked (known key s
 `.secrets` directory is never opened. `--since` defaults to the date of the newest `audit-YYYY-MM-DD*.md` in the
 audit directory, else `--default-days` days ago. A digest over `--max-total-chars` keeps the newest messages and
 says so on its first line. The digest goes under the project root (default
-`.tmp/pm-state/audit/user-words-<date>.md`); nothing else is written. Standard library only.
+`.tmp/audit/user-words-<date>.md`); nothing else is written. Standard library only.
 """
 
 from __future__ import annotations
@@ -26,7 +26,8 @@ from pathlib import Path
 from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parents[2]
-AUDIT_REL = Path(".tmp") / "pm-state" / "audit"
+# Outside the state directory: T-024 refuses worker and shell writes there, and the audit worker writes its report here.
+AUDIT_REL = Path(".tmp") / "audit"
 AUDIT_NAME = re.compile(r"audit-(\d{4}-\d{2}-\d{2})")
 # Key shapes that must never reach the audit agent (a pasted credential): provider prefixes and bearer tokens.
 SECRET = re.compile(

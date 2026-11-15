@@ -29,6 +29,7 @@ def pt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     (project / ".tmp" / "worktrees").mkdir(parents=True)
     monkeypatch.setattr(module, "PROJECT", project)
     monkeypatch.setattr(module, "ARCHIVE", project / ".tmp" / "pm-archive")
+    monkeypatch.delenv("AGENT_WORKFLOW_STATE_DIR", raising=False)  # hermetic: the default state directory
     return module
 
 
@@ -268,6 +269,17 @@ def test_gemini_results_are_protected_but_other_agy_work_is_not(pt: ModuleType) 
     assert not (tmp / "agy-work" / "scratch-1").exists()
 
 
+def test_audit_reports_are_protected_but_a_nested_audit_folder_is_not(pt: ModuleType) -> None:
+    tmp = pt.PROJECT / ".tmp"
+    (tmp / "audit").mkdir()
+    (tmp / "audit" / "audit-2026-11-15.md").write_text("report", encoding="utf-8")
+    (tmp / "scratch" / "audit").mkdir(parents=True)
+    assert pt.purge_children(str(tmp), ["audit"]) == 1
+    assert (tmp / "audit" / "audit-2026-11-15.md").exists()
+    assert pt.purge_children(str(tmp), ["scratch"]) == 0
+    assert not (tmp / "scratch").exists()
+
+
 @pytest.mark.parametrize("name", ["pm-state", "pm-archive", "cli-jobs", "runs"])
 def test_a_protected_name_given_as_the_target_is_refused(pt: ModuleType, name: str) -> None:
     target = pt.PROJECT / ".tmp" / name
@@ -359,6 +371,24 @@ def test_main_returns_one_when_archive_remove_refuses(pt: ModuleType) -> None:
     write_registry(pt.PROJECT, busy_worker(wt))
     assert pt.main(["archive-remove", str(wt)]) == 1
     write_registry(pt.PROJECT, {})
+    assert pt.main(["archive-remove", str(wt)]) == 0
+
+
+def test_ownership_follows_the_state_directory_override(
+    pt: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The hooks and cli_worker read AGENT_WORKFLOW_STATE_DIR; purge must see the same registry.
+    wt = make_worktree(pt.PROJECT)
+    write_registry(pt.PROJECT, {})  # the default location says idle
+    moved = tmp_path / "moved-state"
+    moved.mkdir()
+    (moved / "cli-workers.json").write_text(json.dumps(busy_worker(wt)), encoding="utf-8")
+    monkeypatch.setenv("AGENT_WORKFLOW_STATE_DIR", str(moved))
+    assert pt._worker_registry() == moved / "cli-workers.json"
+    assert pt.main(["archive-remove", str(wt)]) == 1
+    assert wt.exists()
+    monkeypatch.delenv("AGENT_WORKFLOW_STATE_DIR")
+    assert pt._worker_registry() == pt.PROJECT / ".tmp" / "pm-state" / "cli-workers.json"
     assert pt.main(["archive-remove", str(wt)]) == 0
 
 

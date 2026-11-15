@@ -321,6 +321,8 @@ def test_run_turn_records_the_worker_creation_time_and_stops_only_that_identity(
 ) -> None:
     seen: list[object] = []
     stopped: list[tuple[int, float | None]] = []
+    # Test double: `Popen` is faked below, so the turn snapshot (T-024 round 4, own tests) is not taken.
+    monkeypatch.setattr(cw, "git_snapshot", lambda cwd, timeout: None)
 
     class FakeProc:
         pid = 777777

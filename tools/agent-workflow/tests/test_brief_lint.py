@@ -391,7 +391,7 @@ def test_an_invalid_class_set_file_is_refused_with_a_precise_message(tmp_path: P
     path = write_sets(tmp_path, data)
     with pytest.raises(bl.ClassSetsConfigError, match=expected.replace("(", r"\(").replace(")", r"\)")):
         bl.load_class_sets(path)
-    # The lint turns the refusal into a blocking finding, since cli_worker only warns on a linter crash.
+    # The lint turns the refusal into a precise finding instead of a crash (cli_worker refuses on a linter crash).
     message = sets_message(brief("code", SETS), path)
     assert message.startswith("the class test sets cannot be loaded") and expected in message
 
@@ -665,15 +665,15 @@ def test_a_clean_brief_with_a_waiver_logs_nothing(cw: ModuleType, tmp_path: Path
     assert not (tmp_path / ".tmp" / "pm-state" / "lint-waivers.jsonl").exists()
 
 
-def test_a_crashing_linter_warns_loudly_and_does_not_block(
-    cw: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+def test_a_crashing_linter_refuses_and_is_logged(
+    cw: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def boom(*args: object, **kwargs: object) -> None:
         raise RuntimeError("x")
 
     monkeypatch.setattr(cw.importlib.util, "spec_from_file_location", boom)
-    cw.lint_gate("start", "w", "anything", None)
-    assert "brief lint crashed (RuntimeError)" in capsys.readouterr().err
+    with pytest.raises(SystemExit, match=r"brief lint crashed \(RuntimeError: x\)"):
+        cw.lint_gate("start", "w", "anything", None)
     row = json.loads(
         (tmp_path / ".tmp" / "pm-state" / "lint-waivers.jsonl")
         .read_text(encoding="utf-8")

@@ -3,11 +3,24 @@
 Checks (each with a mode in guard_config.json: block, warn or off):
 - tool_broken: a tool flagged by the harness-error streak (tool_monitor.py) is blocked until reset.
 - write_guard: shell writes only under the configured allowlist (today `.tmp/`, `runs/`) of the innermost work tree.
-- git_guard: `--git-mode pm` blocks force pushes and pushing aliases; `worker` allows read-only git only;
-  `worker-merge --worktree D` also allows `merge` and `add` inside that worktree.
+- git_guard (decision 77, T-024 round 2): both modes allow the read-only allowlist; `--git-mode pm` (the
+  orchestrator) adds an allowlist of plain write forms (`WRITE_FORMS`: add, commit -m/-F, push <remote> <branch>,
+  revert --no-edit, pull --ff-only, fetch, reset/restore of paths, apply, worktree add/remove/prune, branch -d) from
+  the main working tree, and `git add`/`git apply` and the patch save (`diff --cached --binary --output=<patch_dir
+  file>`) in a worker worktree. Everything else is refused, so no alias, option spelling, launcher or environment
+  opens a history write. Round 3: a git call whose words the shell expands at run time is refused in both modes
+  (class E); a write form has nothing before `git`; git under a wrapper, given to another program or named in inline
+  interpreter code is refused in both modes (class F); the main tree and worker worktrees are proven by the Git
+  directories git resolves, not by the toplevel (class G).
 - push_guard (`--git-mode pm`): `git push` is blocked unless `<marker_dir>/<full HEAD id of the pushing repository>`
-  exists (written by prepush_mark.py after the lint is clean); `--dry-run`, an undeterminable repository and the
-  check's own errors pass.
+  exists (written by prepush_mark.py when prepush_check.py is clean) and HEAD is `refs/heads/<push_branch>`, so the
+  branch tip sent is the checked HEAD (class H); `--dry-run` passes; an undeterminable repository, HEAD or branch and
+  the check's own errors refuse the push (T-024 final, PD2).
+- write_guard in worker mode (T-024 final): the whole state directory (`git_ledger.ledger_dir(root).parent`) is
+  protected (PD1); an argument of a program the guard does not model may not resolve into or above it (F06); archive
+  options that keep absolute member names are refused (F07); links are judged at both ends and a write through a
+  place another part of the command may turn into a link is refused (F27). git_guard in worker mode refuses read-only
+  options and `-c` settings that run configured helper programs (F08).
 - inline_interp: no multi-line or long `python -c`/`node -e`, no interpreter reading its program from stdin.
 - pytest_slot: pytest runs only through a configured launcher (test_slot.py).
 - read_router (warn): file reads, Select-String and recursive listings that the Read/Grep/Glob tools do better.
@@ -22,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fnmatch
 import json
 import os
 import re
@@ -31,9 +45,10 @@ import traceback
 import unicodedata
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import git_ledger as gl
 import guard_config as gc
 import process_guard as pg
 import shell_targets as st
@@ -51,11 +66,12 @@ NEVER_BLOCKED = {
     "Grep",
     "Glob",
 }  # safety-bound: the repair path always stays open
-GIT_MODES = ("pm", "worker", "worker-merge")
+GIT_MODES = ("pm", "worker")
 LOG = pg.STATE_DIR / "tool-guard.log"
 CRASH_LOG = pg.STATE_DIR / "guard-crash.log"
 
 GIT_TRIGGER = re.compile(r"(?i)git")
+PUSH_TRIGGER = re.compile(r"(?i)\bpush\b")
 HEAD_MOVERS = {
     *("commit", "merge", "pull", "rebase", "reset", "cherry-pick", "am", "revert"),
     *("checkout", "switch", "stash", "bisect", "update-ref", "symbolic-ref"),
@@ -177,14 +193,27 @@ GIT_VALUE_GLOBALS = {
     "--list-cmds",
     "--attr-source",
 }
-MERGE_STRATEGIES = {
-    "ort",
-    "recursive",
-    "resolve",
-    "octopus",
-    "ours",
-    "subtree",
-}  # git-merge(1) built-ins
+# Orchestrator (`--git-mode pm`) writes, decision 77 and T-024 round 2: an allowlist of plain forms, like the worker's
+# read-only allowlist. A git call that is neither read-only nor one of these forms is refused (safety-bound).
+MAIN_TREE_FORMS = (
+    *("add", "commit", "push", "revert", "pull", "fetch"),
+    *("reset", "restore", "apply", "worktree", "branch"),
+)
+WORKER_TREE_FORMS = ("add", "apply")  # in a worker worktree the orchestrator only stages or applies a patch
+# Subcommands that change history or refs: an opaque command (`& $g rebase`, a name built at run time) carrying one
+# of them is refused in pm mode.
+PM_HISTORY_WORDS = re.compile(
+    r"(?i)\b(?:push|commit|merge|rebase|reset|cherry-pick|revert|am|pull|fetch|tag|branch|update-ref|symbolic-ref"
+    r"|filter-branch|filter-repo|fast-import|replace|reflog|notes|checkout|switch|worktree)\b"
+)
+GIT_ENV_RAW = re.compile(r"(?i)\benv:\s*GIT_")  # `Set-Item 'env:GIT_DIR'`: the variable name may sit in quotes
+GIT_WORD = re.compile(r"(?i)(?<![\w-])git(?!\w)")  # `git`, `git.exe`, `/usr/bin/git`, `git-commit`; not `digit`
+# Programs that run another command line given as their arguments; with `git` in those arguments they are refused in
+# both modes, because the guard does not read the inner line through them (review R2, safety-bound).
+LAUNCHERS = {
+    *("bash", "sh", "zsh", "dash", "ksh", "fish", "cmd", "pwsh", "powershell", "wsl", "xargs"),
+    *("start-process", "saps", "start", "invoke-expression", "iex"),
+}
 CONFIG_READ_FLAGS = {
     *(
         "--get",
@@ -246,7 +275,27 @@ LIST_VALUE_FLAGS = {
     "--sort",
     "--format",
 }
-REFLOG_WRITES = {"expire", "delete", "drop"}
+# git-reflog(1): "show" is the default subcommand; "list" and "exists" only read; "expire", "delete", "drop" and
+# "write" change reflogs. Only the reading forms pass (T-024 round 3, item 6; safety-bound).
+REFLOG_READS = {"show", "list", "exists"}
+# Words that start a command without changing the argv of the command after them (shell grammar, protocol-bound).
+SHELL_KEYWORDS = {"then", "do", "else", "elif", "if", "while", "until", "!"}
+# Programs that only read or print their arguments: a `git` word given to one of them is data, not a program it
+# runs (T-024 round 3, class F). Any other program given a `git` word may run it and is refused (safety-bound).
+READ_ONLY_PROGRAMS = {
+    *("echo", "printf", "write-output", "write-host", "which", "where", "get-command", "gcm", "type"),
+    *("grep", "egrep", "fgrep", "rg", "findstr", "select-string", "sls"),
+}
+# A revision word of the `revert` and `worktree add` forms: a ref name or object id with optional `~<n>`/`^<n>`
+# parent suffixes (gitrevisions(7)); no range, reflog selector, `:path` or option (T-024 round 3, item 8).
+REVISION = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*(?:[~^]\d*)*")
+# Characters through which a shell changes a word after the guard read it (T-024 round 3, class E). Bash: parameter,
+# command and arithmetic expansion (`$`, backtick) also inside double quotes; outside quotes pathname (`*?[`) and brace
+# expansion, and tilde expansion at the start of a word. PowerShell: variables and subexpressions (`$`, backtick
+# escapes) also in double-quoted and here-strings; outside quotes splatting (`@name`), arrays (`,`), script blocks and
+# subexpressions; Windows PowerShell 5.1 passes embedded `"` to native programs unescaped. cmd: `%`, `!`, `^`, `"`.
+RUN_TIME_ANY = {"bash": "$`", "ps": '$`"', "cmd": '%!^"'}
+RUN_TIME_UNQUOTED = {"bash": "*?[{", "ps": "@(){},;", "cmd": ""}
 
 READ_HEADS = {"get-content", "gc", "cat", "type"}
 READ_FILTERS = {
@@ -277,6 +326,8 @@ READ_FILTERS = {
     *("out-host", "oh", "findstr", "sort-object"),
 }
 LISTING_HEADS = {"get-childitem", "gci", "dir", "ls", "childitem"}
+# F06: programs that only read or print their arguments; any other program may write below a path it is given.
+PROBE_EXEMPT = READ_ONLY_PROGRAMS | READ_HEADS | LISTING_HEADS
 DOTNET_READ = re.compile(r"\[\s*(?:System\.)?IO\.File\s*\]\s*::\s*ReadAll(?:Text|Lines)\b", re.I)
 DOTNET_READ_CAPTURED = re.compile(
     r"(?:\$[\w:]+\s*=|\(|\|)\s*\[\s*(?:System\.)?IO\.File\s*\]\s*::\s*ReadAll(?:Text|Lines)\b", re.I
@@ -296,9 +347,11 @@ class Context:
         cwd = event.get("cwd")
         self.cwd = Path(cwd if isinstance(cwd, str) and cwd else os.getcwd())
         self.trigger_text = st.trigger_text(self.command)
+        self.ledger = False  # pm mode: an orchestrator write form was allowed, so git_ledger.begin() records it
         self._walk: st.Walk | None = None
         self._writes: st.Writes | None = None
         self._opaque: list[tuple[str, str]] | None = None
+        self.root_identity: GitIdentity | bool | None = None  # the project's own repository; False: git cannot tell
 
     def walk(self) -> st.Walk:
         if self._walk is None:
@@ -349,11 +402,24 @@ def check_write(ctx: Context) -> list[str]:
     for cmd in walked.cmds:
         if cmd.head is not None and cmd.name in ALIAS_HEADS and triggered:
             reasons.append(f"`{cmd.name}` defines a command in a command that writes")
-    if not writes.targets:
+    worker = ctx.args.git_mode != "pm"
+    if not writes.targets and not (worker and writes.probes):
         return reasons
     bases = ctx.bases()
+    # T-024 round 5 and final (PD1): a worker's shell never writes the orchestrator's state directory (the Git
+    # ledger that excuses ref changes, push markers, patches, the worker registry), derived as the ledger's parent.
+    protected = (gl.ledger_dir(ctx.root).parent,) if worker else ()
     policy = st.PathPolicy(
-        ctx.root, ctx.cfg["write_guard"]["allowed_dirs"], ctx.cfg["git_timeout_seconds"]
+        ctx.root, ctx.cfg["write_guard"]["allowed_dirs"], ctx.cfg["git_timeout_seconds"], protected
+    )
+    if worker:
+        reasons += _probe_reasons(writes, policy, bases)
+    # F27: (command, place, strictly below) where a command may leave a link. The walk does not keep the run order
+    # of substitutions, so a link from any other command of the line counts, before or after the write.
+    regions = (
+        [(t.group, top, strict) for t in writes.targets for top, strict in policy.link_regions(t, bases)]
+        if worker and bases is not None
+        else []
     )
     for target in writes.targets:
         if bases is None:
@@ -362,6 +428,9 @@ def check_write(ctx: Context) -> list[str]:
             )
             continue
         reason = policy.check(target, bases)
+        if not reason and regions:
+            others = [(top, strict) for group, top, strict in regions if group != target.group]
+            reason = policy.through_link(target, bases, others)
         if reason:
             reasons.append(reason)
     if reasons:
@@ -373,9 +442,32 @@ def check_write(ctx: Context) -> list[str]:
     return reasons
 
 
+def _probe_reasons(writes: st.Writes, policy: st.PathPolicy, bases: list[Path] | None) -> list[str]:
+    """F06 (worker mode): a program the guard does not model may write below any path it is given, so no argument
+    of a command (other than the command's own modelled targets, judged by the path policy) may resolve into, onto
+    or above the protected state directory. Programs that only read or print their arguments are exempt."""
+    reasons: list[str] = []
+    for name, probe in writes.probes:
+        if name in PROBE_EXEMPT or _names_git(name):  # git: the git guard judges every git argument
+            continue
+        if bases is None:
+            if not st._is_absolute(probe.word):
+                reasons.append(
+                    f"`{name}` follows a `cd` to a run-time directory, so the guard cannot place its argument "
+                    f"`{probe.word[:60]}`"
+                )
+                break
+            reason = policy.check_protected(probe, [])
+        else:
+            reason = policy.check_protected(probe, bases)
+        if reason:
+            reasons.append(reason)
+    return list(dict.fromkeys(reasons))
+
+
 def _inside(path: Path, top: Path) -> bool:
-    here = os.path.normcase(os.path.realpath(path))
-    root = os.path.normcase(os.path.realpath(top))
+    here = st.fs_key(path)  # Win32 aliases folded (`.tmp/pm-state ./x`, streams, `\\?\`)
+    root = st.fs_key(top)
     return here == root or here.startswith(root.rstrip("\\/") + os.sep)
 
 
@@ -384,20 +476,6 @@ def _resolve_all(word: str, bases: list[Path]) -> list[Path] | None:
         return None
     path = Path(word)
     return [path] if path.is_absolute() else [b / word for b in bases]
-
-
-def _merge_worktree(ctx: Context) -> tuple[Path | None, str]:
-    """The merge job's worktree, or None with the reason merge/add are refused."""
-    if ctx.args.git_mode != "worker-merge":
-        return None, "only a merge job (`cli_worker.py start --git-guard merge`) may run it"
-    worktree = Path(ctx.args.worktree)
-    worktrees = ctx.root / ctx.cfg["git_guard"]["worktrees_dir"]
-    real = Path(os.path.realpath(worktree))
-    if not _inside(real, worktrees) or os.path.normcase(str(real)) == os.path.normcase(
-        os.path.realpath(worktrees)
-    ):
-        return None, f"the merge worktree {worktree} is not below {worktrees}"
-    return real, ""
 
 
 def _long_prefix(arg: str, full: str, minimum: int) -> bool:
@@ -462,8 +540,10 @@ def _readonly_args(sub: str, args: list[str]) -> str | None:
     for a in args:
         if _long_prefix(a, "--output", 4):
             return f"`git {sub} {a}` writes a file"
-    if sub == "merge-tree" and any(_long_prefix(a, "--write-tree", 4) for a in args):
-        return "`git merge-tree --write-tree` writes objects"
+    # git-merge-tree(1): "This command has a modern --write-tree mode and a deprecated --trivial-merge mode": the
+    # default writes objects and runs merge drivers; only the trivial mode reads.
+    if sub == "merge-tree" and "--trivial-merge" not in args:
+        return "`git merge-tree` without `--trivial-merge` writes objects (its default `--write-tree` mode)"
     if sub == "grep" and any(
         (a.startswith("-O") and not a.startswith("--"))
         or _long_prefix(a, "--open-files-in-pager", 4)
@@ -486,191 +566,561 @@ def _readonly_args(sub: str, args: list[str]) -> str | None:
             return None
         if positional or any(a not in ("-v", "--verbose") for a in args):
             return "`git remote` may only list (`-v`), `get-url` or `show`"
-    if sub == "reflog" and positional[:1] and positional[0] in REFLOG_WRITES:
-        return f"`git reflog {positional[0]}` rewrites the reflog"
+    if sub == "reflog" and positional[:1] and positional[0] not in REFLOG_READS:
+        return f"`git reflog {positional[0]}`: only `git reflog [show|list|exists] [<options>] [<ref>]` reads"
     return None
 
 
-def _push_force(args: list[str]) -> str | None:
-    for a in args:
-        if a == "--":
-            break
-        if a.startswith("--"):
-            if any(
-                _long_prefix(a, full, 4) for full in ("--force", "--force-with-lease", "--mirror")
-            ):
-                return f"`git push {a}` rewrites remote history"
-        elif a.startswith("-") and len(a) > 1:
-            for ch in a[1:]:
-                if ch == "f":
-                    return f"`git push {a}` forces the push"
-                if ch == "o":
-                    break  # `-o <option>` takes the rest of the cluster
-    for a in args:  # refspecs may also follow `--`
-        if a.startswith("+"):
-            return f"`git push {a}`: a `+` refspec forces the update"
+# F08 (worker mode): options of read-only calls that run a program named by Git configuration or attributes.
+# git-diff(1) "--ext-diff: Allow an external diff helper to be executed", "--textconv: Allow (or disallow) external
+# text conversion filters to be run"; git-log(1) "--show-signature: ... passing the signature to gpg --verify";
+# git-cat-file(1) "--filters: Show the content as converted by the filters configured" (smudge filters).
+HELPER_OPTIONS = ("--ext-diff", "--textconv", "--show-signature", "--filters")
+HELPER_NOT_PREFIX = {"--text", "--filter"}  # real options that only look like abbreviations of a helper option
+# Format placeholders that verify signatures (pretty-formats.adoc:307-321 `%GG`, `%G?`, `%GS`, ...; ref-filter
+# `%(signature...)`). Review CX3: pretty-formats.adoc:381-391 "If you add a `+` (plus sign) after %", "`-` (minus sign)",
+# "`' '` (space) after % of a placeholder": the modifier sits between `%` and the placeholder. Scanned left to right,
+# so `%%` (a literal percent) is consumed first and `%%GG` stays readable.
+SIGNATURE_FORMAT = re.compile(r"%%|%[-+ ]?G|%[-+ ]?\(signature")  # case-sensitive: `%gs` is the reflog subject
+# git-help(1): "-w/--web: A web browser will be used", "-m/--man", "-i/--info": viewers named by `man.<tool>.cmd`,
+# `browser.<tool>.cmd`, `help.browser`. git-tag(1) "-v, --verify: Verify the cryptographic signature" (gpg.program).
+HELP_VIEWERS = (("--web", "w"), ("--man", "m"), ("--info", "i"))
+# `-c` keys whose value is a program, or that make git run one (git-config(1)); matched lower-cased, `*` is one
+# subsection. The config allowlist refuses them already; worker mode refuses them even when allowlisted.
+HELPER_CONFIG = (
+    *("core.fsmonitor", "core.pager", "core.editor", "core.sshcommand", "core.askpass", "core.hookspath"),
+    *("core.gitproxy", "diff.external", "diff.tool", "merge.tool", "sequence.editor", "help.browser"),
+    *("web.browser", "diff.*.command", "diff.*.textconv", "merge.*.driver", "filter.*", "pager.*", "credential.*"),
+    *("gpg.*", "difftool.*", "mergetool.*", "browser.*", "man.*", "remote.*", "url.*", "protocol.*"),
+)
+GIT_FALSE = {"false", "no", "off", "0", ""}  # git-config(1) boolean false spellings
+
+
+def _helper_reason(inv: GitInvocation) -> str | None:
+    """Why a read-only worker call may run a configured helper program (F08); None when it cannot."""
+    for setting in inv.configs:
+        key, sep, value = setting.partition("=")
+        key = key.lower()
+        if any(fnmatch.fnmatchcase(key, p) for p in HELPER_CONFIG):
+            return f"`git -c {key}` names a program git runs"
+        if key == "log.showsignature" and (not sep or value.strip().lower() not in GIT_FALSE):
+            return "`git -c log.showsignature` runs the configured gpg program"
+    args = inv.rest[: inv.rest.index("--")] if "--" in inv.rest else inv.rest
+    for k, a in enumerate(args):
+        name = a.split("=", 1)[0]
+        if len(name) >= 3 and name.startswith("--") and name not in HELPER_NOT_PREFIX:
+            hit = next((full for full in HELPER_OPTIONS if full.startswith(name)), None)
+            if hit:
+                return f"`git {inv.sub} {a}` runs a configured helper program ({hit})"
+        # Experiment abbrev.out: `git for-each-ref --f=...` and `git branch --form=...` are read as `--format`.
+        if name.startswith("--") and len(name) >= 3 and ("--format".startswith(name) or "--pretty".startswith(name)):
+            value = a.split("=", 1)[1] if "=" in a else (args[k + 1] if k + 1 < len(args) else "")
+            if any(m.group(0) != "%%" for m in SIGNATURE_FORMAT.finditer(value)):
+                return f"`git {inv.sub}` format `{value[:40]}` verifies signatures with the configured gpg program"
+    values = {k + 1 for k, a in enumerate(args) if a in LIST_VALUE_FLAGS}  # `--sort -v:refname` is a value
+    shorts = "".join(a[1:] for k, a in enumerate(args) if re.match(r"-[^-]", a) and k not in values)
+    if inv.sub == "help":
+        for full, letter in HELP_VIEWERS:
+            if letter in shorts or any(len(x) >= 3 and full.startswith(x.split("=")[0]) for x in args):
+                return f"`git help {full}` starts a viewer program named by the configuration"
+    # Experiment abbrev.out: `git tag --v` is `--verify`.
+    if inv.sub == "tag" and ("v" in shorts or any(len(x) >= 3 and "--verify".startswith(x.split("=")[0]) for x in args)):
+        return "`git tag --verify` runs the configured gpg program"
+    positional = [a for a in args if not a.startswith("-")]
+    if inv.sub == "remote" and positional[:1] == ["show"] and "-n" not in args:
+        # git-remote(1) `show`: "With -n option, the remote heads are not queried first with git ls-remote".
+        return "`git remote show` queries the remote (ssh, credential helper); add `-n`"
     return None
 
 
-def _git_alias(ctx: Context, name: str) -> tuple[str | None, str | None]:
-    """(alias text, error) from `git config --get alias.<name>` in the session's directory."""
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(ctx.cwd), "config", "--get", f"alias.{name}"],
-            capture_output=True,
-            timeout=ctx.cfg["git_timeout_seconds"],
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return None, type(exc).__name__
-    if proc.returncode == 1:
-        return None, None  # no such alias
-    if proc.returncode != 0:
-        return None, proc.stderr.decode("utf-8", "replace").strip()[
-            :120
-        ] or f"exit {proc.returncode}"
-    return proc.stdout.decode("utf-8", "replace").strip(), None
+def _git_env_set(ctx: Context) -> bool:
+    """The command sets a `GIT_*` variable (`X=y` prefix, `export`, `$env:`, `Set-Item env:`, SetEnvironmentVariable)."""
+    return any(
+        GIT_ENV.search(masked) or GIT_ENV_RAW.search(raw) for raw, masked, _shell in ctx.walk().texts
+    )
 
 
-def _git_command(cmd: st.Cmd, ctx: Context) -> str | None:
-    """Reason when this git invocation is not allowed in the session's git mode."""
-    mode = ctx.args.git_mode
+class GitInvocation(NamedTuple):
+    """One git call as git reads it (T-024 review class A); both modes decide from this only."""
+
+    sub: str | None  # the subcommand, lower-cased (`git-commit`, `git COMMIT` give `commit`); None without one
+    verbatim: str | None  # the subcommand as typed: a write form matches it exactly
+    rest: list[str]  # its arguments
+    dirs: list[Path] | None  # candidate repositories (start directory, `cd` targets, chained `-C`); None at run time
+    refusal: str | None  # why the read-only rules refuse its global options or subcommand spelling
+    not_plain: str | None  # why it is not a plain write call; None for literal `git`/`git.exe`, only `-C <path>`
+    configs: tuple[str, ...] = ()  # the `-c <key>[=<value>]` settings, as given
+
+
+def _run_time_word(word: pg.Word, shell: str) -> bool:
+    """The shell may turn this word into other or more argv entries than its text (class E): the guard then does not
+    know what git receives. Single and double quotes are not told apart, so `$` fails closed in both."""
+    text = str(word)
+    if any(ch in text for ch in RUN_TIME_ANY.get(shell, "")):
+        return True
+    if shell == "ps" and text == "--%":  # about_Parsing: the stop-parsing token passes the rest of the line raw
+        return True
+    unquoted = not word.literal  # some part of the word stood outside quotes
+    return unquoted and (
+        any(ch in text for ch in RUN_TIME_UNQUOTED.get(shell, ""))
+        or (shell == "bash" and text.startswith("~"))
+    )
+
+
+def _argv_unknown(cmd: st.Cmd) -> str | None:
+    """Why the argv git receives is not the words the guard read: a run-time word or a process substitution."""
+    for w in cmd.args:
+        if _run_time_word(w, cmd.shell):
+            return f"its argument `{str(w)[:40]}` is expanded by the shell at run time"
+    for r in cmd.redirects:
+        if r.op == "<" and r.target is not None and str(r.target).startswith("("):
+            return "a process substitution adds an argument at run time"
+    return None
+
+
+def _git_invocation(cmd: st.Cmd, ctx: Context, resolved: bool) -> GitInvocation:
+    """Normalise a git call: executable spelling, global options, repository selection. `resolved`: the program came
+    from a variable binding (`$g = 'git'; & $g ...`), so it is not a literal `git` word."""
     gg = ctx.cfg["git_guard"]
-    worker = mode != "pm"
     args = [str(a) for a in cmd.args]
-    bases = ctx.bases() or [ctx.cwd]
+    head = str(cmd.words[cmd.head]) if cmd.head is not None else ""
+    base = re.split(r"[\\/]", head)[-1]
+    prefix = [str(w) for w in cmd.words[: cmd.head or 0] if str(w).lower() not in SHELL_KEYWORDS]
+    not_plain: str | None = None
+    if resolved or st.RUN_TIME_CHARS.search(head):
+        not_plain = "its program is named at run time"
+    elif head not in ("git", "git.exe"):
+        not_plain = f"its program is `{head[:60]}`, not the word `git`"
+    elif prefix:  # class E: an assignment or wrapper (`X=y`, `env`, `timeout 9`) runs before git
+        not_plain = f"`{prefix[0][:40]}` comes before `git`"
+    elif _git_env_set(ctx):
+        not_plain = "the command sets a `GIT_*` variable"
+    # Class E (review R9): both modes validate options from the words; a word the shell expands may become any
+    # options, so the read-only rules and the write forms refuse it alike.
+    argv_unknown = _argv_unknown(cmd)
+    allowed_keys = {c.lower() for c in gg["allowed_config_keys"]}
     c_dirs: list[str] = []
-    k = 0
+    configs: list[str] = []
+    refusal: str | None = None
     sub: str | None = None
-    while k < len(args):
+    k = 0
+    program = GIT_PROGRAM.match(cmd.name)
+    if program:  # git(1) PATH: `git-<command>` is the program `git <command>` runs; it takes no global options
+        sub = program.group(1)
+    while sub is None and k < len(args):
         a = args[k]
         if a == "-c" or (a.startswith("-c") and not a.startswith("--") and len(a) > 2):
             value = args[k + 1] if a == "-c" and k + 1 < len(args) else a[2:]
+            configs.append(value)
             key = value.split("=", 1)[0].lower()
+            not_plain = not_plain or f"it sets `-c {key}`"
             if key.startswith("alias."):
-                return f"`git -c {value}` defines an alias"
-            if worker and key not in {c.lower() for c in gg["allowed_config_keys"]}:
-                return f"`git -c {key}` is not on the allowed config keys"
-            if not worker and ("push" in key or "mirror" in key):
-                return f"`git -c {key}` changes how push works"
+                refusal = refusal or f"`git -c {value}` defines an alias"
+            elif key not in allowed_keys:
+                refusal = refusal or f"`git -c {key}` is not on the allowed config keys"
             k += 2 if a == "-c" else 1
             continue
         if a == "-C":
             if k + 1 >= len(args):
-                return "`git -C` without a directory"
+                return GitInvocation(None, None, [], None, "`git -C` without a directory", "no directory")
             c_dirs.append(args[k + 1])
             k += 2
             continue
         if a.startswith("-"):
             name = a.split("=", 1)[0]
-            if name in GIT_SAFE_GLOBALS and not (name == "--exec-path" and "=" in a):
-                k += 1
-                continue
-            if worker:
-                if any(_long_prefix(name, full, 5) for full in GIT_REDIRECTING):
-                    return f"`git {a}` redirects the repository or git's programs"
-                return f"git global option `{a}` is not on the allowlist"
+            not_plain = not_plain or f"it uses the global option `{a}`"
+            if not (name in GIT_SAFE_GLOBALS and not (name == "--exec-path" and "=" in a)):
+                moves = any(_long_prefix(name, full, 5) for full in GIT_REDIRECTING)
+                refusal = refusal or (
+                    f"`git {a}` redirects the repository or git's programs"
+                    if moves
+                    else f"git global option `{a}` is not on the allowlist"
+                )
             k += 2 if name in GIT_VALUE_GLOBALS and "=" not in a else 1
             continue
         sub = a
         k += 1
-        break
     rest = args[k:]
-    if sub is None:
-        return None  # `git --version`, `git -C x` alone
-    if any(ch in sub for ch in "$`%(){}@") or not sub:
-        return f"git subcommand `{sub}` is computed at run time"
+    # git(1) `-C`: "each subsequent non-absolute -C <path> is interpreted relative to the preceding -C <path>".
+    dirs = ctx.bases()
     for c_dir in c_dirs:
-        paths = _resolve_all(c_dir, bases)
-        if paths is None:
-            if worker:
-                return f"`git -C {c_dir}` is a run-time directory"
-            continue
-        if worker and not all(_inside(p, ctx.root) for p in paths):
-            return f"`git -C {c_dir}` leaves the project root"
-    if not worker:
-        if sub == "push":
-            runtime = [a for a in rest if any(ch in a for ch in "$`%") or a.startswith("@")]
-            if runtime:
-                return f"`git push {runtime[0]}`: a run-time push argument may force the push"
-            return _push_force(rest)
-        if sub == "config":
-            return _config_alias(rest)
-        if sub not in gg["readonly_subcommands"] and sub not in gg["merge_subcommands"]:
-            alias, error = _git_alias(ctx, sub)
-            if error:
-                return f"cannot resolve whether `git {sub}` is an alias ({error})"
-            if alias and (alias.startswith("!") or re.search(r"\bpush\b", alias)):
-                return f"`git {sub}` is an alias that runs `{alias[:80]}`"
-        return None
-    if sub in gg["readonly_subcommands"]:
-        return _readonly_args(sub, rest)
-    if sub in gg["merge_subcommands"]:
-        worktree, why = _merge_worktree(ctx)
-        if worktree is None:
-            return f"`git {sub}` is not read-only: {why}"
-        dirs = [p for c in c_dirs for p in (_resolve_all(c, bases) or [])] or bases
-        if not all(_inside(d, worktree) for d in dirs):
-            return f"`git {sub}` must run inside the merge worktree {worktree}"
-        return _merge_args(sub, rest, dirs, worktree)
-    return f"`git {sub}` is not on the worker read-only allowlist"
+        dirs = _resolve_all(c_dir, dirs) if dirs is not None else None
+        if dirs is None:
+            refusal = refusal or f"`git -C {c_dir}` is a run-time directory"
+        elif not all(_inside(p, ctx.root) for p in dirs):
+            refusal = refusal or f"`git -C {c_dir}` leaves the project root"
+    if sub is not None and (not sub or any(ch in sub for ch in "$`%(){}@")):
+        refusal = f"git subcommand `{sub}` is computed at run time"
+    if argv_unknown:
+        refusal = refusal or f"`git {sub or ''}`: {argv_unknown}; write the literal words"
+    return GitInvocation(sub.lower() if sub else None, sub, rest, dirs, refusal, not_plain, tuple(configs))
 
 
-def _config_alias(args: list[str]) -> str | None:
-    """PM `git config alias.<x> <value>`: an alias that runs a shell or a push could force-push later."""
-    positional = [a for a in args if not a.startswith("-")]
-    if positional[:1] == ["set"]:
-        positional = positional[1:]
-    for k, key in enumerate(positional):
-        if key.lower().startswith("alias.") and k + 1 < len(positional):
-            value = positional[k + 1]
-            if value.startswith("!") or re.search(r"(?i)\bpush\b", value):
-                return f"`git config {key}` defines an alias that runs `{value[:80]}`"
+def _git_command(cmd: st.Cmd, ctx: Context, resolved: bool = False) -> str | None:
+    """Reason when this git invocation is not allowed. Both modes: the read-only allowlist. pm mode adds the
+    orchestrator's write forms (`_write_form`); everything else is refused, so no new spelling opens a write."""
+    inv = _git_invocation(cmd, ctx, resolved)
+    if inv.refusal or inv.sub is None:
+        return inv.refusal
+    if ctx.args.git_mode == "pm" and inv.verbatim == "diff" and any(_long_prefix(a, "--output", 4) for a in inv.rest):
+        return _patch_save(ctx, inv)
+    reason = None
+    if inv.sub in ctx.cfg["git_guard"]["readonly_subcommands"]:
+        reason = _readonly_args(inv.sub, inv.rest)
+        if reason is None and ctx.args.git_mode != "pm":
+            reason = _helper_reason(inv)
+        if reason is None:
+            return None
+    if ctx.args.git_mode != "pm":
+        return reason or f"`git {inv.sub}` is not on the worker read-only allowlist"
+    return _write_form(ctx, inv)
+
+
+PATCH_SAVE = ["--cached", "--binary"]  # PM_POLICY "Integration": `git -C <worktree> diff --cached --binary`
+
+
+def _patch_save(ctx: Context, inv: GitInvocation) -> str | None:
+    """pm mode: `git -C <worker worktree> diff --cached --binary --output=<file>` saves a worker's staged patch
+    (AGENTS.md section 11) when `<file>` resolves under `git_guard.patch_dir` of the main tree. git-diff(1)
+    `--output=<file>`: "Output to a specific file instead of stdout"; git runs in the `-C` directory, so a relative
+    `<file>` is taken from there. Every other `--output` stays refused (item 7)."""
+    what = "`git diff --output` writes a file"
+    if inv.not_plain or inv.dirs is None:
+        return f"{what}; its plain form only ({inv.not_plain or 'run-time directory'})"
+    if len(inv.rest) != 3 or inv.rest[:2] != PATCH_SAVE or not inv.rest[2].startswith("--output="):
+        return f"{what}; only `git -C <worker worktree> diff --cached --binary --output=<file>`"
+    if any(_tree_kind(ctx, d) != "worker" for d in inv.dirs):
+        return f"{what}; only in a worker worktree under {ctx.cfg['git_guard']['worktrees_dir']}"
+    target = inv.rest[2].split("=", 1)[1]
+    patches = ctx.root / ctx.cfg["git_guard"]["patch_dir"]
+    paths = _resolve_all(target, inv.dirs) if target else None
+    if not paths or not all(_inside(p, patches) and _real(p) != _real(patches) for p in paths):
+        return f"{what}; `{target[:60]}` is not a file under {ctx.cfg['git_guard']['patch_dir']} of the main tree"
     return None
 
 
-def _merge_args(sub: str, args: list[str], dirs: list[Path], worktree: Path) -> str | None:
-    if sub == "merge":
-        # A merge job stages a merge and stops; the PM commits it. Plain `git merge` would commit or fast-forward
-        # the branch, so it needs `--no-commit --no-ff` (or `--squash`); `--abort` undoes a staged merge.
-        if "--abort" not in args and not (
-            {"--no-commit", "--no-ff"} <= set(args) or "--squash" in args
-        ):
-            return "`git merge` in a merge job needs `--no-commit --no-ff` (or `--squash`); the PM commits"
-        if {"--continue", "--commit", "--ff-only"} & set(args):
-            return "`git merge --continue/--commit/--ff-only` commits or moves the branch; the PM commits"
-        for k, a in enumerate(args):
-            value = None
-            if a in ("-s", "--strategy"):
-                value = args[k + 1] if k + 1 < len(args) else ""
-            elif a.startswith("--strategy="):
-                value = a.split("=", 1)[1]
-            elif a.startswith("-s") and not a.startswith("--") and len(a) > 2:
-                value = a[2:]
-            if value is not None and value not in MERGE_STRATEGIES:
-                return f"`git merge` strategy `{value}` is not a built-in strategy"
-            if a in ("-e", "--edit"):
-                return "`git merge --edit` opens an editor"
+def _first_word(args: list[str]) -> str | None:
+    """The first word that is not an option (skipping git's `-c`/`-C` values): the subcommand if the program is git."""
+    k = 0
+    while k < len(args):
+        if args[k] in ("-c", "-C"):
+            k += 2
+        elif args[k].startswith("-"):
+            k += 1
+        else:
+            return args[k].lower()
+    return None
+
+
+class GitIdentity(NamedTuple):
+    """Which repository git resolves for a directory (git-rev-parse(1)), each path resolved and case-folded."""
+
+    toplevel: str  # `--show-toplevel`: the root of the working tree (`core.worktree` can point it anywhere)
+    git_dir: str  # `--absolute-git-dir`: this working tree's own Git directory
+    common_dir: str  # `--git-common-dir`: the repository shared by all its worktrees
+
+
+def _real(path: str | Path) -> str:
+    return st.fs_key(path)
+
+
+def _git_identity(repo: Path, timeout: int) -> GitIdentity | None:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--show-toplevel"]
+            + ["--absolute-git-dir", "--git-common-dir"],
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return None
+    lines = proc.stdout.decode("utf-8", "replace").splitlines()
+    if proc.returncode != 0 or len(lines) != 3 or not all(lines):
+        return None
+    return GitIdentity(*(_real(line) for line in lines))
+
+
+def _tree_kind(ctx: Context, d: Path) -> str | None:
+    """"main" when git resolves for `d` the project's own repository (toplevel, Git directory and common directory all
+    equal those of the project root), "worker" when it resolves a linked worktree of that repository whose toplevel lies
+    below the configured worktrees dir and whose Git directory names it back, else None (another repository, a
+    `core.worktree` pointing here, or git cannot tell: fail closed; class G, review R10)."""
+    timeout = ctx.cfg["git_timeout_seconds"]
+    if not _inside(d, ctx.root):
+        return None
+    if ctx.root_identity is None:
+        ctx.root_identity = _git_identity(ctx.root, timeout) or False
+    own = ctx.root_identity
+    here = _git_identity(d, timeout)
+    if not own or here is None:
+        return None
+    worktrees = ctx.root / ctx.cfg["git_guard"]["worktrees_dir"]
+    if not _inside(d, worktrees):
+        return "main" if here == own and here.toplevel == _real(ctx.root) else None
+    linked = (
+        here.common_dir == own.common_dir
+        and _real(Path(here.git_dir).parent) == _real(Path(own.common_dir) / "worktrees")
+        and _inside(Path(here.toplevel), worktrees)
+        and here.toplevel != _real(worktrees)
+        and _inside(d, Path(here.toplevel))
+    )
+    if not linked:
+        return None
+    try:  # gitrepository-layout(5) `worktrees/<id>/gitdir`: the path of the worktree's `.git` file
+        back = (Path(here.git_dir) / "gitdir").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return "worker" if _real(back) == _real(Path(here.toplevel) / ".git") else None
+
+
+def _paths_only(words: list[str]) -> bool:
+    return bool(words) and all(w and not w.startswith("-") for w in words)
+
+
+def _plain_names(words: list[str]) -> bool:
+    """Remote and branch words without option, refspec (`a:b`, `+a`) or range syntax."""
+    return all(w and not w.startswith("-") and not any(ch in w for ch in ":+^~*") for w in words)
+
+
+def _revision(word: str) -> bool:
+    """A ref name or object id with optional parent suffixes (`HEAD~1`, `abc123^2`); no `a..b` range."""
+    return bool(REVISION.fullmatch(word)) and ".." not in word
+
+
+def _form_add(rest: list[str], ctx: Context, dirs: list[Path]) -> str | None:
+    paths: list[str] = []
+    all_flag = False
     options_done = False
-    for a in args:
+    for a in rest:
         if not options_done and a == "--":
             options_done = True
-            continue
-        if not options_done and a.startswith("-"):
-            name = a.split("=", 1)[0]
-            if name in ("-i", "--interactive", "-p", "--patch", "-e", "--edit") or _long_prefix(
-                name, "--pathspec-from-file", 6
-            ):
-                return f"`git add {a}` is interactive or reads paths from a file"
-            if re.fullmatch(r"-[A-Za-z]+", a) and set(a[1:]) & set("ipe"):
-                return f"`git add {a}` is interactive"
-            continue
-        if a.startswith(":"):
-            return f"`git add {a}`: pathspec magic is not allowed"
-        paths = _resolve_all(a, dirs)
-        if paths is None or not all(_inside(p, worktree) for p in paths):
-            return f"`git add {a}` is outside the merge worktree"
+        elif not options_done and a == "-A":
+            all_flag = True
+        elif not options_done and a.startswith("-"):
+            return f"option `{a}` (only `-A` and paths)"
+        else:
+            paths.append(a)
+    return None if paths or all_flag else "no paths and no `-A`"
+
+
+def _form_commit(rest: list[str], ctx: Context, dirs: list[Path]) -> str | None:
+    sources: list[str] = []
+    k = 0
+    while k < len(rest):
+        a = rest[k]
+        if a == "-q":
+            k += 1
+        elif a in ("-m", "-F"):  # each takes the next word as its value, whatever it looks like (review R8)
+            if k + 1 >= len(rest):
+                return f"`{a}` without its value"
+            sources.append(a)
+            k += 2
+        else:
+            return f"`{a}` (only `-q`, `-m <message>`, `-F <file>`)"
+    # git-commit(1): "If multiple -m options are given, their values are concatenated as separate paragraphs"; "The
+    # -m option is mutually exclusive with -c, -C, and -F". Without either git opens an editor (item 9).
+    if not sources:
+        return "no message: give `-m <message>` or `-F <file>`, so no editor opens"
+    if "-F" in sources and len(sources) > 1:
+        return "one message source: `-m <message>`... or a single `-F <file>`"
+    return None
+
+
+def _form_push(rest: list[str], ctx: Context, dirs: list[Path]) -> str | None:
+    gg = ctx.cfg["git_guard"]
+    want = [gg["push_remote"], gg["push_branch"]]
+    return None if rest == want else f"only `git push {' '.join(want)}` (git_guard.push_remote, push_branch)"
+
+
+def _form_revert(rest: list[str], ctx: Context, dirs: list[Path]) -> str | None:
+    ok = len(rest) == 2 and rest[0] == "--no-edit" and _revision(rest[1])
+    return None if ok else "only `git revert --no-edit <commit>` (a ref or id, optionally with `~<n>`/`^<n>`)"
+
+
+def _form_pull(rest: list[str], ctx: Context, dirs: list[Path]) -> str | None:
+    ok = rest[:1] == ["--ff-only"] and len(rest) <= 3 and _plain_names(rest[1:])
+    return None if ok else "only `git pull --ff-only [<remote> [<branch>]]`, no other option or refspec"
+
+
+def _form_fetch(rest: list[str], ctx: Context, dirs: list[Path]) -> str | None:
+    return None if len(rest) <= 1 and _plain_names(rest) else "only `git fetch [<remote>]`, no option or refspec"
+
+
+def _form_reset(rest: list[str], ctx: Context, dirs: list[Path]) -> str | None:
+    tail = rest[1:] if rest[:1] == ["HEAD"] else rest
+    ok = rest == [] or (tail[:1] == ["--"] and _paths_only(tail[1:]))
+    return None if ok else "only bare `git reset` or `git reset [HEAD] -- <paths>`"
+
+
+def _form_restore(rest: list[str], ctx: Context, dirs: list[Path]) -> str | None:
+    tail = rest[1:]
+    if tail[:1] == ["--"]:
+        tail = tail[1:]
+    ok = rest[:1] == ["--staged"] and _paths_only(tail)
+    return None if ok else "only `git restore --staged [--] <paths>`"
+
+
+def _form_apply(rest: list[str], ctx: Context, dirs: list[Path]) -> str | None:
+    tail = rest[1:] if rest[:1] == ["--check"] else rest
+    return None if len(tail) == 1 and _paths_only(tail) else "only `git apply [--check] <patch>`"
+
+
+def _worker_path(word: str, ctx: Context, dirs: list[Path]) -> bool:
+    top = ctx.root / ctx.cfg["git_guard"]["worktrees_dir"]
+    paths = _resolve_all(word, dirs) if not word.startswith("-") else None
+    return bool(paths) and all(
+        _inside(p, top) and st.fs_key(p) != st.fs_key(top)
+        for p in paths or []
+    )
+
+
+def _form_worktree(rest: list[str], ctx: Context, dirs: list[Path]) -> str | None:
+    ok = (
+        rest == ["prune"]
+        or (len(rest) == 2 and rest[0] == "remove" and _worker_path(rest[1], ctx, dirs))
+        or (
+            len(rest) == 4
+            and rest[:2] == ["add", "--detach"]
+            and _worker_path(rest[2], ctx, dirs)
+            and _revision(rest[3])
+        )
+    )
+    return (
+        None
+        if ok
+        else "only `git worktree add --detach <worker path> <rev>`, `worktree remove <worker path>`, `worktree prune`"
+    )
+
+
+def _form_branch(rest: list[str], ctx: Context, dirs: list[Path]) -> str | None:
+    ok = len(rest) == 2 and rest[0] == "-d" and _plain_names(rest[1:])
+    return None if ok else "only `git branch -d <name>` (git refuses an unmerged branch)"
+
+
+WRITE_FORMS: dict[str, Callable[[list[str], Context, list[Path]], str | None]] = {
+    "add": _form_add,
+    "commit": _form_commit,
+    "push": _form_push,
+    "revert": _form_revert,
+    "pull": _form_pull,
+    "fetch": _form_fetch,
+    "reset": _form_reset,
+    "restore": _form_restore,
+    "apply": _form_apply,
+    "worktree": _form_worktree,
+    "branch": _form_branch,
+}
+
+
+def _write_form(ctx: Context, inv: GitInvocation) -> str | None:
+    """pm mode: None when the call is one of the orchestrator's write forms (AGENTS.md section 11, ORCHESTRATION
+    section 4), else why not. A form is matched on the subcommand as typed (aliases are never expanded for a write),
+    in its plain spelling, in a proven repository, with its own option table and arity."""
+    sub = inv.verbatim or ""
+    if sub not in WRITE_FORMS:
+        return (
+            f"`git {inv.sub}` is neither read-only nor an orchestrator write form ({', '.join(MAIN_TREE_FORMS)}); "
+            "aliases and other subcommands are never run as a write"
+        )
+    if inv.not_plain:
+        return f"`git {sub}` writes only in its plain form, but {inv.not_plain}"
+    if inv.dirs is None:
+        return f"`git {sub}`: its repository is computed at run time, so it is not provably the main working tree"
+    kinds = {_tree_kind(ctx, d) for d in inv.dirs}
+    if None in kinds:
+        return (
+            f"`git {sub}`: its repository is neither the main working tree nor a worker worktree under "
+            f"{ctx.cfg['git_guard']['worktrees_dir']}"
+        )
+    if "worker" in kinds and sub not in WORKER_TREE_FORMS:
+        return (
+            f"`git {sub}` inside a worker worktree: there the orchestrator only stages and applies "
+            "(`git add`, `git apply`); workers' branches are never committed"
+        )
+    problem = WRITE_FORMS[sub](inv.rest, ctx, inv.dirs)
+    if problem:
+        return f"`git {sub} {' '.join(inv.rest)[:80]}` is not an allowed form: {problem}"
+    ctx.ledger = True  # T-024 round 5, class J: the ref transitions of an allowed write go to the ledger
+    return None
+
+
+BASH_ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=", re.S)  # protocol-bound: a bash `NAME=value` prefix word
+
+
+def _real_head(cmd: st.Cmd) -> st.Cmd:
+    """The command with every leading bash `NAME=value` word and wrapper (`env`, `timeout 9`, `command`, ...) skipped,
+    repeated until neither is left: the parser keeps a quoted prefix (`X="y" env git ...`) as the command word, which
+    hid both the wrapper and the program after it (review R2 reopened). Skipped wrappers join `cmd.wrappers`."""
+    if cmd.head is None or cmd.shell != "bash":
+        return cmd
+    head, wrappers = cmd.head, list(cmd.wrappers)
+    while True:
+        start = head
+        while start < len(cmd.words) - 1 and BASH_ASSIGNMENT.match(str(cmd.words[start])):
+            start += 1
+        offset, _ = pg._command_head(cmd.words[start:])
+        if offset is None:
+            break
+        wrappers += [pg._head(w) for w in cmd.words[start : start + offset] if pg._head(w) in pg.WRAPPERS]
+        if start + offset == head:
+            break
+        head = start + offset
+    return cmd if head == cmd.head else cmd._replace(head=head, wrappers=wrappers)
+
+
+# T-024 round 4, class F: one program-name normaliser for every rule. Windows resolves a bare name through PATHEXT
+# (`.COM;.EXE;.BAT;.CMD;...` on this machine) and PowerShell also runs `.ps1`; versioned names (`python3.12`,
+# `ruby3.4`, `node22`) and Debian's `nodejs` are the same interpreter (protocol-bound: OS and package naming).
+STEM_SUFFIX = re.compile(r"(?i)\.(?:exe|com|bat|cmd|ps1)$")
+STEM_VERSION = re.compile(r"(?<=[a-z])[-_]?\d[\d.]*$")
+STEM_ALIASES = {"nodejs": "node"}
+# A command that assigns one of these selects which file a bare program name runs (git(1) PATH; Windows PATHEXT), so
+# no git call may share its command line (round 4, R13; protocol-bound: OS program lookup).
+PROGRAM_SELECTORS = re.compile(
+    r"(?i)(?<![\w$.])(?:PATH|PATHEXT)\s*\+?="
+    r"|\b(?:export|set|setx|declare|typeset|local)\s+(?:-\w+\s+)*(?:PATH|PATHEXT)\b"
+)
+# Forms that name the variable inside quotes: `Set-Item 'env:PATH' x`, `[Environment]::SetEnvironmentVariable('PATH'`.
+PROGRAM_SELECTORS_RAW = re.compile(
+    r"(?i)\b(?:set-item|si|new-item|ni|remove-item|ri|clear-item|cli)\s+(?:-\w+\s+)*['\"]?env:\s*(?:PATH|PATHEXT)\b"
+    r"|SetEnvironmentVariable\s*\(\s*['\"](?:PATH|PATHEXT)['\"]"
+)
+
+
+def program_stem(word: str) -> str:
+    """The program a word names, compared by stem: basename, lower case, executable and version suffix removed."""
+    base = STEM_SUFFIX.sub("", re.split(r"[\\/]", word)[-1].lower())
+    base = STEM_VERSION.sub("", base) if not GIT_PROGRAM.match(base) else base
+    return STEM_ALIASES.get(base, base)
+
+
+def _names_git(word: str) -> bool:
+    """A word that names the git program: `git`, `git.exe`, `git.cmd`, ... (any directory), or a bare `git-<command>`."""
+    stem = program_stem(word)
+    bare = not re.search(r"[\\/]", word)
+    return stem == "git" or (bare and bool(GIT_PROGRAM.match(stem)))
+
+
+def _given_a_program(args: list[str]) -> str | None:
+    """Class F, by argument role: the first argument that names git, or names a shell or launcher whose later
+    arguments name git (`uv run git.cmd ...`, `chrt -b 0 sh -c "git ..."`)."""
+    for k, a in enumerate(args):
+        if _names_git(a):
+            return a
+        if program_stem(a) in LAUNCHERS and any(GIT_WORD.search(b) for b in args[k + 1 :]):
+            return a
+    return None
+
+
+def _selects_programs(ctx: Context) -> str | None:
+    """The command assigns PATH or PATHEXT (bash prefix or statement, `export`, PowerShell `$env:`)."""
+    for raw, masked, _shell in ctx.walk().texts:
+        # The masked text hides quoted words (`-m "PATH=x"` stays a message); `Set-Item 'env:PATH'` names the
+        # variable inside quotes, so that one form is read from the raw text, as `GIT_ENV_RAW` does.
+        hit = PROGRAM_SELECTORS.search(masked) or PROGRAM_SELECTORS_RAW.search(raw)
+        if hit:
+            return hit.group(0).strip()
     return None
 
 
@@ -681,17 +1131,16 @@ def check_git(ctx: Context) -> list[str]:
     reasons: list[str] = []
     if walked.too_deep and GIT_TRIGGER.search(ctx.trigger_text):
         reasons.append("the command nests too deeply to inspect its git calls")
-    if worker:
-        for _raw, masked, _shell in walked.texts:
-            if GIT_ENV.search(masked):
-                reasons.append("workers may not set GIT_* environment variables")
-                break
+    if worker and _git_env_set(ctx):
+        reasons.append("workers may not set GIT_* environment variables")
     mentions_git = bool(GIT_TRIGGER.search(ctx.trigger_text))
-    dangerous = (
-        GIT_WRITE_WORDS.search(ctx.trigger_text)
-        if worker
-        else re.search(r"(?i)\bpush\b", ctx.trigger_text)
-    )
+    history_words = GIT_WRITE_WORDS if worker else PM_HISTORY_WORDS
+    dangerous = history_words.search(ctx.trigger_text)
+    if not worker and mentions_git and dangerous and _git_env_set(ctx):
+        # Text level, so a call the parser misreads still fails closed: a write runs with no GIT_* variable.
+        reasons.append(
+            f"the command sets a `GIT_*` variable next to `{dangerous.group(0)}`; git writes run without them"
+        )
     # A computed name or opaque code can run git (`& (gcm git) commit`, `& ('g'+'it') push -f`). A computed
     # command name may spell git without the word (`$(echo g)it commit`, review N5): a git write word is enough.
     names_opaque = [what for kind, what in ctx.opaque() if kind == "name"]
@@ -702,25 +1151,68 @@ def check_git(ctx: Context) -> list[str]:
         reasons.append(
             f"{what}, in a command that may run git (`git` with a write word or a built string)"
         )
+    selector = _selects_programs(ctx)
+    any_git = any(c.head is not None and _names_git(_real_head(c).name) for c in walked.cmds)
+    if selector and (any_git or GIT_WORD.search(ctx.trigger_text)):
+        # Round 4, R13: a command-local PATH or PATHEXT change can make `git` run a shim; reads included.
+        reasons.append(
+            f"the command sets `{selector[:40]}` next to a git call, so `git` may run another program; set no "
+            "PATH or PATHEXT in a git command"
+        )
     for cmd in walked.cmds:
+        cmd = _real_head(cmd)
         name = cmd.name
-        gits = [c for c in st.resolved_cmds(cmd, walked) or [] if c.name == "git"]
-        if cmd.head is not None and name in ALIAS_HEADS and mentions_git:
+        args = [str(a) for a in cmd.args]
+        is_git = _names_git(name)  # `git`, `git.exe`, `git.cmd`, `git-commit` (item 9, round 4 item 6)
+        gits = [c for c in st.resolved_cmds(cmd, walked) or [] if _names_git(c.name)]
+        head_text = str(cmd.words[cmd.head]) if cmd.head is not None else ""
+        # Round 4, class F: wrappers before the program, or the code-carrying arguments it was read from.
+        through = sorted(set(cmd.wrappers) - SHELL_KEYWORDS) or [v for v in cmd.via if v not in SHELL_KEYWORDS]
+        # Class F, both modes: the code an interpreter runs inline is opaque, so naming git there is refused
+        # (review R12); a script run by path is reviewed repository code (accepted residual).
+        code = _interpreter_code(cmd, ctx) if cmd.head is not None else None
+        if code is not None and GIT_TRIGGER.search(code):  # any `git` text: code can glue the name (`'gi'+'t'`)
+            reasons.append(f"`{name}` inline code names git; the guard cannot read what it runs (review R12)")
+        if cmd.head is not None and (
+            (program_stem(name) in LAUNCHERS and any(GIT_WORD.search(a) for a in args))
+            or ((is_git or gits) and through)
+        ):
+            via = f"`{through[0]}`" if (is_git or gits) and through else f"`{name}`"
+            reasons.append(f"{via} runs git through another program or shell (review R2); run git directly")
+        elif (
+            cmd.head is not None
+            and not (is_git or gits)
+            and not cmd.launcher  # a configured launcher (`test_slot.py -- git ...`): its command is walked itself
+            and name not in READ_ONLY_PROGRAMS
+            and _interp_family(name, ctx) is None
+            and _given_a_program(args)
+        ):
+            # Class F: `uv run git.cmd`, `watch git`, `chrt -b 0 sh -c "git ..."`: a program given git, or a shell
+            # that runs git, as an argument may run it with argv the guard never sees.
+            reasons.append(
+                f"`{name}` is given `{_given_a_program(args)}` as an argument and may run git; run git directly"
+            )
+        elif cmd.head is not None and name in ALIAS_HEADS and mentions_git:
             reasons.append(f"`{name}` defines a command in a command that mentions git")
-        elif cmd.head is not None and (name == "git" or gits):
-            for call in [cmd] if name == "git" else gits:
-                reason = _git_command(call, ctx)
+        elif cmd.head is not None and (is_git or gits):
+            for call in [cmd] if is_git else gits:
+                reason = _git_command(call, ctx, resolved=call is not cmd)
                 if reason:
                     reasons.append(reason)
-        elif worker:
-            code = _interpreter_code(cmd, ctx) or ""
-            if GIT_TRIGGER.search(code) and GIT_WRITE_WORDS.search(code):
-                reasons.append(f"`{name}` inline code runs a git subcommand that is not read-only")
+        elif st.RUN_TIME_CHARS.search(head_text) and (
+            history_words.fullmatch(_first_word(args) or "") or any(GIT_WORD.search(a) for a in args)
+        ):
+            # `& $g rebase`: a program named by a variable the command does not set may be git (review F3).
+            reasons.append(f"`{head_text[:40]} {' '.join(args)[:40]}`: the program is named at run time")
     if reasons:
         hint = (
-            "The PM pushes without force; use `git push` plain."
+            "The orchestrator writes with plain git forms only (add, commit -m, push <remote> <branch>, revert "
+            "--no-edit, pull --ff-only, fetch, reset/restore of paths, apply, worktree add/remove/prune, branch -d) "
+            "from the main working tree; it never rewrites history or deletes refs (AGENTS.md section 11, "
+            "decision 77)."
             if not worker
-            else "Workers run read-only git only (status, diff, log, show, ...); the PM commits and merges."
+            else "Workers run read-only git only (status, diff, log, show, ...); the orchestrator commits and "
+            "pushes (AGENTS.md section 11, decision 77)."
         )
         reasons.append(hint)
     return list(dict.fromkeys(reasons))
@@ -810,27 +1302,45 @@ def _moves_head(sub: str, rest: list[str], alias_cfg: bool = False) -> bool:
     return True
 
 
-def _head_sha(repo: Path, timeout: int) -> str | None:
-    """Full HEAD commit id of the repository at `repo`, or None when git cannot tell."""
+class PushSource(NamedTuple):
+    """One reading of what `git push <remote> <branch>` sends (round 4, class H)."""
+
+    on_branch: bool  # HEAD is the symbolic ref `refs/heads/<branch>`
+    head: str  # HEAD's commit id ("" when unborn)
+    tip: str  # the commit id of `refs/heads/<branch>` ("" when the branch does not exist)
+
+
+def _push_source(repo: Path, branch: str, timeout: int) -> PushSource | None:
+    """HEAD and the configured branch from one git call (review R11 reopened: two calls let the ref move between
+    them): the branch's `for-each-ref` row carries `%(objectname)` and `%(HEAD)` ("*" when HEAD is that branch), so
+    the commit HEAD names and the tip the push sends come from the same reading. None when git cannot tell; the
+    caller then refuses the push (T-024 final, PD2: the push check fails closed)."""
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            ["git", "-C", str(repo), "for-each-ref", "--format=%(HEAD) %(objectname)", branch],
             capture_output=True,
             timeout=timeout,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
-    sha = proc.stdout.decode("ascii", "replace").strip().lower()
-    return sha if proc.returncode == 0 and COMMIT_ID.fullmatch(sha) else None
+    if proc.returncode != 0:
+        return None
+    line = proc.stdout.decode("ascii", "replace").strip().lower()
+    if not line:
+        return PushSource(False, "", "")
+    mark, _, sha = line.rpartition(" ")
+    if not COMMIT_ID.fullmatch(sha):
+        return None
+    on = mark.strip() == "*"
+    return PushSource(on, sha if on else "", sha)
 
 
 def _push_reasons(ctx: Context) -> list[str]:
-    """Why each `git push` of the command is refused: the marker of its repository's HEAD is provably missing."""
+    """Why each `git push` of the command is refused. T-024 final (F22, PD2): a push passes only when the marker of
+    its repository's HEAD is proved present; a repository, HEAD or branch the guard cannot read refuses it."""
     cfg = ctx.cfg["push_guard"]
     bases = ctx.bases()
-    if bases is None:
-        return []
     markers = ctx.root / cfg["marker_dir"]
     walked = ctx.walk()
     reasons: list[str] = []
@@ -840,12 +1350,8 @@ def _push_reasons(ctx: Context) -> list[str]:
             continue
         gits = (
             [cmd]
-            if cmd.name == "git" or GIT_PROGRAM.match(cmd.name)
-            else [
-                c
-                for c in st.resolved_cmds(cmd, walked) or []
-                if c.name == "git" or GIT_PROGRAM.match(c.name)
-            ]
+            if _names_git(cmd.name)
+            else [c for c in st.resolved_cmds(cmd, walked) or [] if _names_git(c.name)]
         )
         for call in gits:
             parsed = _git_call(call)
@@ -855,7 +1361,10 @@ def _push_reasons(ctx: Context) -> list[str]:
             if _moves_head(sub, rest, alias_cfg):
                 moved = moved or f"git {sub}" + ("" if sub in HEAD_MOVERS else " (maybe an alias)")
                 continue
-            if sub != "push" or redirected or _push_dry_run(rest):
+            if sub != "push" or _push_dry_run(rest):
+                continue
+            if redirected:
+                reasons.append("the push names its repository with `--git-dir`/`--work-tree`; the guard cannot prove it")
                 continue
             if moved:
                 # The lint cannot have marked a commit that does not exist yet.
@@ -867,8 +1376,33 @@ def _push_reasons(ctx: Context) -> list[str]:
             for c_dir in c_dirs:
                 dirs = _resolve_all(c_dir, dirs) if dirs is not None else None
             if dirs is None:
-                continue  # a run-time directory: the repository is not provable
-            heads = [h for h in (_head_sha(d, ctx.cfg["git_timeout_seconds"]) for d in dirs) if h]
+                reasons.append("the push runs in a directory chosen at run time, so its repository is not provable")
+                continue
+            # Class H (review R11): `git push <push_remote> <push_branch>` sends the tip of that branch, while the
+            # marker names the checked HEAD. They are one revision only when HEAD is that branch; a detached HEAD or
+            # another branch is refused. Both come from one reading per repository, taken again after the decision:
+            # a ref that moved while the guard looked refuses (round 4). git failing keeps the fail-open policy.
+            branch = f"refs/heads/{ctx.cfg['git_guard']['push_branch']}"
+            timeout = ctx.cfg["git_timeout_seconds"]
+            heads: list[str] = []
+            for d in dirs:
+                first = _push_source(d, branch, timeout)
+                if first is None:
+                    reasons.append(f"git cannot read HEAD and `{branch}` of `{d}`, so the pushed commit is not provable")
+                    continue
+                if not first.on_branch:
+                    reasons.append(
+                        f"HEAD of `{d}` is not `{branch}`: the push sends the tip of `{branch}`, which is not the "
+                        f"checked HEAD; check out `{branch}`, run the check, then push"
+                    )
+                elif first.tip:
+                    heads.append(first.tip)
+                else:
+                    reasons.append(f"`{branch}` of `{d}` has no commit, so there is no checked commit to push")
+                if _push_source(d, branch, timeout) != first:
+                    reasons.append(
+                        f"HEAD or `{branch}` of `{d}` changed while the guard checked it; push again"
+                    )
             # The parser does not keep `cd` scoping (`cd X && ...`, `(cd X; ...)`, `Set-Location X`, `pushd X`): the
             # start directory stays a candidate next to every target. Any of them may be the pushing repository, so
             # each one with a HEAD needs its marker; a marked start directory must not vouch for a `cd` target.
@@ -886,17 +1420,19 @@ def _push_reasons(ctx: Context) -> list[str]:
 
 
 def check_push(ctx: Context) -> list[str]:
-    """PM mode: `git push` needs the marker the prepush lint writes for the pushed HEAD. Fails open on its own errors."""
-    if ctx.args.git_mode != "pm" or not re.search(r"(?i)\bpush\b", ctx.trigger_text):
+    """PM mode: `git push` needs the marker the prepush lint writes for the pushed HEAD. T-024 final (F22, PD2): the
+    check fails closed, so its own crash refuses a command that may push; commands without the word `push` never
+    reach it, so read and repair commands (`git status`, `git log`) stay open."""
+    if ctx.args.git_mode != "pm" or not PUSH_TRIGGER.search(ctx.trigger_text):
         return []
     try:
         reasons = _push_reasons(ctx)
-    except Exception:
+    except Exception as exc:
         _crash_log("push_guard", ctx)
-        return []
+        reasons = [f"the push check failed ({type(exc).__name__}), so the pushed commit is not proved checked"]
     if reasons:
         reasons.append(
-            f"Run {ctx.cfg['push_guard']['lint_command']} on the commit to push, then push"
+            f"Run {ctx.cfg['push_guard']['check_command']} on the commit to push, then push"
         )
     return reasons
 
@@ -908,7 +1444,10 @@ def _code_letters(flags: list[str]) -> str:
 def _interp_family(name: str, ctx: Context) -> str | None:
     if st.is_python(name) or name.startswith("$"):
         return "python"  # `& $PY -c ...`: an interpreter held in a variable is read like python
-    return name if name in ctx.cfg["inline_interp"]["code_flags"] else None
+    stem = program_stem(name)  # round 4, item 2: `nodejs`, `ruby3.4`, `node.exe` are the configured families
+    if stem == "python":
+        return "python"
+    return stem if stem in ctx.cfg["inline_interp"]["code_flags"] else None
 
 
 def _interpreter_code(cmd: st.Cmd, ctx: Context) -> str | None:
@@ -1110,11 +1649,7 @@ def checks(ctx: Context) -> list[tuple[str, Check, re.Pattern[str] | None]]:
         ("tool_broken", check_tool_broken, None),
         ("write_guard", check_write, st.WRITE_TRIGGER),
         ("git_guard", check_git, GIT_TRIGGER),
-        (
-            "push_guard",
-            check_push,
-            None,
-        ),  # no trigger: a crash inside it must never block (it catches its own)
+        ("push_guard", check_push, PUSH_TRIGGER),  # F22: a crash fails closed for a command that may push
         ("inline_interp", check_inline, _interp_trigger(ctx)),
         ("pytest_slot", check_pytest, PYTEST_TRIGGER),
         ("read_router", check_read, None),
@@ -1210,12 +1745,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--config", help="guard config (default tools/agent-workflow/guard_config.json)"
     )
+    # Decision 77 removed the merge mode (`worker-merge --worktree D`): workers never merge. A hook line that still
+    # names it fails to parse, so that worker's shell tools stay blocked (fail closed) until it is restarted.
     parser.add_argument("--git-mode", choices=GIT_MODES, required=True)
-    parser.add_argument("--worktree", help="worker-merge: the merge job's worktree")
-    args = parser.parse_args(argv)
-    if (args.git_mode == "worker-merge") != bool(args.worktree):
-        raise ValueError("--worktree is required with --git-mode worker-merge and only there")
-    return args
+    return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None, root: Path = gc.ROOT) -> int:
@@ -1244,6 +1777,12 @@ def main(argv: list[str] | None = None, root: Path = gc.ROOT) -> int:
         _log(ctx.tool, ctx.command, blocks)
         sys.stderr.write("BLOCKED by tool_guard: " + "\n".join(dict.fromkeys(blocks)) + "\n")
         return 2
+    if args.git_mode == "pm" and ctx.ledger:
+        try:
+            gl.begin(root, event, ctx.cwd, cfg["git_timeout_seconds"])
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            # The command still runs; its ref changes stay unexplained, so a concurrent worker turn is flagged.
+            _log(ctx.tool, ctx.command, [f"git ledger not recorded: {type(exc).__name__}"])
     if warns:
         context = "\n".join(dict.fromkeys(warns))
         print(

@@ -25,6 +25,13 @@ def no_brief_lint(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cw, "lint_gate", lambda *args, **kwargs: None)
 
 
+@pytest.fixture(autouse=True)
+def no_git_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test double: these turns run in "." (the project) with a faked `Popen`; the turn snapshot (T-024 round 4) has
+    its own tests on scratch repositories in test_cli_worker_git_snapshot.py."""
+    monkeypatch.setattr(cw, "git_snapshot", lambda cwd, timeout: None)
+
+
 FAKE_CLAUDE = (
     "import json\n"
     "print(json.dumps({'type': 'assistant', 'message': {'usage': {'input_tokens': 5,"

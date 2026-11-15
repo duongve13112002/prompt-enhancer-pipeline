@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import shutil
 import sys
@@ -83,6 +84,38 @@ def test_previous_project_tokens_are_found_outside_excluded_paths(copy: Path) ->
     files = [copy / "docs" / "leftover.md", copy / "tasks" / "archive" / "old.md"]
     failures = _fails(sp.check_foreign(copy, cfg, files))
     assert len(failures) == 1 and "docs/leftover.md:1" in failures[0] and "archive" not in failures[0]
+
+
+def test_the_checkouts_own_path_is_not_a_previous_project_token(tmp_path: Path) -> None:
+    """A foreign token that is a prefix of this checkout's path (e.g. the old project's parent folder) matches only
+    text outside this checkout's own path; the PM found this when the test temp folder lay inside the project."""
+    root = tmp_path / "parent" / "this-project"
+    root.mkdir(parents=True)
+    cfg = project_config.load(ROOT)
+    token = (tmp_path / "parent").as_posix()
+    cfg = dataclasses.replace(cfg, foreign_bindings=(token,), foreign_scan_exclude=())
+    own = root / "own.json"
+    own.write_text(f'{{"a": "{root.as_posix()}/tools/x.py", "b": "{root}"}}\n', encoding="utf-8")
+    assert _fails(sp.check_foreign(root, cfg, [own])) == []
+    old = root / "old.md"
+    old.write_text(f"see {token}/old-project/README.md\n", encoding="utf-8")
+    failures = _fails(sp.check_foreign(root, cfg, [own, old]))
+    assert len(failures) == 1 and "old.md:1" in failures[0] and "own.json" not in failures[0]
+
+
+@pytest.mark.parametrize("suffix", ["-old/tools/x.py", "2/tools/x.py", ".bak/x", "_copy"])
+def test_a_sibling_of_the_checkout_still_shows_the_previous_project_token(tmp_path: Path, suffix: str) -> None:
+    """Only this checkout's whole path is exempt: `<root>-old` is another folder under the old project's parent, so
+    the token in it is reported (retest 6 F1: a plain prefix removal hid it)."""
+    root = tmp_path / "parent" / "this-project"
+    root.mkdir(parents=True)
+    cfg = project_config.load(ROOT)
+    token = (tmp_path / "parent").as_posix()
+    cfg = dataclasses.replace(cfg, foreign_bindings=(token,), foreign_scan_exclude=())
+    page = root / "page.md"
+    page.write_text(f"see {root.as_posix()}{suffix} and {root.as_posix()}/kept.md\n", encoding="utf-8")
+    failures = _fails(sp.check_foreign(root, cfg, [page]))
+    assert len(failures) == 1 and "page.md:1" in failures[0]
 
 
 def test_dead_links_are_found_but_fenced_and_external_links_are_not(tmp_path: Path) -> None:

@@ -47,7 +47,8 @@ MAX_REPORT_BYTES = 2 * 1024 * 1024
 PROTECTED_NAMES = frozenset(
     {"pm-state", "pm-archive", "models", ".venv", "runs", ".secrets", "cli-jobs"}
 )
-PROTECTED_PAIRS = (("agy-work", "_results"),)  # (parent name, name): Gemini job results
+# (parent name, name): Gemini job results; periodic audit reports (S22), kept outside the state directory since T-024.
+PROTECTED_PAIRS = (("agy-work", "_results"), (".tmp", "audit"))
 # Every checkout holds `.secrets/README.md` and `models/README.md` (tracked placeholders): such a nested directory
 # contains nothing to protect. Only a nested directory qualifies, never a target named on the command line.
 PLACEHOLDER_DIRS = frozenset({".secrets", "models"})
@@ -209,9 +210,15 @@ def _size_bounded(path: Path, deadline: float) -> tuple[int, bool]:
     return total, True
 
 
+def _state_dir() -> Path:
+    """The PM state directory by the hooks' rule (cli_worker.state_root, hooks/git_ledger.ledger_dir): the
+    AGENT_WORKFLOW_STATE_DIR override, else `<project>/.tmp/pm-state`, read at call time."""
+    return Path(os.environ.get("AGENT_WORKFLOW_STATE_DIR") or PROJECT / ".tmp" / "pm-state")
+
+
 def _worker_registry() -> Path:
-    """Same location as cli_worker.REGISTRY (`<root>/.tmp/pm-state`), derived from this checkout's root."""
-    return PROJECT / ".tmp" / "pm-state" / "cli-workers.json"
+    """Same location as cli_worker.REGISTRY, so ownership follows a state-directory override."""
+    return _state_dir() / "cli-workers.json"
 
 
 def _busy_cwds() -> list[Path]:
@@ -668,7 +675,7 @@ def _read_agent_jobs(registry: Path, own: Ownership) -> None:
 def load_ownership(deadline: float | None = None) -> Ownership:
     """Read the three ownership sources; `timed_out` is set when the monotonic `deadline` passes between sources."""
     own = Ownership()
-    state = PROJECT / ".tmp" / "pm-state"
+    state = _state_dir()
 
     def late() -> bool:
         own.timed_out = deadline is not None and time.monotonic() >= deadline

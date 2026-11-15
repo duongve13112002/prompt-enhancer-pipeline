@@ -38,12 +38,9 @@ def verdict(
     tool: str = "Bash",
     mode: str = "pm",
     cwd: Path | None = None,
-    worktree: Path | None = None,
     cfg: dict[str, Any] = CFG,
 ) -> tuple[str, list[str]]:
-    args = argparse.Namespace(
-        config=None, git_mode=mode, worktree=str(worktree) if worktree else None
-    )
+    args = argparse.Namespace(config=None, git_mode=mode)
     event = {
         "tool_name": tool,
         "tool_input": {"command": command},
@@ -266,7 +263,10 @@ GIT_WORKER_CASES = [
     ("GG-OPT-09", 'git -c alias.c=commit c -m "stealth"', "B"),
     ("GG-ENV-01", 'GIT_DIR=.git git commit -m "bypass"', "B"),
     ("GG-MJ-01", "git merge origin/feature-branch", "B"),
-    ("GG-FB-01", "git merge-tree HEAD origin/main", "A"),
+    # T-024 final (F08 sibling): git-merge-tree(1) defaults to its modern `--write-tree` mode, which writes objects
+    # and runs merge drivers; only the deprecated `--trivial-merge` mode reads.
+    ("GG-FB-01", "git merge-tree HEAD origin/main", "B"),
+    ("GG-FB-02", "git merge-tree --trivial-merge HEAD~1 HEAD origin/main", "A"),
     ("X-G01", "git status", "A"),
     ("X-G02", "git --no-pager log --oneline -5", "A"),
     ("X-G03", "git -c core.quotepath=false status", "A"),
@@ -330,48 +330,43 @@ def test_git_guard_worker_powershell(
     check(guard_repo, case, "PowerShell", command, expect, mode="worker")
 
 
-MERGE_CASES = [
-    # Deviation: a merge job stages with --no-commit --no-ff; the PM commits.
-    ("GG-10", "git merge origin/feat", "B"),
-    ("GG-MJ-02", "git merge origin/feature-branch", "B"),
-    ("X-M01", "git merge --no-commit --no-ff origin/feat", "A"),
-    ("X-M02", "git merge --squash origin/feat", "A"),
-    ("X-M03", "git merge --abort", "A"),
-    ("X-M04", "git merge --no-commit --no-ff -s ours origin/feat", "A"),
-    ("X-M05", "git merge --no-commit --no-ff -s evil origin/feat", "B"),
-    ("X-M06", "git merge --continue", "B"),
-    ("GG-11", "git add src/fix.py", "A"),
-    ("GG-MJ-03", "git add src/image_correction/pipeline.py", "A"),
-    ("X-M07", "git add ../../../tasks/STATUS.md", "B"),
-    ("X-M08", "git add -p src/fix.py", "B"),
-    ("X-M09", "git add --pathspec-from-file=list.txt", "B"),
-    ("X-M10", "git commit -m merge", "B"),
-    ("X-M11", "git push", "B"),
-    ("X-M12", "git stash", "B"),
-    ("X-M13", "git -C <ROOT> add tasks/STATUS.md", "B"),
-    ("X-M14", "git checkout main", "B"),
-    ("X-M15", "git status", "A"),
-    ("X-M16", "git merge --no-commit origin/feat", "B"),  # a fast-forward would move the branch
-    ("X-M17", "git merge --no-ff origin/feat", "B"),
+# Workers never commit, push, merge or change history, in their own worktree either (decision 77; T-024 approach note
+# cases C-10 to C-15). The merge mode that allowed `merge --no-commit --no-ff` and `git add` is gone.
+WORKER_HISTORY_CASES = [
+    ("C-10", 'git commit -m "worker code"', "B"),
+    ("C-11", "git push origin main", "B"),
+    ("C-12", "git merge origin/main", "B"),
+    ("C-13", "git rebase origin/main", "B"),
+    ("C-14", "git reset --hard HEAD~1", "B"),
+    ("C-15", "git status -sb", "A"),
+    ("W-01", "git merge --no-commit --no-ff origin/feat", "B"),
+    ("W-02", "git merge --squash origin/feat", "B"),
+    ("W-03", "git add src/fix.py", "B"),
+    ("W-04", "git cherry-pick abc123", "B"),
+    ("W-05", "git revert abc123", "B"),
+    ("W-06", "git am fix.patch", "B"),
+    ("W-07", "git tag v1", "B"),
+    ("W-08", "git branch -D wt1", "B"),
+    ("W-09", "git update-ref refs/heads/wt1 HEAD", "B"),
+    ("W-10", "git commit --amend --no-edit", "B"),
+    ("W-11", "git stash push -m x", "B"),
+    ("W-12", "git restore src/fix.py", "B"),
+    ("W-13", "git diff --cached", "A"),
+    ("W-14", "git log --oneline -3", "A"),
 ]
 
 
 @pytest.mark.parametrize(
-    ("case", "command", "expect"), MERGE_CASES, ids=[c[0] for c in MERGE_CASES]
+    ("case", "command", "expect"),
+    WORKER_HISTORY_CASES,
+    ids=[c[0] for c in WORKER_HISTORY_CASES],
 )
-def test_git_guard_merge_job(guard_repo: Path, case: str, command: str, expect: str) -> None:
+def test_worker_never_changes_history_in_its_worktree(
+    guard_repo: Path, case: str, command: str, expect: str
+) -> None:
     wt = guard_repo / ".tmp" / "worktrees" / "wt1"
-    check(guard_repo, case, "Bash", command, expect, mode="worker-merge", cwd=wt, worktree=wt)
-
-
-def test_merge_job_outside_its_worktree_is_refused(guard_repo: Path) -> None:
-    wt = guard_repo / ".tmp" / "worktrees" / "wt1"
-    # the session cwd is the root, not the merge worktree
-    assert verdict(guard_repo, "git add src/fix.py", mode="worker-merge", worktree=wt)[0] == "B"
-    # a merge worktree that is not below worktrees_dir
-    other = guard_repo / "src"
-    outcome = verdict(guard_repo, "git add fix.py", mode="worker-merge", cwd=other, worktree=other)
-    assert outcome[0] == "B"
+    check(guard_repo, case, "Bash", command, expect, mode="worker", cwd=wt)
+    check(guard_repo, case, "PowerShell", command, expect, mode="worker", cwd=wt)
 
 
 PM_CASES = [
@@ -386,9 +381,10 @@ PM_CASES = [
     ("X-P09", "git --bare push --force", "B"),
     ("X-P10", "git -C . push --force", "B"),
     ("X-P11", "git push origin main", "A"),
-    ("X-P12", "git push -o ci.skip origin main", "A"),
+    # Round 2 (write forms): only `git push <push_remote> <push_branch>`; merge is a dropped form.
+    ("X-P12", "git push -o ci.skip origin main", "B"),
     ("X-P13", "git commit -m x", "A"),
-    ("X-P14", "git merge --no-ff --no-commit feature", "A"),
+    ("X-P14", "git merge --no-ff --no-commit feature", "B"),
     ("X-P15", "git status; git push --force", "B"),
     ("X-P16", "git push origin main -- +main", "B"),
 ]
@@ -399,16 +395,808 @@ def test_git_guard_pm(guard_repo: Path, case: str, command: str, expect: str) ->
     check(guard_repo, case, "Bash", command, expect, mode="pm")
 
 
-def test_pm_pushing_alias_is_blocked(guard_repo: Path, tmp_path: Path) -> None:
+# Orchestrator deny set of decision 78 (T-024 Step 0 question 1): each entry has a deny row and a near-miss allow row.
+# Commands run from the main working tree unless they name a worker worktree.
+PM_REWRITE_CASES = [
+    # C-01 to C-09 of the approach note (C-03/C-04, the marker, are in test_push_guard.py).
+    ("C-01", "git push origin main 2>&1 | Out-String; git status -sb | Select-Object -First 1", "A"),
+    ("C-02", 'git commit -m "feat: integrated task"', "A"),
+    ("C-05", "git push --force origin main", "B"),
+    ("C-06", "git commit --amend", "B"),
+    ("C-07", "git push origin --delete feat-branch", "B"),
+    ("C-08", "git -C .tmp/worktrees/wt1 add src/fix.py", "A"),
+    ("C-09", "git worktree remove .tmp/worktrees/wt1; git branch -d wt1", "A"),
+    # push: remote ref deletion
+    ("PR-01", "git push -d origin feat", "B"),
+    # Round 2: any push other than `git push origin main` (the configured form) is refused.
+    ("PR-02", "git push -u origin feat", "B"),
+    ("PR-03", "git push origin :feat", "B"),
+    ("PR-04", "git push origin feat:feat", "B"),
+    ("PR-05", "git push origin :", "B"),
+    ("PR-06", "git push --prune origin", "B"),
+    ("PR-07", "git push --progress origin main", "B"),
+    ("PR-08", "git push --del origin feat", "B"),
+    ("PR-09", "git push -o :x origin main", "B"),
+    ("PR-10", "git push origin main -- :feat", "B"),
+    # commit --amend
+    ("CA-01", "git commit --am -m x", "B"),
+    ("CA-02", "git commit -m amend", "A"),
+    ("CA-03", "git commit --author=x -m y", "B"),  # round 2: only -q, -m, -F
+    # rebase (round 2: every form, `--abort` included, is a dropped form)
+    ("RB-01", "git rebase origin/main", "B"),
+    ("RB-02", "git rebase -i HEAD~3", "B"),
+    ("RB-03", "git rebase --continue", "B"),
+    ("RB-04", "git rebase --abort", "B"),
+    # pull only as `git pull --ff-only [<remote> [<branch>]]`
+    ("PL-01", "git pull", "B"),
+    ("PL-02", "git pull --ff-only --rebase", "B"),
+    ("PL-03", "git pull -r --ff-only", "B"),
+    ("PL-04", "git pull --ff-only", "A"),
+    ("PL-05", "git pull --ff-only --no-rebase origin main", "B"),
+    ("PL-06", "git pull --ff-only origin main", "A"),
+    # reset that moves the branch
+    ("RS-01", "git reset --hard", "B"),
+    ("RS-02", "git reset --hard HEAD~1", "B"),
+    ("RS-03", "git reset --soft HEAD~1", "B"),
+    ("RS-04", "git reset --keep", "B"),
+    ("RS-05", "git reset --merge", "B"),
+    ("RS-06", "git reset HEAD~1", "B"),
+    ("RS-07", "git reset origin/main", "B"),
+    ("RS-08", "git reset --ha", "B"),
+    ("RS-09", "git reset src/fix.py", "B"),  # without `--` a path and a commit look alike: fail closed
+    ("RS-10", "git reset", "A"),
+    ("RS-11", "git reset -q", "B"),  # round 2: bare or `[HEAD] -- <paths>` only
+    ("RS-12", "git reset HEAD -- src/fix.py", "A"),
+    ("RS-13", "git reset -- src/fix.py", "A"),
+    ("RS-14", "git reset HEAD src/fix.py", "B"),
+    ("RS-15", "git reset --mixed HEAD", "B"),
+    # always denied
+    ("AD-01", "git filter-branch --tree-filter x HEAD", "B"),
+    ("AD-02", "git filter-repo --path src", "B"),
+    ("AD-03", "git replace abc def", "B"),
+    ("AD-04", "git update-ref refs/heads/main abc", "B"),
+    ("AD-05", "git show-ref --heads", "A"),
+    ("AD-06", "git log --all --oneline", "A"),
+    # symbolic-ref with a value
+    ("SR-01", "git symbolic-ref HEAD refs/heads/x", "B"),
+    ("SR-02", "git symbolic-ref -d HEAD", "B"),
+    ("SR-03", "git symbolic-ref --short HEAD", "B"),  # not on the read-only allowlist: refused in both modes
+    # reflog rewrites
+    ("RL-01", "git reflog expire --all", "B"),
+    ("RL-02", "git reflog delete HEAD@{1}", "B"),
+    ("RL-03", "git reflog show -5", "A"),
+    # branch force forms
+    ("BR-01", "git branch -D wt1", "B"),
+    ("BR-02", "git branch -f main HEAD~1", "B"),
+    ("BR-03", "git branch -M a b", "B"),
+    ("BR-04", "git branch -C a b", "B"),
+    ("BR-05", "git branch --delete --force wt1", "B"),
+    ("BR-06", "git branch -df wt1", "B"),
+    ("BR-07", "git branch -d wt1", "A"),
+    ("BR-08", "git branch -m a b", "B"),  # round 2: only `branch -d <name>` writes
+    ("BR-09", "git branch -u origin/main", "B"),
+    ("BR-10", "git branch --format=%(refname) -a", "A"),
+    # checkout and switch: dropped forms in round 2
+    ("CO-01", "git checkout -B main", "B"),
+    ("CO-02", "git checkout -fB main", "B"),
+    ("CO-03", "git checkout -b new-feature", "B"),
+    ("CO-04", "git checkout -- src/fix.py", "B"),
+    ("SW-01", "git switch -C main", "B"),
+    ("SW-02", "git switch --force-create main", "B"),
+    ("SW-03", "git switch -c new-feature", "B"),
+    ("SW-04", "git switch main", "B"),
+    # tags: listing only (tag creation is a dropped form in round 2)
+    ("TG-01", "git tag -d v1", "B"),
+    ("TG-02", "git tag -f v1", "B"),
+    ("TG-03", "git tag --delete v1", "B"),
+    ("TG-04", "git tag --force v1", "B"),
+    ("TG-05", "git tag -fm msg v1", "B"),
+    ("TG-06", "git tag v1", "B"),
+    ("TG-07", "git tag -a v1 -m release", "B"),
+    ("TG-08", "git tag -md v1", "B"),
+    ("TG-09", "git tag --format=%(refname)", "A"),
+    # worktree remove --force
+    ("WT-01", "git worktree remove --force .tmp/worktrees/wt1", "B"),
+    ("WT-02", "git worktree remove -f .tmp/worktrees/wt1", "B"),
+    ("WT-03", "git worktree remove .tmp/worktrees/wt1", "A"),
+    ("WT-04", "git worktree prune", "A"),
+    # history writes only from the main working tree
+    ("MT-01", "git -C .tmp/worktrees/wt1 commit -m x", "B"),
+    ("MT-02", "git -C .tmp/worktrees/wt1 merge feature", "B"),
+    ("MT-03", "git -C .tmp/worktrees/wt1 cherry-pick abc", "B"),
+    ("MT-04", "git -C .tmp/worktrees/wt1 revert abc", "B"),
+    ("MT-05", "git -C .tmp/worktrees/wt1 am fix.patch", "B"),
+    ("MT-06", "cd .tmp/worktrees/wt1 && git commit -m x", "B"),
+    ("MT-07", "git -C $WT commit -m x", "B"),
+    ("MT-08", "git --git-dir=.tmp/worktrees/wt1/.git commit -m x", "B"),
+    ("MT-09", "git merge --no-ff feature", "B"),  # merge, cherry-pick, am: dropped forms (round 2)
+    ("MT-10", "git cherry-pick abc", "B"),
+    ("MT-11", "git revert abc", "B"),
+    ("MT-11b", "git revert --no-edit abc", "A"),
+    ("MT-12", "git am .tmp/pm-state/patches/T-1.patch", "B"),
+    ("MT-13", "git -C .tmp/worktrees/wt1 diff --cached --binary", "A"),
+    ("MT-14", "git -C .tmp/worktrees/wt1 apply --check ../p.patch", "A"),
+    ("MT-15", "cd .tmp/worktrees/wt1 && git add -A", "A"),
+    ("MT-16", "git apply --index .tmp/pm-state/patches/T-1.patch", "B"),
+    ("MT-17", "git apply .tmp/pm-state/patches/T-1.patch", "A"),
+]
+
+
+@pytest.mark.parametrize(
+    ("case", "command", "expect"), PM_REWRITE_CASES, ids=[c[0] for c in PM_REWRITE_CASES]
+)
+def test_git_guard_pm_never_rewrites(guard_repo: Path, case: str, command: str, expect: str) -> None:
+    tool = "PowerShell" if "Select-Object" in command else "Bash"
+    check(guard_repo, case, tool, command, expect, mode="pm")
+
+
+@pytest.mark.parametrize(
+    ("command", "expect"),
+    [
+        ("git reset --hard; Write-Host done", "B"),
+        ("git status; git push origin --delete feat", "B"),
+        ("git -C .tmp\\worktrees\\wt1 commit -m x", "B"),
+        ("Set-Location .tmp/worktrees/wt1; git commit -m x", "B"),
+        ("git -C .tmp\\worktrees\\wt1 add -A; git -C .tmp\\worktrees\\wt1 diff --cached", "A"),
+    ],
+)
+def test_git_guard_pm_never_rewrites_powershell(guard_repo: Path, command: str, expect: str) -> None:
+    check(guard_repo, command, "PowerShell", command, expect, mode="pm")
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["git -C $WT commit -m x", "cd $WT && git commit -m x", "git --work-tree=x commit -m x"],
+)
+def test_pm_history_write_in_an_unprovable_repository_names_the_reason(
+    guard_repo: Path, command: str
+) -> None:
+    got, messages = verdict(guard_repo, command)
+    assert got == "B" and any(w in m for m in messages for w in ("run-time", "run time", "redirects")), messages
+
+
+def test_pm_commit_from_a_worker_worktree_cwd_is_refused(guard_repo: Path) -> None:
+    wt = guard_repo / ".tmp" / "worktrees" / "wt1"
+    assert verdict(guard_repo, "git commit -m x", cwd=wt)[0] == "B"
+    assert verdict(guard_repo, "git add src/fix.py", cwd=wt)[0] == "A"
+    blocks = verdict(guard_repo, "git commit -m x", cwd=wt)[1]
+    assert any("worker worktree" in b for b in blocks) and any("decision 77" in b for b in blocks)
+
+
+def test_aliases_are_never_run(guard_repo: Path) -> None:
+    # Round 2: aliases are never expanded; a non-built-in name is unknown and refused in both modes, even one whose
+    # expansion is harmless (review R1: Git's alias quoting cannot be read reliably by the guard).
+    cases = ["rb HEAD~2", "ci --amend", "ci -m x", "st", "qa -m x"]
+    for words in cases:
+        for mode in ("pm", "worker"):
+            got, blocks = verdict(guard_repo, f"git {words}", mode=mode)
+            assert got == "B" and any("read-only" in b for b in blocks), (words, mode, blocks)
+    assert verdict(guard_repo, "git commit -m x")[0] == "A"  # near miss: the built-in itself
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# T-024 fix round 1: one normaliser for every git spelling (review F1-F4, item 9), through the hook entry point.
+ENTRY_ROOT = HOOKS.parents[2]  # the hook's project root when run as a script
+WORKER_WT = (ENTRY_ROOT / ".tmp" / "worktrees" / "probe-wt").as_posix()
+
+
+def entry(command: str, tool: str = "Bash", mode: str = "pm", cwd: Path | None = None) -> tuple[str, str]:
+    """Verdict of the real hook process (exit 2 blocks) and its stderr."""
+    event = {
+        "tool_name": tool,
+        "tool_input": {"command": command},
+        "session_id": "t-entry",
+        "cwd": str(cwd or ENTRY_ROOT),
+    }
+    done = run_hook(event, "--git-mode", mode)
+    assert done.returncode in (0, 2), done.stderr
+    return ("B" if done.returncode == 2 else "A"), done.stderr
+
+
+@pytest.fixture
+def alias_repos(tmp_path: Path) -> tuple[Path, Path]:
+    """Repository A (no aliases, the session's directory) and B (`rw` = `rebase -i`, `st` = `status`, `nil` = "")."""
     from conftest import git
 
-    repo = tmp_path / "alias-repo"
+    a, b = tmp_path / "repo-a", tmp_path / "repo b"
+    for repo in (a, b):
+        repo.mkdir()
+        git(repo, "init", "-q")
+    git(b, "config", "alias.rw", "rebase -i")
+    git(b, "config", "alias.st", "status")
+    git(b, "config", "alias.nil", "")
+    return a, b
+
+
+@pytest.mark.parametrize(
+    ("case", "tool", "command", "expect"),
+    [
+        ("F1-attached-C", "Bash", f"git -C{WORKER_WT} commit -m x", "B"),
+        ("F1-git-dir", "Bash", f"git --git-dir={WORKER_WT}/.git commit -m x", "B"),
+        ("F1-env-bash", "Bash", f'GIT_DIR="{WORKER_WT}/.git" git commit -m x', "B"),
+        ("F1-env-export", "Bash", f"export GIT_WORK_TREE={WORKER_WT}; git commit -m x", "B"),
+        ("F1-env-ps", "PowerShell", f'$env:GIT_DIR="{WORKER_WT}/.git"; git commit -m x', "B"),
+        ("F1-env-ps-item", "PowerShell", f"Set-Item 'env:GIT_COMMON_DIR' x; git commit -m x", "B"),
+        # Round 2: a write runs with no GIT_* variable at all.
+        ("F1-pager", "Bash", "GIT_PAGER=cat git commit -m x", "B"),
+        ("F1-near-message", "Bash", 'git commit -m "explain GIT_DIR=x handling"', "A"),
+        ("F1-ps-pager", "PowerShell", "$env:GIT_PAGER='cat'; git commit -m x", "B"),
+        ("F1-near-pager-read", "Bash", "GIT_PAGER=cat git log -1", "A"),
+        ("F3-ps-var", "PowerShell", "& $g rebase -i HEAD~2", "B"),
+        ("F3-bash-var", "Bash", "$g reset --hard", "B"),
+        ("F3-built", "PowerShell", "& ('g'+'it') rebase", "B"),
+        ("F3-near-var", "PowerShell", "& $g status", "A"),
+        ("F4-tag", "Bash", "git tag --d v1", "B"),
+        ("F4-switch", "Bash", "git switch --force- main", "B"),
+        ("F4-symref", "Bash", "git symbolic-ref --del HEAD", "B"),
+        ("F4-reset", "Bash", "git reset --h", "B"),
+        ("F4-worktree", "Bash", "git worktree remove --f .tmp/worktrees/x", "B"),
+        ("F4-amend", "PowerShell", "git commit --amen -m x", "B"),
+        ("F4-switch-force", "Bash", "git switch --force main", "B"),  # round 2: switch is a dropped form
+        ("F4-near-tag-list", "Bash", "git tag --list", "A"),
+        ("F4-near-worktree", "Bash", "git worktree remove .tmp/worktrees/x", "A"),
+        ("F4-symref-read", "Bash", "git symbolic-ref HEAD", "B"),  # not on the read-only allowlist
+        ("F4-no-amend", "Bash", "git commit --no-amend -m x", "B"),  # round 2: only -q, -m, -F
+    ],
+)
+def test_pm_spellings_through_the_hook(case: str, tool: str, command: str, expect: str) -> None:
+    got, err = entry(command, tool)
+    assert got == expect, f"{case}: {command!r} -> {got} {err}"
+
+
+@pytest.mark.parametrize(
+    ("case", "tool", "command", "expect"),
+    [
+        ("9-dashed-bash", "Bash", "git-commit -m probe", "B"),
+        ("9-dashed-ps", "PowerShell", "& git-commit -m probe", "B"),
+        ("9-dashed-exe", "Bash", "git-push.exe origin main", "B"),
+        ("9-upper", "Bash", "git COMMIT -m probe", "B"),
+        ("9-near-dashed-read", "Bash", "git-status --short", "A"),
+        ("9-near-read", "PowerShell", "& git status --short", "A"),
+    ],
+)
+def test_worker_dashed_git_through_the_hook(case: str, tool: str, command: str, expect: str) -> None:
+    got, err = entry(command, tool, mode="worker")
+    assert got == expect, f"{case}: {command!r} -> {got} {err}"
+
+
+def test_pm_aliases_never_run_in_any_repository(alias_repos: tuple[Path, Path]) -> None:
+    """Round 2 (review F2, R1): an alias is an unknown subcommand, whichever repository defines it."""
+    a, b = alias_repos
+    for command in (
+        f'git -C "{b.as_posix()}" rw',
+        f'cd "{b.as_posix()}" && git rw',
+        f"git --git-dir={b.as_posix()}/.git rw",
+        f"GIT_CONFIG_GLOBAL='{b.as_posix()}/.git/config' git rw",
+        "git nil",
+        "git st",
+    ):
+        got, err = entry(command, cwd=b)
+        assert got == "B" and "crash" not in err.lower(), (command, err)
+    assert entry("git status --short", cwd=b)[0] == "A"  # near miss: the built-in
+
+
+# Review round 2 findings through the hook entry point: (id, mode, tool, command, verdict).
+ROUND2_CASES = [
+    ("R1-quoted-alias", "pm", "Bash", "git qa -m x", "B"),
+    ("R1-near-commit", "pm", "Bash", "git commit -m x", "A"),
+    ("R2-pm-launcher", "pm", "Bash", 'X="y" bash -c "git commit --amend -m x"', "B"),
+    ("R2-worker-launcher", "worker", "Bash", 'X="y" bash -c "git commit -m x"', "B"),
+    ("R2-worker-cmd", "worker", "Bash", 'X="y" cmd /c git commit -m x', "B"),
+    ("R2-ps-launcher", "pm", "PowerShell", "powershell -Command 'git commit --amend -m x'", "B"),
+    ("R2-start-process", "pm", "PowerShell", "Start-Process git -ArgumentList 'commit','--amend'", "B"),
+    ("R2-near-launcher", "pm", "Bash", 'X="y" bash -c "echo hi"', "A"),
+    ("R3-runtime-push", "pm", "Bash", 'git -C "$x" push origin main', "B"),
+    ("R3-git-dir-push", "pm", "Bash", "git --git-dir=elsewhere push origin main", "B"),
+    ("R3-runtime-tag", "pm", "Bash", 'git -C "$x" tag new', "B"),
+    ("R3-runtime-branch", "pm", "Bash", 'git -C "$x" branch new', "B"),
+    ("R3-near-tag-list", "pm", "Bash", "git tag --list", "A"),
+    ("R4-include", "pm", "Bash", "git -c include.path=.tmp/a.gitconfig injected -m x", "B"),
+    ("R4-include-ps", "pm", "PowerShell", "git -c include.path=.tmp/a.gitconfig injected -m x", "B"),
+    ("R4-include-commit", "pm", "Bash", "git -c include.path=.tmp/a.gitconfig commit -m x", "B"),
+    ("R4-near-config-read", "pm", "Bash", "git -c core.quotepath=false log -1", "A"),
+    ("R5-no-ff", "pm", "Bash", "git pull --ff-only --no-ff", "B"),
+    ("R5-ff", "pm", "Bash", "git pull --ff-only --ff", "B"),
+    ("R5-reordered", "pm", "Bash", "git pull --no-ff --ff-only", "B"),
+    ("R5-near", "pm", "Bash", "git pull --ff-only", "A"),
+    ("R6-fast-import", "pm", "Bash", "git fast-import --force < .tmp/changes.fi", "B"),
+    ("R6-fetch-force", "pm", "Bash", "git fetch --update-head-ok --force . HEAD~1:main", "B"),
+    ("R6-fetch-refspec", "pm", "Bash", "git fetch origin +main:main", "B"),
+    ("R6-near-fetch", "pm", "Bash", "git fetch origin", "A"),
+    ("R8-message-amend", "pm", "Bash", "git commit -m --amend", "A"),
+    # `-m` takes `-q` and `-F` as its values; one message source (round 3 item 9: `-m` with `-F` is refused).
+    ("R8-message-options", "pm", "PowerShell", "git commit -m -q -m -F", "A"),
+    ("R8-tag-message", "pm", "Bash", "git tag -m -f newtag", "B"),  # tag creation is a dropped form
+    ("R8-near-amend", "pm", "Bash", "git commit --amend -m x", "B"),
+]
+
+
+@pytest.mark.parametrize(("case", "mode", "tool", "command", "expect"), ROUND2_CASES, ids=[c[0] for c in ROUND2_CASES])
+def test_round2_findings_through_the_hook(case: str, mode: str, tool: str, command: str, expect: str) -> None:
+    got, err = entry(command, tool, mode=mode)
+    assert got == expect, f"{case}: {command!r} -> {got} {err}"
+
+
+# Every orchestrator write form (positive), run from the guard_repo main tree or its worker worktree wt1.
+WRITE_FORM_CASES = [
+    "git add src/fix.py",
+    "git add -A",
+    "git add -- src/fix.py",
+    "git commit -q -m x -m y",
+    "git commit -F .tmp/msg.txt",
+    "git push origin main",
+    "git revert --no-edit abc123",
+    "git pull --ff-only",
+    "git pull --ff-only origin main",
+    "git fetch",
+    "git fetch origin",
+    "git reset",
+    "git reset -- src/fix.py",
+    "git reset HEAD -- src/fix.py",
+    "git restore --staged src/fix.py",
+    "git restore --staged -- src/fix.py",
+    "git apply .tmp/p.patch",
+    "git apply --check .tmp/p.patch",
+    "git worktree add --detach .tmp/worktrees/new HEAD",
+    "git worktree remove .tmp/worktrees/wt1",
+    "git worktree prune",
+    "git branch -d wt1",
+    "git -C .tmp/worktrees/wt1 add -A",
+    "git -C .tmp/worktrees/wt1 apply --check ../p.patch",
+    "git.exe commit -m x",
+]
+
+
+def _split_sub(command: str) -> tuple[list[str], str, list[str]]:
+    """(`git` and its `-C <dir>` words, subcommand, the rest) of a WRITE_FORM_CASES command."""
+    words = command.split()
+    k = 1
+    while words[k] == "-C":
+        k += 2
+    return words[:k], words[k], words[k + 1 :]
+
+
+MUTATIONS = {
+    "extra option": lambda pre, sub, rest: [*pre, sub, "--x-extra", *rest],
+    "alias name": lambda pre, sub, rest: [*pre, sub + "x", *rest],
+    "-c config": lambda pre, sub, rest: [pre[0], "-c", "user.name=x", *pre[1:], sub, *rest],
+    "-c include": lambda pre, sub, rest: [pre[0], "-c", "include.path=.tmp/a.gitconfig", *pre[1:], sub, *rest],
+    "global option": lambda pre, sub, rest: [pre[0], "--no-pager", *pre[1:], sub, *rest],
+    "env prefix": lambda pre, sub, rest: ["GIT_EDITOR=true", *pre, sub, *rest],
+    "quoted env prefix": lambda pre, sub, rest: ['X="y"', "GIT_DIR=.git", *pre, sub, *rest],
+    "launcher": lambda pre, sub, rest: ["bash", "-c", "'" + " ".join([*pre, sub, *rest]) + "'"],
+    "dashed program": lambda pre, sub, rest: [f"git-{sub}", *rest],
+    # Round 3: run-time expansion (class E), wrappers and programs that run git (class F).
+    "variable argument": lambda pre, sub, rest: ["X=--amend;", *pre, sub, *rest, "$X"],
+    "quoted expansion": lambda pre, sub, rest: [*pre, sub, *rest, '"$(echo --force)"'],
+    "glob argument": lambda pre, sub, rest: [*pre, sub, *rest, "*"],
+    "env wrapper": lambda pre, sub, rest: ["env", *pre, sub, *rest],
+    "timeout wrapper": lambda pre, sub, rest: ["timeout", "9", *pre, sub, *rest],
+    "command wrapper": lambda pre, sub, rest: ["command", *pre, sub, *rest],
+    "quoted prefix and wrapper": lambda pre, sub, rest: ['X="y"', "env", *pre, sub, *rest],
+    "plain prefix": lambda pre, sub, rest: ["LC_ALL=C", *pre, sub, *rest],
+    "runner": lambda pre, sub, rest: ["uv", "run", *pre, sub, *rest],
+    "python inline": lambda pre, sub, rest: ["python", "-c", f"\"import os; os.system('{' '.join([*pre, sub, *rest])}')\""],
+    "node inline": lambda pre, sub, rest: ["node", "-e", f"\"require('child_process').execSync('{' '.join([*pre, sub, *rest])}')\""],
+    "upper case": lambda pre, sub, rest: ["GIT", *pre[1:], sub, *rest],
+    "run-time dir": lambda pre, sub, rest: [pre[0], "-C", "$d", *pre[1:], sub, *rest],
+    "variable program": lambda pre, sub, rest: ["g=git;", "$g", *pre[1:], sub, *rest],
+    "last-wins option": lambda pre, sub, rest: [*pre, sub, *rest, "--no-ff"],
+    # Round 4 (class F): code-carrying argument roles, suffixed and versioned program names, PATH selectors.
+    "env split-string": lambda pre, sub, rest: ["env", f"--split-string=\"{' '.join([*pre, sub, *rest])}\""],
+    "env -S after prefix": lambda pre, sub, rest: ['X="y"', "env", "-S", f"\"{' '.join([*pre, sub, *rest])}\""],
+    "unknown wrapper of a shell": lambda pre, sub, rest: ["chrt", "-b", "0", "sh", "-c", f"\"{' '.join([*pre, sub, *rest])}\""],
+    "runner of git.cmd": lambda pre, sub, rest: ["uv", "run", "git.cmd", *pre[1:], sub, *rest],
+    "versioned interpreter": lambda pre, sub, rest: ["ruby3.4", "-e", f"\"system('{' '.join([*pre, sub, *rest])}')\""],
+    "nodejs": lambda pre, sub, rest: ["nodejs", "-e", f"\"require('child_process').execSync('{' '.join([*pre, sub, *rest])}')\""],
+    "PATH statement": lambda pre, sub, rest: ["PATH=.tmp/shims:/usr/bin;", *pre, sub, *rest],
+    "PATH prefix": lambda pre, sub, rest: ["PATH=.tmp/shims", *pre, sub, *rest],
+    "PATHEXT export": lambda pre, sub, rest: ["export", "PATHEXT=.CMD;", *pre, sub, *rest],
+}
+
+
+@pytest.mark.parametrize("command", WRITE_FORM_CASES)
+def test_every_write_form_is_allowed(guard_repo: Path, command: str) -> None:
+    got, messages = verdict(guard_repo, command)
+    assert got == "A", f"{command!r} -> {got} {messages}"
+
+
+@given(command=s.sampled_from(WRITE_FORM_CASES), mutation=s.sampled_from(sorted(MUTATIONS)))
+def test_one_mutation_of_a_write_form_is_denied(guard_repo: Path, command: str, mutation: str) -> None:
+    """Property (round 2): a write form plus one mutation (extra option, alias, `-c`, env prefix, launcher, dashed or
+    upper-case program, run-time `-C`, variable program, a trailing last-wins option) is refused in pm mode."""
+    pre, sub, rest = _split_sub(command)
+    if mutation == "last-wins option" and sub == "commit":
+        rest = [*rest, "--amend"]  # commit's last-wins counterpart; `--no-ff` would be refused anyway
+    mutated = " ".join(MUTATIONS[mutation](pre, sub, rest))
+    got, messages = verdict(guard_repo, mutated)
+    assert got == "B", f"{mutation}: {mutated!r} -> {got} {messages}"
+
+
+def test_worker_worktree_allows_only_staging_and_applying(guard_repo: Path) -> None:
+    for command in ("git -C .tmp/worktrees/wt1 commit -m x", "git -C .tmp/worktrees/wt1 push origin main",
+                    "git -C .tmp/worktrees/wt1 reset -- src/fix.py", "git -C .tmp/worktrees/wt1 branch -d x"):
+        assert verdict(guard_repo, command)[0] == "B", command
+    assert verdict(guard_repo, "git -C .tmp/worktrees/wt1 add src/fix.py")[0] == "A"
+
+
+def test_a_repository_that_is_not_the_project_is_refused(guard_repo: Path, tmp_path: Path) -> None:
+    from conftest import git
+
+    other = guard_repo / ".tmp" / "scratch" / "other"
+    other.mkdir(parents=True, exist_ok=True)
+    git(other, "init", "-q")
+    assert verdict(guard_repo, "git -C .tmp/scratch/other commit -m x")[0] == "B"
+    assert verdict(guard_repo, "git -C src commit -m x")[0] == "A"  # near miss: a subdirectory of the main tree
+
+
+# Round 3 (Codex retest 2: R9, R2 reopened, R12, reflog; Gemini F2, F3): through the real hook process, each with a
+# near miss that still passes.
+ROUND3_CASES = [
+    ("R9-bash-var", "pm", "Bash", "MSG='x --amend'; git commit -m $MSG", "B"),
+    ("R9-bash-quoted-var", "pm", "Bash", 'git commit -m "$MSG"', "B"),
+    ("R9-bash-subst", "pm", "Bash", "git commit -m x $(echo --amend)", "B"),
+    ("R9-ps-splat", "pm", "PowerShell", "$msg=@('x','--amend'); git commit -m @msg", "B"),
+    ("R9-ps-array-var", "pm", "PowerShell", "$a='-D','done'; git branch -d $a", "B"),
+    ("R9-ps-embedded-quote", "pm", "PowerShell", "git commit -m 'say \"a --amend\" b'", "B"),
+    ("R9-ps-stop-parsing", "pm", "PowerShell", "git commit --% -m x --amend", "B"),
+    ("R9-fetch-var", "pm", "Bash", "ARGS='--update-head-ok --force . HEAD~1:main'; git fetch $ARGS", "B"),
+    ("R9-branch-var", "pm", "Bash", "BR='-D done'; git branch -d $BR", "B"),
+    ("R9-worker-config-var", "worker", "Bash", "X='--add a.b c'; git config $X", "B"),
+    ("R9-glob", "pm", "Bash", "git add *.py", "B"),
+    ("R9-near-literal", "pm", "Bash", "git commit -m 'x --amend'", "A"),
+    ("R9-near-ps-literal", "pm", "PowerShell", "git commit -m 'x --amend'", "A"),
+    ("R9-near-quoted-glob", "pm", "Bash", "git add 'src/*.py'", "A"),
+    ("R2-env", "pm", "Bash", 'X="y" env git commit --amend -m x', "B"),
+    ("R2-env-worker", "worker", "Bash", 'X="y" env git commit --amend -m x', "B"),
+    ("R2-env-bash", "pm", "Bash", 'X="y" env bash -c "git commit -m x"', "B"),
+    ("R2-timeout-bash", "pm", "Bash", 'X="y" timeout 10 bash -c "git commit -m x"', "B"),
+    ("R2-command", "pm", "Bash", 'X="y" command git commit --amend -m x', "B"),
+    ("R2-command-plain-form", "pm", "Bash", "command git commit -m x", "B"),
+    ("R2-prefix", "pm", "Bash", "LC_ALL=C git commit -m x", "B"),
+    ("R2-runner", "pm", "Bash", "uv run git commit -m x", "B"),
+    ("R2-worker-timeout-read", "worker", "Bash", "timeout 9 git status", "B"),
+    ("R2-near-env-echo", "pm", "Bash", 'X="y" env echo hi', "A"),
+    ("R2-near-echo", "worker", "Bash", "echo git commit --amend", "A"),
+    ("R2-near-grep", "worker", "Bash", "rg -n git docs", "A"),
+    ("R2-near-keyword", "pm", "Bash", "if true; then git commit -m x; fi", "A"),
+    ("R12-python", "pm", "Bash", "python -c \"import os; os.system('git commit --amend -m x')\"", "B"),
+    ("R12-node", "pm", "Bash", "node -e \"require('child_process').execSync('git commit --amend -m x')\"", "B"),
+    ("R12-python-worker", "worker", "PowerShell", "python -c \"import os; os.system('git status')\"", "B"),
+    ("R12-near-python", "pm", "Bash", 'python -c "print(1)"', "A"),
+    ("RL-expire", "pm", "Bash", "git reflog expire --expire=now --all", "B"),
+    ("RL-delete", "worker", "Bash", "git reflog delete HEAD@{1}", "B"),
+    ("RL-write", "pm", "Bash", "git reflog write refs/heads/main 1234567 89abcde forged", "B"),
+    ("RL-drop", "pm", "PowerShell", "git reflog drop main", "B"),
+    ("RL-near-show", "worker", "Bash", "git reflog show -5 main", "A"),
+    ("RL-near-bare", "pm", "Bash", "git reflog", "A"),
+    ("RL-near-exists", "worker", "Bash", "git reflog exists refs/heads/main", "A"),
+    ("F2-revert-tilde", "pm", "Bash", "git revert --no-edit HEAD~1", "A"),
+    ("F2-revert-caret", "pm", "PowerShell", "git revert --no-edit abc123^2", "A"),
+    ("F2-revert-range", "pm", "Bash", "git revert --no-edit HEAD~3..HEAD", "B"),
+    ("F2-revert-reflog", "pm", "Bash", "git revert --no-edit 'HEAD@{1}'", "B"),
+    ("F3-bare-commit", "pm", "Bash", "git commit", "B"),
+    ("F3-quiet-commit", "pm", "Bash", "git commit -q", "B"),
+    ("F3-two-sources", "pm", "Bash", "git commit -m x -F .tmp/msg.txt", "B"),
+    ("F3-near-paragraphs", "pm", "Bash", "git commit -m x -m y", "A"),
+]
+
+
+@pytest.mark.parametrize(("case", "mode", "tool", "command", "expect"), ROUND3_CASES, ids=[c[0] for c in ROUND3_CASES])
+def test_round3_findings_through_the_hook(case: str, mode: str, tool: str, command: str, expect: str) -> None:
+    got, err = entry(command, tool, mode=mode)
+    assert got == expect, f"{case}: {command!r} -> {got} {err}"
+
+
+# Round 4 (Codex retest 3: R2, R12 reopened, R13; Gemini P1, P2), each mode where the reviewer reproduced it, through
+# the real hook process, with near misses that still pass. Opaque inline code that builds the git word at run time is
+# not in this table: the worker turn snapshot detects it (test_cli_worker_git_snapshot.py), pm mode accepts it.
+ROUND4_CASES = [
+    *[
+        (f"R2-{tag}-{mode}", mode, "Bash", command, "B")
+        for mode in ("pm", "worker")
+        for tag, command in (
+            ("split-string", 'env --split-string="git commit --amend -m x"'),
+            ("split-string-prefix", 'X="y" env -S "git commit --amend -m x"'),
+            ("split-attached", 'env -S"git status"'),
+            ("split-cluster", 'env -iS "git status"'),
+            ("chrt-sh", 'chrt -b 0 sh -c "git commit --amend -m x"'),
+            ("taskset-bash", 'taskset 1 bash -lc "git status"'),
+        )
+    ],
+    ("R2-near-split-echo", "worker", "Bash", 'env -S "echo hi"', "A"),
+    ("R2-near-chrt-echo", "worker", "Bash", 'chrt -b 0 sh -c "echo hi"', "A"),
+    *[
+        (f"G7-encoded-{mode}", mode, "PowerShell", f"powershell -EncodedCommand {encoded('git status')}", "B")
+        for mode in ("pm", "worker")
+    ],
+    ("G7-encoded-pwsh", "worker", "PowerShell", f"pwsh -enc {encoded('git log -1')}", "B"),
+    ("G7-near-direct-read", "worker", "PowerShell", "git status", "A"),
+    *[
+        (f"G6-{tag}-{mode}", mode, "Bash", command, "B")
+        for mode in ("pm", "worker")
+        for tag, command in (
+            ("uv-cmd", "uv run git.cmd commit --amend -m x"),
+            ("uv-bat", "uv run git.bat commit --amend -m x"),
+            ("uv-path-exe", "uv run C:/Git/cmd/git.EXE status"),
+        )
+    ],
+    ("G6-near-git-cmd-read", "worker", "Bash", "git.cmd status", "A"),
+    ("G6-near-uv-tool", "worker", "Bash", "uv run ruff check src", "A"),
+    *[
+        (f"R12-{tag}-{mode}", mode, "Bash", command, "B")
+        for mode in ("pm", "worker")
+        for tag, command in (
+            ("nodejs", "nodejs -e \"require('child_process').execSync('git commit --amend -m x')\""),
+            ("ruby-versioned", "ruby3.4 -e \"system('git commit --amend -m x')\""),
+            ("python-versioned", "python3.12 -c \"import os; os.system('git status')\""),
+            ("node-exe", "node.exe -e \"require('child_process').execSync('git status')\""),
+        )
+    ],
+    ("R12-near-nodejs", "worker", "Bash", 'nodejs -e "console.log(1)"', "A"),
+    ("R12-near-ruby", "worker", "Bash", 'ruby3.4 -e "puts 1"', "A"),
+    *[
+        (f"R13-{tag}-{mode}", mode, tool, command, "B")
+        for mode in ("pm", "worker")
+        for tag, tool, command in (
+            ("bash-statement", "Bash", "PATH=.tmp/shims:$PATH; git status"),
+            ("bash-prefix", "Bash", "PATH=.tmp/shims:$PATH git status"),
+            ("bash-export", "Bash", "export PATH=.tmp/shims:$PATH; git log -1"),
+            ("bash-pathext", "Bash", "PATHEXT=.CMD; git status"),
+            ("ps-env", "PowerShell", "$env:PATH='.tmp/shims;'+$env:PATH; git status"),
+            ("ps-env-append", "PowerShell", "$env:Path += ';.tmp/shims'; git status"),
+            ("ps-pathext", "PowerShell", "$env:PATHEXT='.CMD;.EXE'; git status"),
+            ("ps-set-item", "PowerShell", "Set-Item 'env:PATH' '.tmp/shims'; git status"),
+        )
+    ],
+    ("R13-pm-commit", "pm", "Bash", "PATH=.tmp/shims:$PATH; git commit -m x", "B"),
+    ("R13-near-message", "pm", "Bash", 'git commit -m "PATH=x"', "A"),
+    ("R13-near-read-path", "worker", "Bash", "echo $PATH; git status", "A"),
+    ("R13-near-ps-read-path", "worker", "PowerShell", "$env:PATH -split ';'; git status", "A"),
+    ("R13-near-other-var", "worker", "Bash", "MYPATH=x; git status", "A"),
+    ("R13-near-no-git", "worker", "Bash", "PATH=.tmp/bin:$PATH; echo hi", "A"),
+]
+
+
+@pytest.mark.parametrize(("case", "mode", "tool", "command", "expect"), ROUND4_CASES, ids=[c[0] for c in ROUND4_CASES])
+def test_round4_findings_through_the_hook(case: str, mode: str, tool: str, command: str, expect: str) -> None:
+    got, err = entry(command, tool, mode=mode)
+    assert got == expect, f"{case}: {command!r} -> {got} {err}"
+
+
+@pytest.mark.parametrize(
+    ("word", "stem"),
+    [
+        ("git", "git"), ("GIT.CMD", "git"), ("C:/Git/cmd/git.bat", "git"), ("git.ps1", "git"),
+        ("git-commit.exe", "git-commit"), ("python3.12", "python"), ("ruby3.4", "ruby"), ("nodejs", "node"),
+        ("node22", "node"), ("perl5.36", "perl"), ("digit", "digit"), ("gitk", "gitk"), ("md5sum", "md5sum"),
+    ],
+)
+def test_program_stem(word: str, stem: str) -> None:
+    """Round 4, items 2 and 6: one normaliser for every program-name comparison."""
+    assert tg.program_stem(word) == stem
+
+
+def test_a_worktree_pointing_at_the_project_is_not_the_project(guard_repo: Path) -> None:
+    """R10: another repository whose `core.worktree` names the project root has the project's toplevel but its own
+    Git directory; a repository that is no registered worktree is no worker worktree either."""
+    import shutil
+
+    from conftest import git
+
+    other = guard_repo / ".tmp" / "scratch" / "toplevel-other"
+    fake = guard_repo / ".tmp" / "worktrees" / "fake"
+    try:
+        for repo in (other, fake):
+            repo.mkdir(parents=True, exist_ok=True)
+            git(repo, "init", "-q")
+        git(other, "config", "core.worktree", guard_repo.as_posix())
+        assert verdict(guard_repo, "git -C .tmp/scratch/toplevel-other commit -m x")[0] == "B"
+        assert verdict(guard_repo, "git -C .tmp/worktrees/fake add -A")[0] == "B"
+        assert verdict(guard_repo, "git commit -m x")[0] == "A"  # near miss: the project itself
+        assert verdict(guard_repo, "git -C .tmp/worktrees/wt1 add -A")[0] == "A"  # near miss: a registered worktree
+    finally:
+        for repo in (other, fake):
+            shutil.rmtree(repo, ignore_errors=True)
+
+
+def test_the_push_sends_only_the_checked_head(tmp_path: Path) -> None:
+    """R11: with `main` at A and HEAD at B on another branch, a marker for B does not let `git push origin main` send
+    A; near miss: HEAD on `main` with the marker of its tip."""
+    from conftest import git
+
+    repo = tmp_path / "push-src"
     repo.mkdir()
-    git(repo, "init", "-q")
-    git(repo, "config", "alias.ship", "push --force")
-    git(repo, "config", "alias.st", "status")
-    assert verdict(guard_repo, "git ship", cwd=repo)[0] == "B"
-    assert verdict(guard_repo, "git st", cwd=repo)[0] == "A"
+    git(repo, "init", "-q", "-b", "main")
+    for name in ("a", "b"):
+        if name == "b":
+            git(repo, "checkout", "-q", "-b", "other")
+        (repo / f"{name}.txt").write_text(name, encoding="utf-8")
+        git(repo, "add", f"{name}.txt")
+        git(repo, "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-q", "-m", name)
+    cfg = json.loads(json.dumps(_SHIPPED))
+    markers = repo / cfg["push_guard"]["marker_dir"]
+    markers.mkdir(parents=True)
+    head = git(repo, "rev-parse", "HEAD").strip()
+    (markers / head).write_text("", encoding="utf-8")
+    got, messages = verdict(repo, "git push origin main", cfg=cfg)
+    assert got == "B" and any("is not `refs/heads/main`" in m for m in messages), messages
+    git(repo, "checkout", "-q", "--detach")
+    assert verdict(repo, "git push origin main", cfg=cfg)[0] == "B"  # detached HEAD
+    git(repo, "checkout", "-q", "main")
+    tip = git(repo, "rev-parse", "HEAD").strip()
+    assert verdict(repo, "git push origin main", cfg=cfg)[0] == "B"  # main's tip has no marker
+    (markers / tip).write_text("", encoding="utf-8")
+    assert verdict(repo, "git push origin main", cfg=cfg)[0] == "A"
+
+
+def test_a_ref_moved_while_the_guard_reads_it_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R11 reopened (round 4): with only A marked, `main` moves to unmarked B right after the guard's first reading;
+    the push is refused. Near miss: no move, the marked tip passes. Scratch repository, setup writes only."""
+    from conftest import git
+
+    repo = tmp_path / "push-race"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    for name in ("a", "b"):
+        (repo / f"{name}.txt").write_text(name, encoding="utf-8")
+        git(repo, "add", f"{name}.txt")
+        git(repo, "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-q", "-m", name)
+    b = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "reset", "-q", "--hard", "HEAD~1")
+    a = git(repo, "rev-parse", "HEAD").strip()
+    cfg = json.loads(json.dumps(_SHIPPED))
+    markers = repo / cfg["push_guard"]["marker_dir"]
+    markers.mkdir(parents=True)
+    (markers / a).write_text("", encoding="utf-8")
+    assert verdict(repo, "git push origin main", cfg=cfg)[0] == "A"  # near miss
+    real = tg._push_source
+    calls: list[int] = []
+
+    def move_after_first(*args: Any) -> Any:
+        got = real(*args)
+        if not calls:
+            git(repo, "update-ref", "refs/heads/main", b)
+        calls.append(1)
+        return got
+
+    monkeypatch.setattr(tg, "_push_source", move_after_first)
+    result, messages = verdict(repo, "git push origin main", cfg=cfg)
+    assert result == "B" and any("changed while the guard checked it" in m for m in messages), messages
+    assert git(repo, "rev-parse", "HEAD").strip() == b and not (markers / b).exists()
+
+
+def test_commit_needs_one_message_source(guard_repo: Path) -> None:
+    """Gemini F3 in the fixture main tree: no message source would open an editor; `-m` with `-F` is two sources."""
+    for command in ("git commit", "git commit -q", "git commit -m x -F .tmp/msg.txt", "git commit -F a -F b"):
+        assert verdict(guard_repo, command)[0] == "B", command
+    for command in ("git commit -m x", "git commit -q -m x -m y", "git commit -F .tmp/msg.txt"):
+        assert verdict(guard_repo, command)[0] == "A", command
+
+
+def test_patch_save_in_a_worker_worktree(guard_repo: Path) -> None:
+    """Gemini F1: `git -C <worker> diff --cached --binary --output=<file>` passes only into `git_guard.patch_dir`."""
+    root = guard_repo.as_posix()
+    save = "git -C .tmp/worktrees/wt1 diff --cached --binary --output="
+    assert verdict(guard_repo, f"{save}{root}/.tmp/pm-state/patches/T-1.patch")[0] == "A"
+    assert verdict(guard_repo, f"{save}../../pm-state/patches/T-1.patch")[0] == "A"  # relative to the -C directory
+    for command in (
+        f"{save}../../../tasks/STATUS.md",
+        f"{save}T-1.patch",
+        f"{save}{root}/.tmp/pm-state/patches",
+        "git diff --cached --binary --output=.tmp/pm-state/patches/T-1.patch",  # the main tree, not a worker
+        "git -C .tmp/worktrees/wt1 diff --cached --binary --ext-diff --output=../../pm-state/patches/T-1.patch",
+        "git -C .tmp/worktrees/wt1 diff --output=../../pm-state/patches/T-1.patch",
+    ):
+        assert verdict(guard_repo, command)[0] == "B", command
+    assert verdict(guard_repo, f"{save}../../pm-state/patches/T-1.patch", mode="worker")[0] == "B"
+    cfg = with_cfg(git_guard={"patch_dir": ".tmp/other-patches"})
+    assert verdict(guard_repo, f"{save}../../other-patches/T-1.patch", cfg=cfg)[0] == "A"
+    assert verdict(guard_repo, f"{save}../../pm-state/patches/T-1.patch", cfg=cfg)[0] == "B"
+    raw = json.loads(json.dumps(_SHIPPED))
+    del raw["git_guard"]["patch_dir"]
+    with pytest.raises(gc.ConfigError, match="patch_dir"):
+        gc.validate(raw)
+
+
+def test_the_orchestrator_procedure_passes(guard_repo: Path) -> None:
+    """Round 3 done check: the orchestrator's own procedure, with the shipped config (push guard on)."""
+    from conftest import git
+
+    cfg = json.loads(json.dumps(_SHIPPED))
+    head = git(guard_repo, "rev-parse", "HEAD").strip()
+    markers = guard_repo / cfg["push_guard"]["marker_dir"]
+    markers.mkdir(parents=True, exist_ok=True)
+    root = guard_repo.as_posix()
+    steps = [
+        ("Bash", "git -C .tmp/worktrees/wt1 add -A"),
+        ("PowerShell", "git -C .tmp/worktrees/wt1 add -A"),
+        ("Bash", f"git -C .tmp/worktrees/wt1 diff --cached --binary --output={root}/.tmp/pm-state/patches/T-9.patch"),
+        ("PowerShell", "git -C .tmp/worktrees/wt1 diff --cached --binary > .tmp/pm-state/patches/T-9.patch"),
+        ("Bash", "git apply --check .tmp/pm-state/patches/T-9.patch"),
+        ("Bash", "git apply .tmp/pm-state/patches/T-9.patch"),
+        ("Bash", "git add -A"),
+        ("Bash", 'git commit -m "T-9: integrate the task"'),
+        ("PowerShell", "git commit -F .tmp/pm-state/msg.txt"),
+        ("Bash", "python -B tools/agent-workflow/prepush_check.py"),
+        ("Bash", f"python -B tools/agent-workflow/prepush_mark.py --expect {head}"),
+        ("Bash", "git worktree add --detach .tmp/worktrees/T-10 HEAD"),
+        ("Bash", "git worktree remove .tmp/worktrees/wt1"),
+        ("Bash", "git worktree prune"),
+        ("Bash", "git branch -d wt1"),
+        ("Bash", f"git revert --no-edit {head[:12]}"),
+    ]
+    try:
+        assert verdict(guard_repo, "git push origin main", cfg=cfg)[0] == "B"  # no marker yet
+        (markers / head).write_text("", encoding="utf-8")
+        steps.append(("Bash", "git push origin main"))
+        for tool, command in steps:
+            got, messages = verdict(guard_repo, command, tool, cfg=cfg)
+            assert got == "A", f"{command!r} -> {got} {messages}"
+    finally:
+        (markers / head).unlink(missing_ok=True)
+
+
+DENIED_SPELLINGS = [
+    ("commit", "--amend", [], ["-m", "x"]),
+    ("tag", "--delete", [], ["v1"]),
+    ("tag", "--force", [], ["v1", "HEAD"]),
+    ("switch", "--force-create", [], ["main"]),
+    ("symbolic-ref", "--delete", [], ["HEAD"]),
+    ("reset", "--hard", [], []),
+    ("reset", "--soft", [], ["HEAD~1"]),
+    ("reset", "--keep", [], []),
+    ("worktree", "--force", ["remove"], ["p"]),
+    ("push", "--force", [], ["origin", "main"]),
+    ("push", "--force-with-lease", [], ["origin", "main"]),
+    ("push", "--mirror", [], ["origin"]),
+    ("push", "--delete", [], ["origin", "x"]),
+    ("push", "--prune", [], ["origin"]),
+    ("branch", "--force", [], ["x", "HEAD"]),
+]
+SAFE_SPELLINGS = [
+    "commit -m x",
+    "tag --list",
+    "reset -- f.py",
+    "worktree remove .tmp/worktrees/wt1",
+    "push origin main",
+    "branch -d x",
+    "pull --ff-only",
+]
+EXEC_FORMS = ["git {sub}", "git-{sub}", "git.exe {sub}", "GIT {sub}", "git --no-pager {sub}", "git -C <ROOT> {sub}"]
+PLAIN_EXEC_FORMS = ["git {sub}", "git.exe {sub}", "git -C <ROOT> {sub}"]  # round 2: the only spellings of a write
+REAL_PREFIX_OPTIONS = {"switch": ("--force",), "pull": ("--ff",)}  # real options that prefix a ruled one
+
+
+@given(
+    row=s.sampled_from(DENIED_SPELLINGS),
+    cut=s.integers(min_value=0, max_value=20),
+    form=s.sampled_from(EXEC_FORMS),
+    value=s.sampled_from(["", "=x"]),
+)
+def test_every_spelling_of_a_denied_option_is_denied(
+    guard_repo: Path, row: tuple[str, str, list[str], list[str]], cut: int, form: str, value: str
+) -> None:
+    """Property (review F4): any unique-prefix spelling of a ruled long option (`--d` ... `--delete`), in any
+    executable spelling, is refused (round 2: by the allowlist, since no write form takes these options)."""
+    sub, full, before, after = row
+    spelled = full[: max(3, len(full) - cut)]
+    if spelled in REAL_PREFIX_OPTIONS.get(sub, ()):
+        spelled = full
+    option = spelled + (value if full.startswith("--force-with") else "")
+    words = " ".join([*before, option, *after])
+    command = form.format(sub=sub).replace("<ROOT>", guard_repo.as_posix()) + " " + words
+    got, messages = verdict(guard_repo, command)
+    assert got == "B", f"{command!r} -> {got} {messages}"
+
+
+@pytest.mark.parametrize("words", SAFE_SPELLINGS)
+@pytest.mark.parametrize("form", PLAIN_EXEC_FORMS)
+def test_safe_spellings_stay_allowed(guard_repo: Path, form: str, words: str) -> None:
+    sub, _, rest = words.partition(" ")
+    command = form.format(sub=sub).replace("<ROOT>", guard_repo.as_posix()) + " " + rest
+    got, messages = verdict(guard_repo, command)
+    assert got == "A", f"{command!r} -> {got} {messages}"
 
 
 def test_monitor_runs_through_the_git_guard(guard_repo: Path) -> None:
@@ -631,14 +1419,38 @@ def test_override_git_and_inline_modes(guard_repo: Path) -> None:
         assert verdict(guard_repo, 'python -c "a=1\nb=2"', cfg=cfg)[0] == expect
 
 
-def test_override_merge_lists_and_worktrees_dir(guard_repo: Path) -> None:
+def test_override_worktrees_dir_for_the_main_tree_rule(guard_repo: Path) -> None:
     wt = guard_repo / ".tmp" / "worktrees" / "wt1"
-    merge = {"mode": "worker-merge", "cwd": wt, "worktree": wt}
-    cfg = with_cfg(git_guard={"merge_subcommands": ["merge"]})
-    assert verdict(guard_repo, "git add src/fix.py", cfg=cfg, **merge)[0] == "B"  # type: ignore[arg-type]
+    assert verdict(guard_repo, "git commit -m x", cwd=wt)[0] == "B"
+    assert verdict(guard_repo, "git -C .tmp/worktrees/wt1 add src/fix.py")[0] == "A"
+    from conftest import git
+
+    w2 = guard_repo / ".tmp" / "other" / "w2"
+    if not w2.exists():  # round 3 class G: a worker worktree is a registered worktree of the project, not a path
+        git(guard_repo, "worktree", "add", "-q", "--detach", str(w2))
     cfg = with_cfg(git_guard={"worktrees_dir": ".tmp/other"})
-    assert verdict(guard_repo, "git add src/fix.py", cfg=cfg, **merge)[0] == "B"  # type: ignore[arg-type]
-    assert verdict(guard_repo, "git add src/fix.py", **merge)[0] == "A"  # type: ignore[arg-type]
+    # wt1 is no worker worktree any more, and its toplevel is not the project root: neither kind, refused.
+    assert verdict(guard_repo, "git -C .tmp/worktrees/wt1 add src/fix.py", cfg=cfg)[0] == "B"
+    assert verdict(guard_repo, "git -C .tmp/other/w2 add x.py", cfg=cfg)[0] == "A"
+    assert verdict(guard_repo, "git -C .tmp/other/w2 commit -m x", cfg=cfg)[0] == "B"
+
+
+def test_override_push_remote_and_branch(guard_repo: Path) -> None:
+    assert verdict(guard_repo, "git push origin main")[0] == "A"
+    cfg = with_cfg(git_guard={"push_remote": "upstream", "push_branch": "trunk"})
+    assert verdict(guard_repo, "git push upstream trunk", cfg=cfg)[0] == "A"
+    assert verdict(guard_repo, "git push origin main", cfg=cfg)[0] == "B"
+    raw = json.loads(json.dumps(_SHIPPED))
+    del raw["git_guard"]["push_branch"]
+    with pytest.raises(gc.ConfigError, match="push_branch"):
+        gc.validate(raw)
+
+
+def test_removed_merge_list_is_refused_by_the_config() -> None:
+    raw = json.loads(json.dumps(_SHIPPED))
+    raw["git_guard"]["merge_subcommands"] = ["merge", "add"]
+    with pytest.raises(gc.ConfigError, match="unknown keys: merge_subcommands"):
+        gc.validate(raw)
 
 
 def test_override_git_timeout(guard_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -650,7 +1462,8 @@ def test_override_git_timeout(guard_repo: Path, monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(tg.subprocess, "run", fake_run)
     cfg = gc.validate({**json.loads(json.dumps(CFG)), "git_timeout_seconds": 7})
-    assert verdict(guard_repo, "git frobnicate", cfg=cfg)[0] == "A"  # PM: alias lookup, no alias
+    # PM write: the main-tree check asks git for the toplevel; the double answers rc 1, so the write is refused.
+    assert verdict(guard_repo, "git commit -m x", cfg=cfg)[0] == "B"
     assert seen and set(seen) == {7}
 
 
@@ -706,7 +1519,9 @@ def test_invalid_hook_arguments_block_only_shells() -> None:
     bash = {"tool_name": "Bash", "tool_input": {"command": "ls"}}
     assert run_hook(bash).returncode == 2  # --git-mode missing
     assert run_hook(bash, "--git-mode", "admin").returncode == 2
-    assert run_hook(bash, "--git-mode", "worker-merge").returncode == 2  # no --worktree
+    # The merge mode was removed (decision 77): an old hook line fails closed for the shell tools.
+    assert run_hook(bash, "--git-mode", "worker-merge", "--worktree", "x").returncode == 2
+    assert run_hook(bash, "--git-mode", "worker", "--worktree", "x").returncode == 2
     assert run_hook({"tool_name": "Read", "tool_input": {}}).returncode == 0
 
 
@@ -770,7 +1585,7 @@ def test_top_level_crash_does_not_lock_the_session(tmp_path: Path) -> None:
     """An import failure exits 1, which Claude Code treats as non-blocking: the tool call goes ahead."""
     hooks = tmp_path / "a" / "b" / "c" / "hooks"
     hooks.mkdir(parents=True)
-    for name in ("tool_guard.py", "guard_config.py", "process_guard.py", "tool_health.py"):
+    for name in ("tool_guard.py", "guard_config.py", "process_guard.py", "tool_health.py", "git_ledger.py"):
         shutil.copy(HOOKS / name, hooks / name)
     (hooks / "shell_targets.py").write_text("raise ImportError('injected')\n", encoding="utf-8")
     proc = subprocess.run(
@@ -922,7 +1737,7 @@ FR1_CASES = [
     ("F8-6", "worker", "PowerShell", "$g='git'; & $g commit -m x", "B"),
     ("F8-7", "pm", "PowerShell", "$g='git'; & $g push --force", "B"),
     ("F8-8", "worker", "PowerShell", "$g='git'; & $g status", "A"),
-    ("F8-9", "pm", "PowerShell", "$g='git'; & $g push", "A"),
+    ("F8-9", "pm", "PowerShell", "$g='git'; & $g push", "B"),  # round 2: a write needs a literal `git`
     # F9 computed command names
     ("F9-1", "worker", "PowerShell", "iex ('Set-'+'Content docs/a.md x')", "B"),
     ("F9-2", "worker", "PowerShell", "& ('Set-'+'Content') docs/a.md x", "B"),
@@ -1044,9 +1859,9 @@ FR1_CASES = [
     ("F15-6", "pm", "Bash", "git config --global alias.x '!git push --force'", "B"),
     ("F15-7", "pm", "Bash", "git push $a", "B"),
     ("F15-8", "pm", "PowerShell", "git push @('-f')", "B"),
-    ("F15-9", "pm", "Bash", "git config user.name x", "A"),
+    ("F15-9", "pm", "Bash", "git config user.name x", "B"),  # round 2: config writes are no write form
     ("F15-10", "pm", "Bash", "git config alias.y '!sh x.sh'", "B"),  # a shell alias may push later
-    ("F15-11", "pm", "Bash", "git config alias.st status", "A"),
+    ("F15-11", "pm", "Bash", "git config alias.st status", "B"),
     # F16 classes closed in fix round 1: PATHEXT spellings and bash `eval` joining its words
     ("F16-1", "worker", "Bash", "git.cmd commit -m x", "B"),
     ("F16-2", "pm", "PowerShell", "git.bat push --force", "B"),
@@ -1136,7 +1951,7 @@ FR2_CASES = [
     ("N7-9", "pm", "Bash", "ls | parallel rm", "B"),
     ("N7-10", "worker", "Bash", 'bash -c -- "rm .tmp/scratch/x.log"', "A"),
     ("N7-11", "worker", "Bash", "env -u X python -B x.py", "A"),
-    ("N7-12", "worker", "Bash", "bash -lc 'git status --short'", "A"),
+    ("N7-12", "worker", "Bash", "bash -lc 'git status --short'", "B"),  # round 2: git through a launcher
     # N2: a bound value's every word is the command line
     ("N2-1", "pm", "Bash", 'c="rm README.md"; $c', "B"),
     ("N2-2", "worker", "Bash", 'c="git commit -m x"; $c', "B"),
@@ -1144,7 +1959,7 @@ FR2_CASES = [
     ("N2-4", "pm", "Bash", 'c="rm README.md"; bash -c "$c"', "B"),
     ("N2-5", "worker", "Bash", 'c="rm .tmp/scratch/x.log"; $c', "A"),
     ("N2-6", "worker", "Bash", 'c="git status --short"; $c', "A"),
-    ("N2-7", "pm", "Bash", 'c="git push origin main"; $c', "A"),
+    ("N2-7", "pm", "Bash", 'c="git push origin main"; $c', "B"),  # round 2: a write needs a literal `git`
     # N3: a closer before the call operator
     ("N3-1", "pm", "PowerShell", "$n='Set-Content'; if(1){1}&$n README.md x", "B"),
     ("N3-2", "pm", "PowerShell", "$n='Set-Content'; (1)&$n README.md x", "B"),

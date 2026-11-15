@@ -7,7 +7,7 @@ Commands run from the canonical checkout (the scripts derive the project root fr
 
 - **Decision 232:** every Claude implementer, reviewer, scout or checker is a persistent `claude -p` conversation (`--session-id`, then `--resume`). The PM talks to it turn by turn, like a user, and picks the effort per task.
 - **Cache reuse:** the CLI writes a 1-hour prompt cache (Agent-tool subagents get 5 minutes). A resumed turn read about 17K cached tokens and wrote 0.6K; a new session rewrote about 14K.
-- **No subagents inside workers:** the launcher withholds Agent, Task, Workflow, scheduling, cross-session, publishing and worktree tools, and denies `git commit`/`git push` and `.secrets` (workers stage; the PM commits).
+- **No subagents inside workers:** the launcher withholds Agent, Task, Workflow, scheduling, cross-session, publishing and worktree tools, and denies `.secrets` and every git command that is not read-only (`hooks/tool_guard.py --git-mode worker`): workers never stage, commit, push or merge; the orchestrator stages in the worker's worktree to save the patch, then commits and pushes (AGENTS.md section 11, decision 77).
 - **Decision 233, tier by difficulty:**
 
 | Task | Implementer | Effort (changeable per `send`) |
@@ -108,7 +108,7 @@ powershell -File tools/agent-workflow/gemini-launch.ps1 -Workspace <name> -Promp
 - `gemini-review.ps1` (reviews, pre-mortems, digests): user account, default permission policy (reads inside the workspace only, no writes, no shell), one background call per job, the result is the reply in `_results/<id>.json`; exits 2 `INCOMPLETE` on a bad status, an empty reply or a denial. Never add `--dangerously-skip-permissions`.
 - Both launchers run `brief_lint.py` on `notes/brief.md` unless `-LintWaive` names why not.
 
-- `gemini-ws.ps1` builds `.tmp/agy-work/<name>` from a committed head with `git archive` (allowlisted directories `src`, `tests`, `configs`, `scripts`, `tools`, `docs`, `tasks`, `contracts`, `prompts`: no ignored files, no `.secrets`) plus `notes/` (task file, `delta.diff`, `stat.txt`); it fails if the workspace exists. `-Sanitize` rewrites `notes/*.md` so the runner path lint passes.
+- `gemini-ws.ps1` builds `.tmp/agy-work/<name>` from a committed head with `git archive` (allowlisted directories `src`, `tests`, `configs`, `scripts`, `tools`, `docs`, `tasks`, `contracts`, `prompts`: no ignored files, no `.secrets`) plus `notes/` (task file, `delta.diff`, `stat.txt`); it fails if the workspace exists. `-Workspace` must be one plain folder name (letters, digits, `.`, `_`, `-`; no separator, space, leading dot or trailing dot). Each build writes only into its own staging folder `.tmp/agy-work/.build-<name>-<guid>` and publishes with one atomic move, so of concurrent builds of one name exactly one wins, and a failed build leaves no workspace. `-Sanitize` rewrites `notes/*.md` so the runner path lint passes.
 - `gemini-launch.ps1` validates the prompt before calling `scripts/agy-runner/invoke-job.ps1`: no double quotes, exactly one line, workspace present, and no earlier result for the JobId. **A JobId is not reusable** (results are `.tmp/agy-work/_results/<id>.{json,done,stderr.txt}`); use a new id per job. `-Conversation` continues an earlier conversation (cache reuse).
 - Prompts name the exact workspace files and say: no web, URL or network tool, no subagents, run no commands, finish in one response. An empty `response` with `denied_actions` means a tool was denied; the status can still read SUCCESS.
 - Gemini changes are diffed by the PM before use. Failures from environment limits (for example Windows handle tests under the restricted account) are reported, never patched around.
@@ -120,5 +120,5 @@ powershell -File tools/agent-workflow/gemini-launch.ps1 -Workspace <name> -Promp
 - Never `--dangerously-skip-permissions` or `bypassPermissions`; the launcher uses `--permission-mode dontAsk` with an explicit allowlist and deny rules.
 - Never open, list, copy or print `.secrets/`; the launcher denies it. Do not put credentials, personal data or private images in briefs, logs or notes.
 - Everything stays under the project root: worktrees under `.tmp/worktrees/`, scratch under `.tmp/`; `--cwd` outside the root is refused. Temp files are removed before handoff (decision 109).
-- Workers stage but do not commit or push; the PM commits. Stop every process you start before replying (footer rule 7).
+- Workers leave their change unstaged in the worktree and never commit, push or merge; the orchestrator saves the patch, commits and pushes (decision 77). Stop every process you start before replying (footer rule 7).
 - The host's `ANTHROPIC_*` variables are removed from the worker environment; the CLI uses its own login.

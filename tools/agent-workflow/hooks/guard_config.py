@@ -49,6 +49,20 @@ def _text(value: Any, where: str) -> str:
     return value
 
 
+def _ref_word(value: Any, where: str) -> str:
+    """A remote or branch name used as one plain `git push <remote> <branch>` word: no option, refspec or range
+    syntax (`-`, `+`, `:`, `..`, `^`, `~`, `@{`, `*`, whitespace), so it can only name, never force or delete."""
+    _text(value, where)
+    if (
+        value.startswith("-")
+        or any(ch.isspace() or ch in "+:^~*?[\\$`'\"" for ch in value)
+        or ".." in value
+        or "@{" in value
+    ):
+        raise ConfigError(f"{where} must be a plain remote or branch name, got {value!r}")
+    return value
+
+
 def _regex(value: Any, where: str) -> str:
     _text(value, where)
     try:
@@ -86,6 +100,14 @@ def _relative_dir(value: Any, where: str) -> str:
             f"{where} must be a relative directory with forward slashes, no `.`/`..`: {value!r}"
         )
     return str(value)
+
+
+def _suffix(value: Any, where: str) -> str:
+    """A file-name suffix such as `.gguf`: a dot, then name characters only (no separator, no second dot)."""
+    _text(value, where)
+    if not re.fullmatch(r"\.[A-Za-z0-9_-]+", value):
+        raise ConfigError(f"{where} must be a file suffix like '.gguf', got {value!r}")
+    return value
 
 
 def _list(item: Check, *, unique: bool = True) -> Check:
@@ -210,9 +232,14 @@ SCHEMA = _section(
             {
                 "mode": _mode(MODES),
                 "readonly_subcommands": _list(_text),
-                "merge_subcommands": _list(_text),
                 "allowed_config_keys": _list(_text),
                 "worktrees_dir": _relative_dir,
+                # The one push form of the orchestrator: `git push <push_remote> <push_branch>` (T-024 round 2).
+                "push_remote": _ref_word,
+                "push_branch": _ref_word,
+                # Where the orchestrator's `git diff --cached --binary --output=<file>` may save a worker's patch
+                # (T-024 round 3; ORCHESTRATION section 2 "Accepted patches").
+                "patch_dir": _relative_dir,
             }
         ),
         "inline_interp": _section(
@@ -231,7 +258,14 @@ SCHEMA = _section(
         ),
         "read_router": _section({"mode": _mode(MODES)}),
         "push_guard": _section(
-            {"mode": _mode(MODES), "marker_dir": _relative_dir, "lint_command": _text}
+            {
+                "mode": _mode(MODES),
+                "marker_dir": _relative_dir,
+                "check_command": _text,
+                "check_timeout_seconds": _positive_int,
+                "forbidden_path_prefixes": _list(_relative_dir),
+                "forbidden_suffixes": _list(_suffix),
+            }
         ),
         "question_guard": _section(
             {

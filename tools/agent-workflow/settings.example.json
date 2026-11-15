@@ -1,19 +1,11 @@
 {
-  "_comment": "Template for the PM session hooks. Copy to .claude/settings.local.json (git-ignored) and replace <PROJECT_ROOT> (absolute canonical checkout, forward slashes), <PERMISSION_ROOT> (the same path in permission-rule form, e.g. //d/Project_github/...) and <VENV_PYTHON> (absolute .venv interpreter). Details: tools/agent-workflow/README.md, section Guard hooks.",
+  "_comment": "Template for the PM session hooks. Force pushes are refused by the structural guard (hooks/tool_guard.py, only `git push <push_remote> <push_branch>` passes), so there is no text glob for them (T-024 final round, F25). Copy to .claude/settings.local.json (git-ignored) and replace <PROJECT_ROOT> (absolute canonical checkout, forward slashes), <PERMISSION_ROOT> (the same path in permission-rule form, e.g. //d/Project_github/...) and <VENV_PYTHON> (absolute .venv interpreter). Details: tools/agent-workflow/README.md, section Guard hooks.",
   "permissions": {
     "deny": [
       "Read(**/.secrets/**)",
       "Read(<PERMISSION_ROOT>/.secrets/**)",
       "Grep(**/.secrets/**)",
-      "Glob(**/.secrets/**)",
-      "Bash(git push --force*)",
-      "Bash(git push *--force*)",
-      "Bash(git push -f*)",
-      "Bash(git push * -f*)",
-      "PowerShell(git push --force*)",
-      "PowerShell(git push *--force*)",
-      "PowerShell(git push -f*)",
-      "PowerShell(git push * -f*)"
+      "Glob(**/.secrets/**)"
     ]
   },
   "hooks": {
@@ -52,6 +44,13 @@
           {"type": "command", "timeout": 60, "command": "<VENV_PYTHON>",
            "args": ["-B", "-I", "<PROJECT_ROOT>/tools/agent-workflow/hooks/pm_invariants.py"]}
         ]
+      },
+      {
+        "matcher": "Bash|PowerShell|Monitor",
+        "hooks": [
+          {"type": "command", "timeout": 30, "command": "<VENV_PYTHON>",
+           "args": ["-B", "-I", "<PROJECT_ROOT>/tools/agent-workflow/hooks/git_ledger.py"]}
+        ]
       }
     ],
     "PostToolUseFailure": [
@@ -60,6 +59,13 @@
         "hooks": [
           {"type": "command", "timeout": 30, "command": "<VENV_PYTHON>",
            "args": ["-B", "-I", "<PROJECT_ROOT>/tools/agent-workflow/hooks/tool_monitor.py"]}
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell|Monitor",
+        "hooks": [
+          {"type": "command", "timeout": 30, "command": "<VENV_PYTHON>",
+           "args": ["-B", "-I", "<PROJECT_ROOT>/tools/agent-workflow/hooks/git_ledger.py"]}
         ]
       }
     ],

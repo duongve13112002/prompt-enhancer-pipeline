@@ -11,12 +11,15 @@ Interpreter code (`python -c "open(p, 'w')"`) and scripts run by path are not in
 
 from __future__ import annotations
 
+import fnmatch
 import glob
 import os
 import re
+import stat
 import subprocess
 import sys
 import unicodedata
+from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
@@ -48,6 +51,9 @@ SINKS = {
 }
 # PowerShell drives that hold no files. `alias:` and `function:` are not sinks: writing there defines a command.
 PS_SINK_DRIVES = {"env", "variable"}
+# PowerShell's built-in drives of providers that hold no files (about_Providers: Alias, Certificate, Environment,
+# Function, Registry, Variable, WSMan); `Temp:` (PowerShell 7.3+) is a FileSystem drive and stays a path.
+PS_PROVIDER_DRIVES = {"alias", "cert", "env", "function", "hkcu", "hklm", "variable", "wsman"}
 
 
 class Cmd(NamedTuple):
@@ -66,6 +72,10 @@ class Cmd(NamedTuple):
     launcher: bool = False  # this command is a configured launcher running another command
     # Files the wrapper itself writes (`Start-Process -RedirectStandardOutput`).
     extra_writes: tuple[Word, ...] = ()
+    # Programs whose code-carrying argument this command was read from, outermost first: `bash -c "<cmd>"`,
+    # `powershell -EncodedCommand`, `env -S "<cmd>"`, `iex "<cmd>"`, a script piped into a shell (T-024 round 4, class
+    # F). Empty for a command the current shell runs itself (also inside `$(...)`).
+    via: tuple[str, ...] = ()
 
     @property
     def name(self) -> str:
@@ -110,7 +120,9 @@ class _Walker:
         # rescan every suffix at every level.
         self.seen: set[tuple[str, str]] = set()
 
-    def text(self, text: str, shell: str, depth: int, executed: bool) -> bool:
+    def text(
+        self, text: str, shell: str, depth: int, executed: bool, via: tuple[str, ...] = ()
+    ) -> bool:
         if depth > MAX_DEPTH:
             self.deep = True
             return True
@@ -118,7 +130,7 @@ class _Walker:
         self.state.texts.append((text, parsed.masked, shell))
         if shell == "ps":
             for script in pg._embedded_scripts(text):
-                self.text(script, "ps", depth + 1, True)
+                self.text(script, "ps", depth + 1, True, via)
         segs = parsed.segments
         for idx, seg in enumerate(segs):
             end = idx
@@ -145,19 +157,22 @@ class _Walker:
                 stdin_text=bool(seg.heredocs or seg.here_strings),
                 captured=captured,
                 launched=False,
+                via=via,
             )
             scripts, own_code = pg._stream_scripts(segs, idx)
-            inner = [(script, kind or shell) for script, kind in scripts]
+            # A script fed on stdin runs in the program that reads it; a substitution runs in this shell.
+            reader = next((r for r in readers if r), "stdin")
+            inner = [(script, kind or shell, (*via, reader)) for script, kind in scripts]
             if not own_code:
                 inner += [
-                    (sub, shell)
+                    (sub, shell, via)
                     for h in seg.heredocs
                     if h.expand
                     for sub in pg._substitutions(h.body, "bash")
                 ]
-            inner += [(sub, shell) for sub in seg.substitutions]
-            for script, script_shell in inner:
-                self.text(script, script_shell, depth + 1, False)
+            inner += [(sub, shell, via) for sub in seg.substitutions]
+            for script, script_shell, script_via in inner:
+                self.text(script, script_shell, depth + 1, False, script_via)
         return self.deep
 
     def cmd(
@@ -202,6 +217,12 @@ class _Walker:
             extra_writes=extra,
         )
         self.state.cmds.append(cmd)
+        via: tuple[str, ...] = ctx.get("via", ())  # type: ignore[assignment]
+        # GNU env `-S, --split-string=S  process and split S into separate arguments` (`env --help`): the value is a
+        # command line env runs, read as one (T-024 round 4, class F); attached forms leave no head at all.
+        # All words: a quoted `X="y"` prefix leaves the head on the assignment, before `env`.
+        for packed in _split_strings(words):
+            self.text(packed, shell, depth + 1, True, (*via, "env"))
         if head is None:
             return
         word = words[head]
@@ -210,15 +231,15 @@ class _Walker:
         if evaluated or (wrappers and word.quoted and re.search(r"\s", word)):
             # `iex "Set-Content ..."`, `eval "echo > f"`
             text = " ".join(str(w) for w in words[head:]) if evaluated else str(word)
-            self.text(text, shell, depth + 1, True)
+            self.text(text, shell, depth + 1, True, (*via, wrappers[-1]))
             return
         name = cmd.name
         args = [str(a) for a in cmd.args]
         if name in pg.SHELLS:
             inner_shell = pg.SHELLS[name]
             encoded = pg._decode_encoded(args, inner_shell == "ps")
-            if encoded:
-                self.text(encoded, "ps", depth + 1, True)
+            if encoded:  # Gemini P2 (round 3): the decoded text runs under this launcher, so it keeps it in `via`
+                self.text(encoded, "ps", depth + 1, True, (*via, name))
             # Every argument suffix and glued option value is read as inner text (fail closed, review N1); a
             # configured launcher script's own command (`-File test_slot.py -- <cmd>`) is walked as launched below.
             if launched is not None:
@@ -231,7 +252,7 @@ class _Walker:
             for inner in texts or []:
                 if (inner, inner_shell) not in self.seen:
                     self.seen.add((inner, inner_shell))
-                    self.text(inner, inner_shell, depth + 1, True)
+                    self.text(inner, inner_shell, depth + 1, True, (*via, name))
         if scan and pg._wrapper_option(words[:head]):
             # `sudo -u root rm f`, `env -u X rm f`: a wrapper option's value was taken as the command name, so
             # every later word may start the real command (fail closed, review N7). One level: a suffix of a
@@ -251,6 +272,7 @@ class _Walker:
                 stdin_text=cmd.stdin_text,
                 captured=cmd.captured,
                 launched=True,
+                via=via,
             )
         if name == "find":
             for inner_words in _find_exec(cmd.args):
@@ -265,6 +287,7 @@ class _Walker:
                     stdin_text=False,
                     captured=False,
                     launched=False,
+                    via=(*via, "find"),
                 )
 
 
@@ -329,6 +352,39 @@ def _start_process(words: list[Word]) -> tuple[list[Word], int | None, tuple[Wor
     if program is None:
         return words[: at + 1] + argv, None, tuple(outputs)
     return [*words[: at + 1], program, *argv], at + 1, tuple(outputs)
+
+
+ENV_VALUE_SHORT = "uC"  # GNU env short options that take the next word as their value (`-u NAME`, `-C DIR`)
+
+
+def _split_strings(words: list[Word]) -> list[str]:
+    """The command lines given to GNU env's `-S`/`--split-string` (attached, separate, clustered `-iS`, or a unique
+    long prefix such as `--split`), for every `env` word of the command (also after a quoted `X="y"` prefix)."""
+    found: list[str] = []
+    for k, w in enumerate(words):
+        if w.quoted or pg._head(w) != "env":
+            continue
+        j = k + 1
+        while j < len(words):
+            a = str(words[j])
+            nxt = str(words[j + 1]) if j + 1 < len(words) else ""
+            if re.match(r"^\w+=", a) or a == "-":
+                j += 1
+            elif a.startswith("--") and len(a) >= 3:
+                name, eq, value = a.partition("=")
+                split = long_matches(name, "--split-string")  # `env --s CMD` too (getopt_long prefix, review CX1)
+                if split:
+                    found.append(value if eq else nxt)
+                j += 1 if eq or not split else 2
+            elif a.startswith("-") and len(a) > 1 and not a.startswith("--"):
+                letters = a[1:]
+                cut = next((i for i, ch in enumerate(letters) if ch in "S" + ENV_VALUE_SHORT), None)
+                if cut is not None and letters[cut] == "S":
+                    found.append(letters[cut + 1 :] or nxt)
+                j += 2 if cut is not None and not letters[cut + 1 :] else 1
+            else:
+                break
+    return [f for f in found if f.strip()]
 
 
 def _split_arguments(values: list[Word]) -> list[Word]:
@@ -464,12 +520,32 @@ class Target(NamedTuple):
     # A copy/move destination: the file lands inside it when it is a directory.
     into_dir: bool = False
     source: str = ""  # with into_dir: the source whose basename lands inside the directory
+    # T-024 round 6 (class L): names the guard cannot know land below a directory, recursively: with into_dir the
+    # destination receives the source's contents or relative paths (`cp -T`, `--parents`, rsync, Expand-Archive);
+    # without, the last component is a placeholder for unknown names in its parent (archive members, downloads).
+    spread: bool = False
+    # T-024 final (F27): the write may leave a link (symbolic, junction, hard) at or below its effective path.
+    # LINK_MAKES: always (ln, mklink, an extractor); LINK_COPIES: when the source holds a link (cp -r, mv, rsync).
+    links: str = ""
+    group: int = -1  # index of the command in the walk (run order); -1: order unknown
+    # Review CX4: a PowerShell cmdlet's path (or a PowerShell redirection), which PowerShell resolves through its
+    # drives (`Env:X` is no file). A native program or .NET call gets the text itself: `name:rest` is the NTFS stream
+    # `rest` of the file `name`, whatever `name` is.
+    provider: bool = False
+
+
+LINK_MAKES = "makes"
+LINK_COPIES = "copies"
 
 
 class Writes(NamedTuple):
     targets: list[Target]
     problems: list[str]  # writes whose targets cannot be determined (fail closed)
     cwd_changes: list[str]  # `cd` arguments (relative targets resolve against every one)
+    # T-024 final (F06): (command name, word) for every argument word that is not one of the command's own modelled
+    # targets, and the value inside `--opt=V`, `-oV`, `of=V`, `/opt:V`: a program the guard does not model may write
+    # below any path it is given. The caller decides which programs only read.
+    probes: list[tuple[str, Target]]
 
 
 def _is_option(a: str, shell: str) -> bool:
@@ -493,6 +569,7 @@ class PsSpec(NamedTuple):
     # Destination parameters (a directory receives the source's basename).
     dest: tuple[str, ...] = ()
     pipeline_path: bool = True  # the path can come from the pipeline
+    contents: bool = False  # the destination receives the source's contents, not the source (Target.spread)
 
 
 COMMON_SWITCHES = ("verbose", "debug", "whatif", "confirm")
@@ -668,6 +745,7 @@ for _names, _spec in (
             switches=("force", "passthru"),
             dest=("destinationpath",),
             pipeline_path=False,
+            contents=True,
         ),
     ),
     (
@@ -811,6 +889,8 @@ def _ps_targets(cmd: Cmd, writes: Writes) -> None:
         named.setdefault(role, []).append(value)
     path_values = [v for p in spec.paths for v in named.get(p, [])]
     verb = canonical
+    # F27: an archive may hold links; a copy or move carries the links its source holds.
+    links = {"expand-archive": LINK_MAKES, "copy-item": LINK_COPIES, "move-item": LINK_COPIES}.get(canonical, "")
     if canonical == "new-item":
         base = path_values or [Word(".", False, False)]
         names = named.get("name", [])
@@ -819,8 +899,15 @@ def _ps_targets(cmd: Cmd, writes: Writes) -> None:
         ] or base
         item_type = " ".join(str(v) for v in named.get("itemtype", [])).lower()
         if item_type not in ("", "file", "directory"):
-            # A link's target must be inside the allowlist too.
-            path_values += named.get("value", [])
+            # A link's target must be inside the allowlist too, also read from the link's directory (F27).
+            links = LINK_MAKES
+            values = named.get("value", [])
+            path_values += values + [
+                Word(_join(_dirname(str(p)), str(v)), v.quoted, False)
+                for p in path_values
+                for v in values
+                if not _is_absolute(str(v))
+            ]
         elif item_type == "directory" or (name in ("mkdir", "md") and not item_type):
             verb = "mkdir"  # may create an allowlisted directory itself (PathPolicy)
     if canonical == "rename-item":
@@ -850,15 +937,21 @@ def _ps_targets(cmd: Cmd, writes: Writes) -> None:
             return
     for value in path_values:
         for part in _split_list(str(value), value.literal):
-            writes.targets.append(Target(part, verb, cmd.shell))
+            writes.targets.append(
+                Target(part, verb, cmd.shell, links=links if canonical == "new-item" else "", provider=True)
+            )
     for value in dests:
         for part in _split_list(str(value), value.literal):
             if sources:
                 for src in sources:
                     for src_part in _split_list(str(src), src.literal):
-                        writes.targets.append(Target(part, canonical, cmd.shell, True, src_part))
+                        writes.targets.append(
+                            Target(part, canonical, cmd.shell, True, src_part, spec.contents, links, provider=True)
+                        )
             else:
-                writes.targets.append(Target(part, canonical, cmd.shell, True, "x"))
+                writes.targets.append(
+                    Target(part, canonical, cmd.shell, True, "x", spec.contents, links, provider=True)
+                )
 
 
 def _param_values(cmd: Cmd, params: tuple[str, ...], verb: str, writes: Writes) -> None:
@@ -873,7 +966,7 @@ def _param_values(cmd: Cmd, params: tuple[str, ...], verb: str, writes: Writes) 
         if name and any(p.startswith(name) for p in params):
             value = glued or (str(args[k + 1]) if k + 1 < len(args) else "")
             if value:
-                writes.targets.append(Target(value, verb, cmd.shell))
+                writes.targets.append(Target(value, verb, cmd.shell, provider=True))
             else:
                 writes.problems.append(f"{verb}: `{text}` has no literal value")
 
@@ -905,20 +998,77 @@ def _positionals(args: list[Word], shell: str, value_opts: set[str] = frozenset(
     return out
 
 
+# Review CX1 (T-024 final, fix round 1): GNU getopt_long reads any unambiguous prefix of a long option as that
+# option (`tar --extr` = `--extract`). The long options whose presence makes a command write more, write elsewhere or
+# run a program (deciding options), per program; `long_matches` reads every prefix of three or more characters as the
+# option, except a real option of the program that is itself a proper prefix (`tar --checkpoint` is not
+# `--checkpoint-action`); a prefix of two or more deciding options is refused (`long_ambiguous`). Options whose presence makes a command write less
+# (`--dry-run`, `--spider`, `--no-absolute-filenames`) stay exact, so a prefix spelling only adds checks.
+LONG_DECIDING: dict[str, tuple[str, ...]] = {
+    "tar": (
+        *("--extract", "--get", "--create", "--append", "--update", "--concatenate", "--catenate", "--delete"),
+        *("--absolute-names", "--to-command", "--use-compress-program", "--rsh-command", "--rmt-command"),
+        *("--info-script", "--new-volume-script", "--checkpoint-action", "--remove-files"),
+        *("--listed-incremental", "--index-file", "--directory", "--file"),
+        *("--absolute-paths", "--insecure"),  # bsdtar (libarchive), which also reads unique prefixes
+    ),
+    "cp": (
+        *("--target-directory", "--no-target-directory", "--parents", "--symbolic-link", "--link"),
+        *("--recursive", "--archive", "--no-dereference"),
+    ),
+    "mv": ("--target-directory", "--no-target-directory"),
+    "ln": ("--target-directory",),
+    "install": ("--target-directory", "--no-target-directory", "--directory"),
+    "rsync": ("--remove-source-files",),
+    "wget": ("--output-document", "--output-file", "--append-output", "--directory-prefix"),
+    "sort": ("--output",),
+    "patch": ("--output",),
+    "csplit": ("--prefix",),
+    "cpio": ("--extract", "--pass-through", "--directory", "--file"),
+    "sed": ("--in-place", "--expression", "--file", "--line-length"),
+    **{name: ("--reference",) for name in ("chmod", "chown", "chgrp")},
+    "env": ("--split-string",),
+}
+# Real options that are proper prefixes of a deciding option (experiment `.tmp/T-024/final/pA/longopts.out`, from each
+# program's `--help` on this machine; bsdtar's `--absolute-paths`/`--insecure` are matched by the same rule).
+LONG_EXACT_OTHERS = frozenset({"--checkpoint", "--list"})
+
+
+def long_matches(name: str, full: str) -> bool:
+    """Whether the long-option word `name` (before any `=`) is read as `full` (see LONG_DECIDING)."""
+    return name == full or (len(name) >= 3 and full.startswith(name) and name not in LONG_EXACT_OTHERS)
+
+
+def long_ambiguous(program: str, words: list[Word] | list[str]) -> list[str]:
+    """Problems for long-option words that abbreviate two or more of the program's deciding options (`tar --c`:
+    `--create`, `--catenate`, `--checkpoint-action`): getopt_long refuses an ambiguous prefix, other parsers may
+    pick one, and the guard cannot know which, so the command is refused (review CX1, class sweep)."""
+    deciding = LONG_DECIDING.get(program, ())
+    out: list[str] = []
+    for w in words:
+        name = str(w).split("=", 1)[0]
+        if not name.startswith("--") or name in deciding:
+            continue
+        hits = [f for f in deciding if long_matches(name, f)]
+        if len(hits) >= 2:
+            out.append(f"`{program} {name}` abbreviates {', '.join(hits)}; spell the option in full")
+    return out
+
+
 def _opt_value(args: list[Word], names: tuple[str, ...]) -> list[str]:
-    """Values of `-o X`, `-oX`, `--output X`, `--output=X` and of a short cluster ending in the letter (`-sSo X`)."""
+    """Values of `-o X`, `-oX`, `--output X`, `--output=X` (and any prefix getopt_long accepts, `--out=X`) and of a
+    short cluster ending in the letter (`-sSo X`)."""
     out: list[str] = []
     for k, w in enumerate(args):
         a = str(w)
-        if w.literal or not a.startswith("-"):
+        if not a.startswith("-"):  # a quoted option is still an option to an external program
             continue
         nxt = str(args[k + 1]) if k + 1 < len(args) else ""
         for name in names:
             if name.startswith("--"):
-                if a == name:
-                    out.append(nxt)
-                elif a.startswith(name + "="):
-                    out.append(a[len(name) + 1 :])
+                given, sep, value = a.partition("=")
+                if given.startswith("--") and long_matches(given, name):
+                    out.append(value if sep else nxt)
             elif not a.startswith("--") and name[1] in a[1:]:
                 rest = a[a.index(name[1], 1) + 1 :]
                 out.append(rest or nxt)
@@ -960,17 +1110,30 @@ def _external_targets(cmd: Cmd, writes: Writes) -> None:
             t.append(Target(str(v), verb, shell, **kw))  # type: ignore[arg-type]
 
     pos = _positionals(args, shell, POSIX_VALUE_OPTS.get(name, set()))
+    # A quoted option is still an option to an external program (`cp '--link'`): quoting is not looked at here.
+    short = "".join(str(a)[1:] for a in args if re.match(r"-[^-]", str(a)))
+    longs = [str(a).split("=", 1)[0] for a in args if str(a).startswith("--")]
+
+    def long_given(full: str, exact: bool = False) -> bool:
+        """getopt_long reads a prefix as the option (review CX1, `long_matches`); `exact` for a flag that makes the
+        command write less."""
+        return full in longs if exact else any(long_matches(x, full) for x in longs)
+
+    if shell != "cmd" or name not in CMD_BUILTINS:
+        writes.problems.extend(long_ambiguous("tar" if name == "bsdtar" else name, args))
     if shell == "cmd" and name in CMD_BUILTINS:
         if name in ("copy", "move"):
             if len(pos) >= 2:
                 if name == "move":
                     add(pos[:-1])
                 for src in pos[:-1]:
-                    add([pos[-1]], into_dir=True, source=str(src))
+                    add([pos[-1]], into_dir=True, source=str(src), links=LINK_COPIES)
             else:
-                add(["."], into_dir=True, source=str(pos[0]) if pos else "x")
+                add(["."], into_dir=True, source=str(pos[0]) if pos else "x", links=LINK_COPIES)
         elif name in ("ren", "rename") and len(pos) == 2:
             add([pos[0], _join(_dirname(str(pos[0])), str(pos[1]))])
+        elif name == "mklink":
+            _link_targets(pos[:1], pos[1:2], add)
         else:
             add(pos)
         if not pos:
@@ -980,7 +1143,7 @@ def _external_targets(cmd: Cmd, writes: Writes) -> None:
         add(pos)
     elif name in ("chmod", "chown", "chgrp"):
         mode_as_option = any(re.fullmatch(r"-[rwxXst]+", str(a)) for a in args)
-        reference = any(str(a).startswith("--reference") for a in args)
+        reference = long_given("--reference")  # `--ref=FILE`: no mode operand, every operand is a file
         add(pos if (mode_as_option or reference) else pos[1:])
     elif name == "tee":
         add(pos)
@@ -988,17 +1151,48 @@ def _external_targets(cmd: Cmd, writes: Writes) -> None:
         target_dir = _opt_value(args, ("--target-directory", "-t"))
         values = {"-S", "--suffix", "-m", "-o", "-g", "--mode", "--owner", "--group"}
         pos = _positionals(args, shell, values | {"-t"})
+        # `-T` (no target directory: DEST is replaced by SOURCE's contents) and `--parents` (SOURCE's relative path
+        # is rebuilt below DEST) write names other than DEST/basename(SOURCE). Any `T` in a short option cluster
+        # counts: reading too much only makes the check stricter (Target.spread).
+        spread = any(
+            (
+                any(long_matches(str(a).split("=")[0], f) for f in ("--no-target-directory", "--parents"))
+                or (str(a).startswith("-") and not str(a).startswith("--") and "T" in str(a))
+            )
+            for a in args
+        )
+        # F27: `cp -s`/`-l` make links to the sources; `cp -r`/`-a`/`-d`/`-P` copy links as links and `mv` moves them.
+        makes = name == "cp" and (
+            bool(set(short) & set("sl")) or long_given("--symbolic-link") or long_given("--link")
+        )
+        copies = name == "mv" or (
+            name == "cp"
+            and (
+                bool(set(short) & set("rRadP"))
+                or any(long_given(f) for f in ("--recursive", "--archive", "--no-dereference"))
+                or any(
+                    re.search(r"(?i)links|all", str(a).partition("=")[2])
+                    for a in args
+                    if long_matches(str(a).partition("=")[0], "--preserve")
+                )
+            )
+        )
+        links = LINK_MAKES if makes else LINK_COPIES if copies else ""
         if name == "ln":
-            add(pos + target_dir)  # link names and targets both
-        elif name == "install" and any(str(a) in ("-d", "--directory") for a in args):
+            sources = pos if target_dir else pos[:-1]
+            _link_targets(target_dir or pos[-1:], sources, add, into_dir=True)  # `ln T`: the link ./T is T's word
+        elif name == "install" and ("-d" in [str(a) for a in args] or long_given("--directory")):
             add(pos)
         elif target_dir:
             for d in target_dir:
                 for src in pos:
-                    add([d], into_dir=True, source=str(src))
+                    add([d], into_dir=True, source=str(src), spread=spread, links=links)
         elif len(pos) >= 2:
             for src in pos[:-1]:
-                add([pos[-1]], into_dir=True, source=str(src))
+                add([pos[-1]], into_dir=True, source=str(src), spread=spread, links=links)
+        if makes:
+            # The sources become link targets: each must be writable itself, read from the destination too.
+            _link_targets(target_dir or pos[-1:], pos if target_dir else pos[:-1], add, into_dir=True)
         if name == "mv":
             add(pos if target_dir else pos[:-1])
     elif name == "dd":
@@ -1016,26 +1210,56 @@ def _external_targets(cmd: Cmd, writes: Writes) -> None:
             for a in args
         ):
             out_dir = _opt_value(args, ("--output-dir",)) or ["."]
-            add([_join(d, "remote-name") for d in out_dir])
+            add([_join(d, "remote-name") for d in out_dir], spread=True)
     elif name == "wget":
         documents = _opt_value(args, ("-O", "--output-document"))
         add([d for d in documents if d != "-"])
         add(_opt_value(args, ("-o", "--output-file", "-a", "--append-output")))
         if not documents and "--spider" not in [str(a) for a in args]:
             prefix = _opt_value(args, ("-P", "--directory-prefix")) or ["."]
-            add([_join(p, "remote-name") for p in prefix])
+            add([_join(p, "remote-name") for p in prefix], spread=True)  # `-r`/`-x` build a subtree there
     elif name in ("tar", "bsdtar"):
         _tar_targets(cmd, writes)
     elif name == "unzip":
         if not any(str(a) in ("-l", "-v", "-t", "-p", "-Z", "-z") for a in args):
             dest = _opt_value(args, ("-d",)) or ["."]
-            add([_join(d, "archive-member") for d in dest])
+            add([_join(d, "archive-member") for d in dest], spread=True, links=LINK_MAKES)
+            # unzip(1) `-:`: "allows to extract archive members into locations outside of the current extraction
+            # root folder" (`../` and absolute names); F07.
+            if any(re.fullmatch(r"-[^d-]*:.*", str(a)) for a in args):
+                writes.problems.append("`unzip -:` extracts members outside the target directory (`../`, absolute)")
     elif name in ("7z", "7za", "7zr"):
+        lowered = [str(a).lower() for a in args]
         if pos and str(pos[0]).lower() in ("x", "e"):
             dirs = [str(a)[2:] for a in args if str(a).startswith("-o")] or ["."]
-            add([_join(d, "archive-member") for d in dirs])
+            add([_join(d, "archive-member") for d in dirs], spread=True, links=LINK_MAKES)
+            # 7-Zip `-spf`: "Use fully qualified file paths" (absolute member names); `-snld`: allow dangerous links.
+            bad = [a for a in lowered if a.startswith("-spf") or a.startswith("-snld")]
+            if bad:
+                writes.problems.append(f"`7z {bad[0]}` extracts members outside the target directory")
         elif pos and str(pos[0]).lower() in ("a", "u", "d", "rn") and len(pos) > 1:
             add([pos[1]])
+        if any(a.startswith("-sdel") for a in lowered):
+            writes.problems.append("`7z -sdel` deletes the archived files")
+    elif name == "cpio":
+        _cpio_targets(cmd, writes, short, long_given, pos)
+    elif name == "pax":
+        if "r" in short and "w" in short:
+            add([_join(str(d), "archive-member") for d in pos[-1:]], spread=True, links=LINK_MAKES)
+        elif "r" in short:
+            writes.problems.append(
+                "`pax -r` restores member names as stored, absolute ones included; extract with `tar -x -C <dir>`"
+            )
+        elif "w" in short:
+            add(_opt_value(args, ("-f",)))
+    elif name == "fsutil":
+        # fsutil(8): `hardlink create <new> <existing>`, `reparsepoint delete <file>`, `file createnew <file> <n>`,
+        # ...: every path after the two command words may be written, except the query and list forms.
+        verb = str(pos[1]).lower() if len(pos) > 1 else ""
+        if len(pos) > 2 and not verb.startswith(("query", "list")):
+            add(pos[2:], links=LINK_MAKES)
+    elif name in ("junction", "linkd"):
+        _link_targets(pos[:1], pos[1:2], add)
     elif name == "zip":
         add(pos[:1])
     elif name in COMPRESSORS:
@@ -1061,8 +1285,10 @@ def _external_targets(cmd: Cmd, writes: Writes) -> None:
         local = [p for p in pos if not re.match(r"^[^/\\]{2,}:", str(p))]
         if len(pos) >= 2 and pos[-1] in local:
             for src in pos[:-1]:
-                add([pos[-1]], into_dir=True, source=str(src))
-        if "--remove-source-files" in [str(a) for a in args]:
+                # A trailing `/` on the source, `-R`/`--relative` and `--files-from` change which names land in
+                # DEST; the guard does not model rsync's rules, so DEST counts as receiving any subtree.
+                add([pos[-1]], into_dir=True, source=str(src), spread=True, links=LINK_COPIES)
+        if long_given("--remove-source-files"):
             add([p for p in pos[:-1] if p in local])
     elif name == "find":
         starts = []
@@ -1075,13 +1301,56 @@ def _external_targets(cmd: Cmd, writes: Writes) -> None:
         add(_opt_value(args, ("-fprint", "-fprint0", "-fprintf", "-fls")))
     elif name == "robocopy":
         if len(pos) >= 2:
-            add([pos[1]])
+            # `/SL` copies symbolic links as links, `/SJ` junctions as junctions (F27).
+            copied = any(str(a).lower() in ("/sl", "/sj") for a in args)
+            add([pos[1]], links=LINK_MAKES if copied else "")
             if any(str(a).lower() in ("/mov", "/move") for a in args):
                 add([pos[0]])
     elif name == "xcopy":
-        add([pos[1]] if len(pos) >= 2 else ["."])
+        # `/B` copies the symbolic link itself instead of its target (F27).
+        copied = any(str(a).lower() == "/b" for a in args)
+        add([pos[1]] if len(pos) >= 2 else ["."], links=LINK_MAKES if copied else "")
     elif name == "mklink":
-        add(pos)
+        _link_targets(pos[:1], pos[1:2], add)
+
+
+def _is_absolute(word: str) -> bool:
+    return Path(word).is_absolute() or word.startswith(("/", "\\"))
+
+
+def _link_targets(links: list[Word] | list[str], targets: list[Word] | list[str], add: Callable[..., None],
+                  into_dir: bool = False) -> None:
+    """A link and what it points to are both written paths (F27): writing through the link writes the target. A
+    relative symbolic-link target is read from the link's directory, not the cwd, so that reading is checked too
+    (and, for `ln T... DIR`, from DIR)."""
+    add(list(links) + list(targets), links=LINK_MAKES)
+    for target in targets:
+        if _is_absolute(str(target)):
+            continue
+        for link in links:
+            bases = [_dirname(str(link))] + ([str(link)] if into_dir else [])
+            add([_join(b, str(target)) for b in bases], links=LINK_MAKES)
+
+
+def _cpio_targets(cmd: Cmd, writes: Writes, short: str, long_given: Callable[..., bool],
+                  pos: list[Word]) -> None:
+    """GNU cpio: copy-in (`-i`) extracts below `-D` (default the cwd) and, without `--no-absolute-filenames`, keeps
+    absolute member names ("Create all files relative to the current directory in copy-in mode, even if they have an
+    absolute file name in the archive" is opt-in); copy-pass (`-p DIR`) writes below DIR; copy-out writes `-O`/`-F`."""
+    extract = "i" in short or long_given("--extract")
+    passing = "p" in short or long_given("--pass-through")
+    # The flag that makes cpio write less is matched exactly: a prefix spelling only refuses more.
+    if extract and not long_given("--no-absolute-filenames", True):
+        writes.problems.append("`cpio -i` keeps absolute member names; add `--no-absolute-filenames`")
+    if extract or passing:
+        dirs = _opt_value(cmd.args, ("-D", "--directory")) or ["."]
+        if passing:
+            dirs = [str(p) for p in pos[-1:]] or ["."]
+        writes.targets.extend(
+            Target(_join(d, "archive-member"), "cpio", cmd.shell, spread=True, links=LINK_MAKES) for d in dirs
+        )
+    else:
+        writes.targets.extend(Target(f, "cpio -o", cmd.shell) for f in _opt_value(cmd.args, ("-O", "-F", "--file")))
 
 
 def _sed_targets(cmd: Cmd, writes: Writes) -> None:
@@ -1104,16 +1373,17 @@ def _sed_targets(cmd: Cmd, writes: Writes) -> None:
             files += rest
             break
         if a.startswith("--"):
-            # getopt_long accepts unique prefixes (`--expr=...`, `--in-pl`).
-            if len(long_name) >= 3 and "--in-place".startswith(long_name):
+            # getopt_long accepts unique prefixes (`--e=...`, `--in-pl`, `--l 5`; experiment
+            # `.tmp/T-024/final/pA/curlprefix.out`); `--f` is sed's own ambiguity, read here as `--file`.
+            if long_matches(long_name, "--in-place"):
                 in_place = True
-            elif len(long_name) >= 4 and "--expression".startswith(long_name):
+            elif long_matches(long_name, "--expression"):
                 scripts.append(a.split("=", 1)[1] if "=" in a else nxt)
                 k += 0 if "=" in a else 1
-            elif len(long_name) >= 4 and "--file".startswith(long_name):
+            elif long_matches(long_name, "--file"):
                 from_file = True
                 k += 0 if "=" in a else 1
-            elif "=" not in a and long_name in ("--line-length",):
+            elif "=" not in a and long_matches(long_name, "--line-length"):
                 k += 1
         elif a.startswith("-") and len(a) > 1:
             body = a[1:]
@@ -1275,6 +1545,13 @@ def _inplace_targets(cmd: Cmd, writes: Writes) -> None:
         writes.targets.extend(Target(f, f"{cmd.name} -i", cmd.shell) for f in files)
 
 
+TAR_VALUE_LETTERS = set("fCgFIKLNTVXbH")  # GNU tar short options that take a value (tar --help), protocol-bound
+TAR_RUNS = (
+    *("--to-command", "--use-compress-program", "--rsh-command", "--rmt-command", "--info-script"),
+    *("--new-volume-script", "--checkpoint-action"),
+)
+
+
 def _tar_targets(cmd: Cmd, writes: Writes) -> None:
     args = [str(a) for a in cmd.args]
     letters = ""
@@ -1282,19 +1559,44 @@ def _tar_targets(cmd: Cmd, writes: Writes) -> None:
         letters = args[0]  # old style: `tar xzf a.tgz`
     letters += "".join(a[1:] for a in args if a.startswith("-") and not a.startswith("--"))
     longs = {a.split("=")[0] for a in args if a.startswith("--")}
-    extract = "x" in letters or longs & {"--extract", "--get"}
-    create = any(c in letters for c in "cruA") or longs & {
-        "--create",
-        "--append",
-        "--update",
-        "--concatenate",
-        "--catenate",
-        "--delete",
-    }
+
+    def given(full: str) -> bool:
+        return any(long_matches(x, full) for x in longs)  # review CX1: `--extr` is `--extract`
+
+    extract = "x" in letters or given("--extract") or given("--get")
+    create = any(c in letters for c in "cruA") or any(
+        given(f) for f in ("--create", "--append", "--update", "--concatenate", "--catenate", "--delete")
+    )
+
+    # The option letters as getopt reads them: a letter that takes a value ends its cluster (`-xf.tmp/Foo.tar`
+    # holds no `F`); an old-style first word is all letters.
+    short = args[0] if args and not args[0].startswith("-") else ""
+    for a in args:
+        if a.startswith("-") and not a.startswith("--"):
+            for ch in a[1:]:
+                short += ch
+                if ch in TAR_VALUE_LETTERS:
+                    break
+    # GNU tar(1) `-P, --absolute-names`: "don't strip leading '/'s from file names"; bsdtar `-P`, `--absolute-paths`,
+    # `--insecure`: also keep `..`. Members then land anywhere, not below `-C` (F07).
+    if extract and ("P" in short or given("--absolute-names") or given("--absolute-paths") or given("--insecure")):
+        writes.problems.append("`tar -P` extracts members by their absolute names, outside the target directory")
+    # Options that run a program the guard cannot inspect (tar --help: `--to-command=COMMAND`, `-I,
+    # --use-compress-program=PROG`, `--rsh-command=COMMAND`, `-F, --info-script=NAME`, `--checkpoint-action=ACTION`).
+    runs = [f for f in TAR_RUNS if given(f)]
+    if runs or "I" in short or "F" in short:
+        writes.problems.append(f"`tar {runs[0] if runs else '-I/-F'}` runs a program the guard cannot inspect")
+    if given("--remove-files"):
+        writes.problems.append("`tar --remove-files` deletes the archived files; remove them with `rm`")
+    # Files tar writes beside the archive: `-g, --listed-incremental=FILE`, `--index-file=FILE`.
+    writes.targets.extend(
+        Target(f, "tar", cmd.shell) for f in _opt_value(cmd.args, ("-g", "--listed-incremental", "--index-file")) if f
+    )
     if extract:
         dirs = _opt_value(cmd.args, ("-C", "--directory"))
         writes.targets.extend(
-            Target(_join(d, "archive-member"), "tar -x", cmd.shell) for d in (dirs or ["."])
+            Target(_join(d, "archive-member"), "tar -x", cmd.shell, spread=True, links=LINK_MAKES)
+            for d in (dirs or ["."])
         )
     if create:
         archive = _opt_value(cmd.args, ("--file",))
@@ -1327,6 +1629,7 @@ WRITE_VERBS = {
     *("ruby", "curl", "wget", "tar", "bsdtar", "unzip", "7z", "7za", "7zr", "zip", "patch"),
     *("split", "csplit", "sort", "uniq"),
     *("rsync", "scp", "find", "robocopy", "xcopy", "mklink"),
+    *("cpio", "pax", "fsutil", "junction", "linkd"),
 }
 # Fail-closed trigger: a command the guard cannot analyse is blocked only when this matches (see trigger_text).
 WRITE_TRIGGER = re.compile(
@@ -1588,18 +1891,45 @@ def _cmd_targets(cmd: Cmd, writes: Writes) -> None:
         _external_targets(cmd, writes)  # a PowerShell cmdlet name is not a command in bash
 
 
+def _probe_words(word: str, shell: str) -> list[str]:
+    """The word and the values an option word may carry (`--directory=D`, `-DD`, `of=D`, `/log:D`, `-Path:D`):
+    reading too many candidates only adds checks, each resolved as a path."""
+    out = [word]
+    if "=" in word:
+        out.append(word.split("=", 1)[1])
+    if word.startswith("-") and not word.startswith("--") and len(word) > 2:
+        out.append(word[2:])
+    if word[:1] in ("-", "/") and ":" in word:
+        out.append(word.split(":", 1)[1])
+    return [w for w in dict.fromkeys(out) if w]
+
+
+def _add_probes(cmd: Cmd, writes: Writes, first_target: int) -> None:
+    own = {t.word for t in writes.targets[first_target:]}
+    for arg in cmd.args:
+        for word in _probe_words(str(arg), cmd.shell):
+            # cmd.exe takes `/x` switches and a command line, no path operand (the walker reads that line); Git
+            # Bash would read `/c` as the drive root C:.
+            if cmd.name == "cmd" and word == str(arg) and word.startswith("/"):
+                continue
+            if word not in own:
+                writes.probes.append((cmd.name, Target(word, f"`{cmd.name}` argument", cmd.shell)))
+
+
 def write_targets(walked: Walk) -> Writes:
-    writes = Writes([], [], [])
+    writes = Writes([], [], [], [])
+    starts: list[int] = []
     for cmd in walked.cmds:
+        starts.append(len(writes.targets))
         # `[[ a > b ]]` compares strings; in bash `[ a > b ]` and `test a > b` redirect like any command.
         in_test = cmd.name == "[["
         for r in cmd.redirects:
             if ">" in r.op and not in_test:  # `>`, `>>`, `>|`, `&>`, `>&`, `<>`
                 if r.target is None:
                     continue
-                writes.targets.append(Target(str(r.target), "redirection", cmd.shell))
+                writes.targets.append(Target(str(r.target), "redirection", cmd.shell, provider=cmd.shell == "ps"))
         for word in cmd.extra_writes:
-            writes.targets.append(Target(str(word), "Start-Process redirection", cmd.shell))
+            writes.targets.append(Target(str(word), "Start-Process redirection", cmd.shell, provider=True))
         if cmd.head is None:
             continue
         if cmd.name in CD_COMMANDS:
@@ -1609,17 +1939,26 @@ def write_targets(walked: Walk) -> Writes:
         before = len(writes.targets) + len(writes.problems)
         resolved = resolved_cmds(cmd, walked)
         for one in [cmd] if resolved is None else resolved:
+            first_target = len(writes.targets)
             _cmd_targets(one, writes)
+            _add_probes(one, writes, first_target)
         wrote = len(writes.targets) + len(writes.problems) > before
         stdin_args = STDIN_ARG_WRAPPERS.intersection(cmd.wrappers)
         if stdin_args and (wrote or WRITE_TRIGGER.search(trigger_text(" ".join(cmd.words)))):
             writes.problems.append(
                 f"`{min(stdin_args)} {cmd.name}` takes its targets from stdin or `:::`"
             )
+    # Each target's command, in run order (F27); .NET calls are found in the text, their order unknown (-1).
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(writes.targets)
+        writes.targets[start:end] = [t._replace(group=i) for t in writes.targets[start:end]]
     for raw, masked, shell in walked.texts:
         if shell == "ps":
             _dotnet_targets(raw, masked, writes)
     writes.targets[:] = [t2 for t in writes.targets for t2 in _expand_target(t, walked)]
+    writes.probes[:] = [(n, t2) for n, t in writes.probes if "$" in t.word for t2 in _expand_target(t, walked)] + [
+        p for p in writes.probes if "$" not in p[1].word
+    ]
     return writes
 
 
@@ -1693,7 +2032,8 @@ DOTNET_CTOR = re.compile(
 )
 DOTNET_INSTANCE_WRITE = re.compile(
     r"\.\s*(?:Delete|MoveTo|CopyTo|CreateSubdirectory|CreateText|AppendText|OpenWrite|Encrypt|Decrypt"
-    r"|SetAccessControl|Save|WriteAllText|WriteAllBytes|WriteAllLines|AppendAllText|AppendAllLines)\s*\(",
+    r"|SetAccessControl|Save|WriteAllText|WriteAllBytes|WriteAllLines|AppendAllText|AppendAllLines"
+    r"|CreateAsSymbolicLink)\s*\(",
     re.I,
 )
 PS_LITERAL = re.compile(r"^\s*(?:'(?P<s>(?:[^']|'')*)'|\"(?P<d>[^\"`$]*)\")\s*$", re.S)
@@ -1764,7 +2104,13 @@ def _dotnet_targets(raw: str, masked: str, writes: Writes) -> None:
                 f"[IO.{match['cls']}]::{match['meth']} has arguments the guard cannot read"
             )
             continue
+        first = len(writes.targets)
         _literal_args(args, positions, f"[IO.{match['cls']}]::{match['meth']}", writes)
+        if meth == "createsymboliclink" and len(writes.targets) - first == 2:
+            # (path, pathToTarget): a relative target is read from the link's directory (F27).
+            link, target = writes.targets[first:]
+            extra = [] if _is_absolute(target.word) else [target._replace(word=_join(_dirname(link.word), target.word))]
+            writes.targets[first:] = [t._replace(links=LINK_MAKES) for t in (link, target, *extra)]
     for match in DOTNET_CTOR.finditer(raw):
         kind = match["a"] or match["b"]
         rest = raw[match.end() :]
@@ -1794,24 +2140,177 @@ MKDIR_VERBS = {"mkdir", "md"}
 # Bounded work per hook call: a wildcard directly in an allowlisted directory is checked match by match (each
 # a `git ls-files` call); more matches fail closed.
 MAX_GLOB_MATCHES = 200
+# Bounded work per hook call (F27): entries a copy's source tree is scanned for links; more count as a link.
+MAX_LINK_SCAN = 5000
+NAME_SURROGATE = 0x20000000  # Windows reparse tag bit of symbolic links and junctions (IsReparseTagNameSurrogate)
+
+
+def fs_real(path: str | Path) -> str:
+    """The path as the file system resolves it: `os.path.realpath` (links, `..`, and on Windows 8.3 short names and
+    the case of existing components), then, on Windows, the aliases realpath leaves (T-024 final, package B's
+    sibling): the `\\\\?\\` and `\\\\.\\` prefixes it may return (it does for a component with a trailing space), an
+    alternate data stream on any component (`name:stream`, `name::$DATA` name the entry itself), and trailing dots
+    and spaces, which Win32 strips from every component. Experiment: `.tmp/T-024/final/pA/alias_probe.out`."""
+    if not WINDOWS:
+        return os.path.realpath(path)
+    # Folded before realpath too: ntpath reads a `name:stream` component as a drive-relative path and drops the
+    # directories before it (`realpath('C:\\x\\d:s')` is `d:s`).
+    return _win_fold(os.path.realpath(_win_fold(str(path))))
+
+
+def _win_fold(text: str) -> str:
+    text = re.sub(r"^(?:\\\\|//)[?.][\\/]UNC[\\/]", r"\\\\", text, flags=re.I)
+    text = re.sub(r"^(?:\\\\|//)[?.][\\/]", "", text)
+    drive, rest = os.path.splitdrive(text)
+    parts = [p if p in (".", "..") else (re.sub(r"[. ]+$", "", p.split(":", 1)[0]) or p)
+             for p in re.split(r"[\\/]", rest)]
+    return drive + "\\".join(parts)
+
+
+def fs_key(path: str | Path) -> str:
+    """`fs_real` folded for comparison (`os.path.normcase`: case and separators on Windows)."""
+    return os.path.normcase(fs_real(path))
+
+
+def _is_link(path: str | Path) -> bool:
+    """A symbolic link, or on Windows a name-surrogate reparse point (junction, symbolic link); not a placeholder or
+    deduplication reparse point, which the OS resolves to the file itself."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    if stat.S_ISLNK(st.st_mode):
+        return True
+    attributes = getattr(st, "st_file_attributes", 0)
+    tag = getattr(st, "st_reparse_tag", 0)
+    return bool(attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT and tag & NAME_SURROGATE)
+
+
+def _link_component(path: str) -> str | None:
+    """The first existing component of an already resolved path that is still a link, else None."""
+    current = Path(path)
+    for part in [*reversed(current.parents), current]:
+        if _is_link(part):
+            return str(part)
+    return None
+
+
+def _tree_has_link(path: Path, budget: list[int]) -> bool:
+    """Whether the path or anything below it is a link; an unreadable tree or one over the budget counts as one."""
+    if _is_link(path):
+        return True
+    if not path.is_dir():
+        return False
+
+    def fail(exc: OSError) -> None:
+        raise exc
+
+    try:
+        for top, dirs, files in os.walk(path, onerror=fail):
+            for name in dirs + files:
+                budget[0] -= 1
+                if budget[0] < 0 or _is_link(os.path.join(top, name)):
+                    return True
+    except OSError:
+        return True
+    return False
 
 
 class PathPolicy:
     """Decide whether shell-written paths stay inside the allowlist (relative to the innermost Git work tree)."""
 
-    def __init__(self, root: Path, allowed_dirs: list[str], git_timeout: int) -> None:
-        self.root = Path(os.path.realpath(root))
+    def __init__(
+        self, root: Path, allowed_dirs: list[str], git_timeout: int, protected: tuple[Path, ...] = ()
+    ) -> None:
+        self.root = Path(fs_real(root))
+        # T-024 round 5 and final (PD1): directories no target may lie in, even inside the allowlist (in worker mode
+        # the orchestrator's whole state directory: Git ledger, push markers, patches, registry); a wildcard whose
+        # literal part holds such a directory may match into it.
+        self.protected = [fs_key(p) for p in protected]
         # An entry is a path prefix (`.cache/tmp`): compared component by component, never as a string prefix.
         self._entries = [tuple(os.path.normcase(p) for p in d.split("/")) for d in allowed_dirs]
         self.allowed_text = ", ".join(f"`{d}/`" for d in allowed_dirs)
         self.git_timeout = git_timeout
         self._worktrees: dict[Path, list[Path] | None] = {}
 
+    @staticmethod
+    def _text(target: Target) -> str:
+        if target.shell == "ps":
+            return re.sub(r"(?i)^(?:Microsoft\.PowerShell\.Core\\)?FileSystem::", "", target.word)
+        return target.word
+
+    def _resolved(self, target: Target, bases: list[Path], literal: bool = False) -> list[Path]:
+        """The literal candidate paths of a word, [] when it names no place the guard can resolve. `literal`: read a
+        word with `$`, `%` or `` ` `` as plain text too (`pm-state::$INDEX_ALLOCATION` names the directory)."""
+        text = self._text(target)
+        dynamic = "$`%" + ("{}" if target.shell == "bash" else "")
+        if not text or text.lower() in SINKS or text.startswith("@"):
+            return []
+        if not literal and any(ch in text for ch in dynamic):
+            return []
+        if any(unicodedata.category(ch) in ("Cc", "Cf") for ch in text):
+            return []
+        drive = re.match(r"^([A-Za-z][\w]+):", text)
+        if target.provider and drive and drive.group(1).lower() in PS_PROVIDER_DRIVES:
+            return []  # a provider path of a cmdlet (`Env:X`, `Function:f`), no file
+        # Review CX4: any other `name:rest` is a file `name` with the NTFS stream `rest` (only a cmdlet resolves
+        # PowerShell drives; a native program opens the text); fs_real folds the stream onto `name`.
+        paths = self._candidates(text, target.shell, bases)
+        if isinstance(paths, str) and literal and re.match(r"^[A-Za-z]:(?![\\/])", text):
+            # `D:x` is `x` in the current directory of drive D: the cwd when the cwd is on D.
+            return [b / text[2:] for b in bases if os.path.splitdrive(str(b))[0].lower() == text[:2].lower()]
+        return [] if isinstance(paths, str) else paths
+
+    def check_protected(self, target: Target, bases: list[Path]) -> str | None:
+        """F06: an argument of a program the guard does not model, judged by the protected rule only: it may not
+        resolve into, onto or above a protected directory (the program may write below any path it is given)."""
+        for path in self._resolved(target, bases, literal=True):
+            reason = self._protected_reason(path, target)
+            if reason:
+                return f"{target.verb} `{target.word}`: {reason}"
+        return None
+
+    def link_regions(self, target: Target, bases: list[Path]) -> list[tuple[str, bool]]:
+        """F27: where this write may leave a link, as (normalised real path, links only strictly below it). A copy
+        or move leaves one only when its source holds one (a bounded scan; a source it cannot read counts)."""
+        if not target.links:
+            return []
+        if target.links == LINK_COPIES and not self._source_has_link(target, bases):
+            return []
+        regions = []
+        for path in self._resolved(target, bases):
+            effective = self._effective(path, target)
+            parts = re.split(r"[\\/]", str(effective))
+            first = next((k for k, p in enumerate(parts) if re.search(r"[*?\[]", p)), len(parts))
+            literal = fs_key(os.sep.join(parts[:first]) or os.sep)
+            # An extracted member lands strictly below the directory; a link, copy or move may be the path itself.
+            regions.append((literal, target.spread and not target.into_dir and first == len(parts)))
+        return regions
+
+    def through_link(self, target: Target, bases: list[Path], regions: list[tuple[str, bool]]) -> str | None:
+        """F27: a write that passes through a place where an earlier part of the same command may have made a link:
+        the guard resolved the path before that link existed."""
+        for path in self._resolved(target, bases):
+            here = fs_key(path)
+            for top, strict in regions:
+                below = here.startswith(top.rstrip("\\/") + os.sep)
+                if below or (here == top and not strict):
+                    return (
+                        f"{target.verb} target `{target.word}` passes through {top}, where an earlier part of this "
+                        "command may create a link; run the write as a separate command"
+                    )
+        return None
+
+    def _source_has_link(self, target: Target, bases: list[Path]) -> bool:
+        if not target.source or re.search(r"[*?\[$`%{}@]", target.source):
+            return True  # a wildcard or run-time source: any of its matches may be a link
+        paths = self._resolved(target._replace(word=target.source), bases)
+        budget = [MAX_LINK_SCAN]
+        return not paths or any(_tree_has_link(p, budget) for p in paths)
+
     def check(self, target: Target, bases: list[Path]) -> str | None:
         """None when the target is allowed for every possible working directory, else the reason."""
-        text = target.word
-        if target.shell == "ps":
-            text = re.sub(r"(?i)^(?:Microsoft\.PowerShell\.Core\\)?FileSystem::", "", text)
+        text = self._text(target)
         low = text.lower()
         if low in SINKS:
             return None
@@ -1821,7 +2320,7 @@ class PathPolicy:
         if bad:
             return f"{target.verb} target {text!r} holds invisible or control characters ({', '.join(f'U+{ord(c):04X}' for c in bad)})"
         drive = re.match(r"^([A-Za-z][\w]+):", text)
-        if target.shell == "ps" and drive:
+        if target.shell == "ps" and drive and target.provider:
             if drive.group(1).lower() in PS_SINK_DRIVES:
                 return None
             return f"{target.verb} target `{text}` is on the PowerShell drive `{drive.group(1)}:`"
@@ -1860,7 +2359,49 @@ class PathPolicy:
             return [path]
         return [base / text for base in bases]
 
+    def _effective(self, path: Path, target: Target) -> Path:
+        """The path whose whole subtree the target may write (T-024 round 6, class L): a copy or move into an
+        existing directory writes DEST/basename(SOURCE) and, recursively, everything below it; a destination that
+        receives contents or unknown names (Target.spread) may get any subtree. Without a known existing directory
+        the destination itself is the written path, the strictest reading."""
+        if not target.into_dir:
+            return path.parent if target.spread else path
+        if not target.spread and Path(fs_real(path)).is_dir():
+            return path / _basename(target.source)  # a wildcard source keeps its pattern component
+        return path
+
+    def _protected_reason(self, path: Path, target: Target) -> str | None:
+        """Refuse when the effective written path equals, lies inside or contains a protected directory: copying,
+        moving, removing or renaming a parent writes the protected subtree as well."""
+        parts = re.split(r"[\\/]", str(self._effective(path, target)))
+        first = next((k for k, p in enumerate(parts) if re.search(r"[*?\[]", p)), len(parts))
+        literal = fs_key(os.sep.join(parts[:first]) or os.sep)
+        pattern =[os.path.normcase(p) for p in parts[first:] if p]
+        # Creating a directory that already holds a protected one writes nothing below it.
+        contain = bool(pattern) or target.verb not in MKDIR_VERBS
+        for top in self.protected:
+            under = literal == top or literal.startswith(top.rstrip("\\/") + os.sep)
+            # A wildcard matches inside one component: it reaches the protected directory only when each pattern
+            # component matches that directory's component at that depth (`*/ledger.jsonl`, not `runs/*.log`); a
+            # literal path above it contains it.
+            rest = Path(os.path.relpath(top, literal)).parts if top.startswith(literal.rstrip("\\/") + os.sep) else ()
+            holds = contain and bool(rest) and all(fnmatch.fnmatchcase(r, p) for r, p in zip(rest, pattern))
+            if under:
+                return f"lies in {top}, the orchestrator's state directory, which workers never write"
+            if holds:
+                return f"writes {top}, the orchestrator's state directory, through a parent directory; workers never write it"
+        # F27: after resolution no component may still be a link (a loop, or one the OS would not resolve): the
+        # guard cannot prove where such a write lands.
+        stuck = _link_component(literal)
+        if stuck:
+            return f"passes through the link {stuck}, which the guard cannot resolve"
+        return None
+
     def _check_path(self, path: Path, glob: bool, target: Target) -> str | None:
+        if self.protected:
+            reason = self._protected_reason(path, target)
+            if reason:
+                return reason
         if glob:
             # A wildcard may match anything below its literal directory, so that directory is the checked target:
             # it must itself lie strictly inside an allowed directory and hold no tracked file or work tree.
@@ -1874,9 +2415,9 @@ class PathPolicy:
                 return self._check_matches(path, target)
             path = Path(os.sep.join(parts[:first]) or os.sep)
             target = target._replace(into_dir=False)
-        real = Path(os.path.realpath(path))
+        real = Path(fs_real(path))
         if target.into_dir and real.is_dir():
-            real = Path(os.path.realpath(real / _basename(target.source)))
+            real = Path(fs_real(real / _basename(target.source)))
         root = os.path.normcase(str(self.root))
         here = os.path.normcase(str(real))
         if here != root and not here.startswith(root.rstrip("\\/") + os.sep):
@@ -1920,7 +2461,7 @@ class PathPolicy:
 
     def _is_allowed_dir(self, path: Path) -> bool:
         """The path is an allowlisted directory itself of its work tree (not `.tmp/x`)."""
-        real = Path(os.path.realpath(path))
+        real = Path(fs_real(path))
         rel = os.path.relpath(real, self._tree(real))
         return self._is_entry(() if rel == "." else Path(rel).parts)
 
@@ -1978,7 +2519,7 @@ class PathPolicy:
                 self._worktrees[tree] = None
             else:
                 self._worktrees[tree] = [
-                    Path(os.path.realpath(line[9:].decode("utf-8", "replace")))
+                    Path(fs_real(line[9:].decode("utf-8", "replace")))
                     for line in out.split(b"\0")
                     if line.startswith(b"worktree ")
                 ]
@@ -2003,5 +2544,5 @@ def cwd_candidates(cwd: Path, changes: list[str], shell: str) -> list[Path] | No
             new = [Path(change)]
         else:
             new = [b / change for b in bases]
-        bases += [Path(os.path.realpath(n)) for n in new]
+        bases += [Path(fs_real(n)) for n in new]
     return bases

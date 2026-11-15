@@ -20,7 +20,7 @@ Everything project-specific is in `.agents/project.json`; everything else derive
 
 ## Copying the tooling into another repository
 
-1. Copy `tools/agent-workflow/`, `.agents/` (without `registry.json`, `log.md`), `AGENTS.md`, `CLAUDE.md` and the `.gitignore` entries; create the files the hooks read (`setup_project.py check` lists them).
+1. Copy `tools/agent-workflow/`, `.agents/` (without `log.md`; worker state lives in `.tmp/pm-state/`, never in `.agents/`), `AGENTS.md`, `CLAUDE.md` and the `.gitignore` entries; create the files the hooks read (`setup_project.py check` lists them).
 2. Edit `.agents/project.json`: `project.name`, `python.*` (set `package` and `runtime_config_module` once code exists), `git.*`, enabled `agents`, and put the old project's names, paths and branch in `foreign_bindings`.
 3. Rewrite the project sections of `AGENTS.md` (sections 10 and 11) and the policy files that name the old project; empty `tasks/` state files.
 4. Run `apply`, then `check` until no `FAIL` remains; the `foreign` check lists every leftover token of the old project.

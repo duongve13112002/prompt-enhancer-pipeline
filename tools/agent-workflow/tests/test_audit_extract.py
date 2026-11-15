@@ -68,7 +68,7 @@ RECORDS = [
 @pytest.fixture
 def project(tmp_path: Path) -> tuple[Path, Path]:
     root = tmp_path / "proj"
-    (root / ".tmp" / "pm-state" / "audit").mkdir(parents=True)
+    (root / ".tmp" / "audit").mkdir(parents=True)
     transcripts = tmp_path / "transcripts"
     transcripts.mkdir()
     lines = [json.dumps(r) for r in RECORDS] + ["{broken json", ""]
@@ -81,7 +81,7 @@ def run(root: Path, transcripts: Path, *args: str) -> int:
 
 
 def digest(root: Path) -> str:
-    return next((root / ".tmp" / "pm-state" / "audit").glob("user-words-*.md")).read_text(
+    return next((root / ".tmp" / "audit").glob("user-words-*.md")).read_text(
         encoding="utf-8"
     )
 
@@ -110,7 +110,7 @@ def test_only_what_the_user_typed_reaches_the_digest(project, capsys) -> None:
 
 def test_since_defaults_to_the_newest_audit_file(project) -> None:
     root, transcripts = project
-    audit = root / ".tmp" / "pm-state" / "audit"
+    audit = root / ".tmp" / "audit"
     (audit / "audit-2026-10-23.md").write_text("old audit", encoding="utf-8")
     (audit / "audit-A.md").write_text("not dated", encoding="utf-8")
     assert ax.last_audit_date(audit) == dt.date(2026, 10, 23)
