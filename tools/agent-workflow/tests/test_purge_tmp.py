@@ -280,6 +280,41 @@ def test_audit_reports_are_protected_but_a_nested_audit_folder_is_not(pt: Module
     assert not (tmp / "scratch").exists()
 
 
+def test_the_agy_runner_job_folder_survives_every_deletion_path(pt: ModuleType) -> None:
+    """Only scripts/agy-runner/setup.ps1 can recreate `.tmp/agy-jobs` with its ACL, so no command may remove it,
+    while a folder of that name elsewhere stays ordinary scratch."""
+    jobs = tmp_dir(pt, "agy-jobs")
+    (jobs / "job.json").write_text("{}", encoding="utf-8")
+    age(jobs, 100)
+    nested = pt.PROJECT / ".tmp" / "scratch-2" / "agy-jobs"
+    nested.mkdir(parents=True)
+    assert pt.archive_remove([str(jobs)]) == 1
+    assert pt.purge_children(str(pt.PROJECT / ".tmp"), ["agy-jobs"]) == 1
+    pt.sweep(config=cfg(pt))
+    assert (jobs / "job.json").exists()
+    assert {i.path.name: i.status for i in pt.plan_sweep(72, refusals=False)}.get("agy-jobs") == "protected"
+    assert pt.purge_children(str(pt.PROJECT / ".tmp"), ["scratch-2"]) == 0
+    assert not nested.exists()
+
+
+@pytest.mark.parametrize("spelling", ["agy-work", "AGY-Work"])
+def test_the_agy_work_container_is_kept_without_results_while_its_workspaces_are_purgeable(
+    pt: ModuleType, spelling: str
+) -> None:
+    """`.tmp/agy-work` carries the runner's write ACL from setup.ps1, so it is kept even when `_results` is absent."""
+    tmp = pt.PROJECT / ".tmp"
+    work = tmp_dir(pt, "agy-work")
+    workspace = tmp_dir(pt, "review-1", parent="agy-work")
+    target = tmp / spelling if os.path.normcase("A") == "a" else work
+    assert pt.archive_remove([str(target)]) == 1
+    assert pt.purge_children(str(tmp), [spelling]) == 1
+    assert work.exists() and workspace.exists()
+    assert pt.purge_children(str(work), ["review-*"]) == 0
+    assert not workspace.exists() and work.exists()
+    pt.sweep(config=cfg(pt))
+    assert work.exists()
+
+
 @pytest.mark.parametrize("name", ["pm-state", "pm-archive", "cli-jobs", "runs"])
 def test_a_protected_name_given_as_the_target_is_refused(pt: ModuleType, name: str) -> None:
     target = pt.PROJECT / ".tmp" / name

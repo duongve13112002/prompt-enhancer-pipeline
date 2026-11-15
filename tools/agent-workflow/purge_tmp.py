@@ -47,8 +47,9 @@ MAX_REPORT_BYTES = 2 * 1024 * 1024
 PROTECTED_NAMES = frozenset(
     {"pm-state", "pm-archive", "models", ".venv", "runs", ".secrets", "cli-jobs"}
 )
-# (parent name, name): Gemini job results; periodic audit reports (S22), kept outside the state directory since T-024.
-PROTECTED_PAIRS = (("agy-work", "_results"), (".tmp", "audit"))
+# (parent name, name): Gemini job results; periodic audit reports (S22), kept outside the state directory since T-024;
+# the AgyRunner job folder, whose ACL only scripts/agy-runner/setup.ps1 (run by the user as administrator) can recreate.
+PROTECTED_PAIRS = (("agy-work", "_results"), (".tmp", "audit"), (".tmp", "agy-jobs"))
 # Every checkout holds `.secrets/README.md` and `models/README.md` (tracked placeholders): such a nested directory
 # contains nothing to protect. Only a nested directory qualifies, never a target named on the command line.
 PLACEHOLDER_DIRS = frozenset({".secrets", "models"})
@@ -56,6 +57,9 @@ PLACEHOLDER_FILES = frozenset({"README.md"})
 CLEANUP_CONFIG = Path(__file__).resolve().parent / "cleanup_config.json"
 # Artifact-bound: `.tmp` directories that only hold other trees. `sweep` judges their children, never the container.
 CONTAINERS = frozenset({"worktrees", "agy-work"})
+# Containers that carry an explicit runner ACL from scripts/agy-runner/setup.ps1 (the runner's only write grant), so
+# the container itself, or anything holding it, is never deleted; its children (Gemini workspaces) stay purgeable.
+KEPT_CONTAINERS = (Path(".tmp") / "agy-work",)
 INFLIGHT_HEADING = "## IN-FLIGHT"
 CLEANUP_KEYS = ("sweep_age_hours", "archive_retention_hours", "scan_timeout_seconds")
 
@@ -290,6 +294,17 @@ def _protected_ancestor(target: Path, exempt: Path | None = None) -> Path | None
     return None
 
 
+def _kept_container(target: Path) -> Path | None:
+    """The kept container that deleting `target` would remove: the target itself or one inside it. Case-folded like
+    `_protected_name`, so `.TMP/Agy-Work` is the same directory on NTFS (fail closed on POSIX)."""
+    folded = str(target).casefold()
+    for relative in KEPT_CONTAINERS:
+        container = PROJECT / relative
+        if folded in {str(p).casefold() for p in (container, *container.parents)}:
+            return container
+    return None
+
+
 def _worker_state_dir(target: Path) -> Path | None:
     """`<target>/.tmp/pm-state` when `target` is a worker worktree (a direct child of `.tmp/worktrees` whose `.git` is a
     file): the worktree's own test-slot counters, guard log and caches, written by tools run inside it, not the
@@ -308,6 +323,9 @@ def _find_protected(
     ancestor = _protected_ancestor(target, exempt)
     if ancestor is not None:
         return ancestor
+    kept = _kept_container(target)
+    if kept is not None:
+        return kept
     waived = _worker_state_dir(target) if worker_state else None
     for root, dirs, _files in _walk(target):
         for name in dirs:

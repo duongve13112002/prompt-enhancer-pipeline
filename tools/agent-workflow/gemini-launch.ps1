@@ -20,6 +20,11 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 . (Join-Path $root 'scripts\agy-runner\agy-lib.ps1')
 Assert-AgyExpectFile -ExpectFile $ExpectFile
+# The runner's job folder is made by scripts/agy-runner/setup.ps1 with an ACL the runner account cannot change; this
+# script never creates it (a default ACL would break that boundary), so its absence means the runner is not set up.
+if (-not (Test-Path -LiteralPath (Join-Path $root '.tmp\agy-jobs') -PathType Container)) {
+    throw 'The AgyRunner job folder .tmp\agy-jobs is missing (never set up, or removed): the user reruns scripts\agy-runner\setup.ps1 as administrator; read-only jobs can use gemini-review.ps1 meanwhile.'
+}
 $notice = Get-AgyExpectFileNotice -ExpectFile $ExpectFile -Explicit $PSBoundParameters.ContainsKey('ExpectFile')
 if ($notice) { Write-Host $notice }
 Assert-AgyIdle -ProjectRoot $root -TaskName $TaskName

@@ -8,7 +8,7 @@
 
 Online, S1 embeds only short text (the prompt and its segments), so image embedding never runs on the request path. One embedding space per snapshot: vectors from two embedders are never mixed.
 
-**Decisions and configuration keys.** `embedding.*`: the backend, model and revision (`pin_required`), the dimension if the embedder supports truncation (`fit_from_gt`, E5), batch size and devices (`deploy_required`). The embedder is chosen by E5 on the user's knowledge base, not from published leaderboards, because published figures are measured on other data. Candidate embedders, their licences and their text-length limits are in the references.
+**Decisions and configuration keys.** `embedding.*`: the backend, model and revision (`pin_required`), the dimension if the embedder supports truncation (`fit_from_gt`, E5), batch size and devices (`deploy_required`); every image goes through the shared client-side resize of `vision.max_image_side` before embedding (`none` by default, decision 84, [VLM_CALL_RULES](../rules/VLM_CALL_RULES.md) rule 7). The embedder is chosen by E5 on the user's knowledge base, not from published leaderboards, because published figures are measured on other data. Candidate embedders, their licences and their text-length limits are in the references.
 
 **Compute.** GPU on the dev machine and the deployment, batched; the embedder can share the GPU with the serving model only within the VRAM budget of [PLATFORM_GPU_RULES](../rules/PLATFORM_GPU_RULES.md). Not implemented; nothing measured.
 

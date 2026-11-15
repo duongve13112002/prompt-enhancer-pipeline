@@ -378,6 +378,14 @@ def text_of(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def test_the_launcher_refuses_a_missing_job_folder_before_anything_and_never_creates_it() -> None:
+    launch = text_of("tools/agent-workflow/gemini-launch.ps1")
+    check = launch.index("Test-Path -LiteralPath (Join-Path $root '.tmp\\agy-jobs') -PathType Container")
+    assert check < launch.index("Assert-AgyIdle") < launch.rindex("invoke-job.ps1")
+    assert "setup.ps1" in launch[check : launch.index("Assert-AgyIdle")]
+    assert not re.search(r"New-Item[^\n]*agy-jobs|CreateDirectory", launch)
+
+
 def test_scripts_are_wired_to_the_helpers() -> None:
     launch = text_of("tools/agent-workflow/gemini-launch.ps1")
     assert re.search(r"\[int\]\$TimeoutMinutes = 20\b", launch)
