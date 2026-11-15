@@ -20,8 +20,9 @@ line in any case or a `Kind:` header outside a fence):
 - kind: a `Kind:` header line with one of KINDS (feature, code, review, docs, scout, run, trivial);
 - footer: .agents/policy/AGENT_BRIEF_FOOTER.md verbatim;
 - r-ids: `R-IDs:` with an R-<n> for a feature;
-- test-sets (#25): feature, code and review briefs name the configs sweep, `test_config_key_effect`,
-  `test_evidence_hash_scopes`, `test_json_depth`, the digest-pin suites and the importers, or carry a line
+- test-sets (#25): feature, code and review briefs name every `required` test set and every set of one
+  `alternatives` group of `brief_lint_config.json` (the tool suite for tooling, the pipeline suite for the pipeline;
+  an absent or invalid file is itself a finding), or carry a line
   `Test sets: not applicable: <reason of at least 10 characters>`;
 - run-gates (#8, #9): a run brief names the one-job smoke, `run_approval_gate.py check` and `gpu_preflight`;
 - slices (#26): with a `Task file:` header, every id of that file's slice table (a table whose first header cell
@@ -44,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import json
 import ntpath
 import os
 import re
@@ -219,19 +221,96 @@ _SETS_WAIVER = re.compile(
     r"^\s*(?:[-*]\s+)?\*{0,2}Test sets\*{0,2}\s*:\s*\*{0,2}\s*not applicable\s*:\s*(\S.{9,})$",
     re.IGNORECASE,
 )
-# Each class set a code brief must name (mistake #25): label -> pattern.
-_SET_PATTERNS = {
-    'the configs sweep (`rg -l "configs/" tests`)': re.compile(
-        r"rg\s+-l\s+[\"']configs/[\"']\s+tests|configs/?\s+sweeps?", re.IGNORECASE
-    ),
-    "`test_config_key_effect`": re.compile(r"test_config_key_effect"),
-    "`test_evidence_hash_scopes`": re.compile(r"test_evidence_hash_scopes"),
-    "`test_json_depth`": re.compile(r"test_json_depth"),
-    "the digest-pin suites": re.compile(r"digest[- ]pin", re.IGNORECASE),
-    "every test importing a changed module": re.compile(
-        r"tests?\s+import(?:ing|s)\b|\bimporters?\b", re.IGNORECASE
-    ),
-}
+# Class test sets a code brief must name (mistake #25) come from this repository-bound file (no source default).
+CLASS_SETS_CONFIG = Path(__file__).resolve().parent / "brief_lint_config.json"
+_SETS_KEYS = ("required", "alternatives")
+_ENTRY_KEYS = ("label", "pattern")
+
+
+class ClassSetsConfigError(ValueError):
+    """`brief_lint_config.json` is missing, unreadable or invalid."""
+
+
+class ClassSets(NamedTuple):
+    """Entries are (label, compiled pattern). A brief names every `required` entry and every entry of one group."""
+
+    required: tuple[tuple[str, re.Pattern[str]], ...]
+    alternatives: dict[str, tuple[tuple[str, re.Pattern[str]], ...]]
+
+
+def _entries(value: object, where: str) -> tuple[tuple[str, re.Pattern[str]], ...]:
+    if not isinstance(value, list):
+        raise ClassSetsConfigError(f"{where}: expected a list of {{label, pattern}} entries")
+    entries = []
+    for index, item in enumerate(value):
+        here = f"{where}[{index}]"
+        if not isinstance(item, dict):
+            raise ClassSetsConfigError(f"{here}: expected an object with label and pattern")
+        for key in _ENTRY_KEYS:
+            if key not in item:
+                raise ClassSetsConfigError(f"{here}: missing key {key}")
+            if not isinstance(item[key], str) or not item[key].strip():
+                raise ClassSetsConfigError(f"{here}.{key}: expected a non-empty string")
+        unknown = sorted(set(item) - set(_ENTRY_KEYS))
+        if unknown:
+            raise ClassSetsConfigError(f"{here}: unknown key(s) {', '.join(unknown)}")
+        try:
+            pattern = re.compile(item["pattern"], re.IGNORECASE)
+            matches_empty = pattern.search("") is not None
+        except Exception as error:  # noqa: BLE001 - the compiler also raises OverflowError, RecursionError, ...
+            # Any failure of the configuration must block, never escape: cli_worker allows a crashed linter.
+            raise ClassSetsConfigError(
+                f"{here}.pattern: invalid regular expression ({type(error).__name__}): {error}"
+            ) from None
+        if matches_empty:
+            # Such a pattern is met by every brief, so the set would silently never be required.
+            raise ClassSetsConfigError(f"{here}.pattern: matches the empty text, so it never fails")
+        entries.append((item["label"], pattern))
+    return tuple(entries)
+
+
+def load_class_sets(path: Path | None = None) -> ClassSets:
+    """Validated class test sets; both keys are required and no source default exists (AGENTS.md section 5)."""
+    path = CLASS_SETS_CONFIG if path is None else path
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, RecursionError, MemoryError) as error:  # deep nesting, huge file
+        raise ClassSetsConfigError(f"cannot read {path}: {error!r}") from None
+    if not isinstance(data, dict):
+        raise ClassSetsConfigError(f"{path} must hold a JSON object")
+    body = {key: value for key, value in data.items() if not key.startswith("_")}
+    for key in _SETS_KEYS:
+        if key not in body:
+            raise ClassSetsConfigError(f"{path}: missing key {key}")
+    unknown = sorted(set(body) - set(_SETS_KEYS))
+    if unknown:
+        raise ClassSetsConfigError(f"{path}: unknown key(s) {', '.join(unknown)}")
+    required = _entries(body["required"], f"{path}: required")
+    groups = body["alternatives"]
+    if not isinstance(groups, dict) or not groups:
+        raise ClassSetsConfigError(f"{path}: alternatives must be a non-empty object of named groups")
+    alternatives = {}
+    for name, value in groups.items():
+        entries = _entries(value, f"{path}: alternatives.{name}")
+        if not entries:
+            raise ClassSetsConfigError(f"{path}: alternatives.{name} must list at least one entry")
+        alternatives[name] = entries
+    return ClassSets(required, alternatives)
+
+
+def missing_class_sets(body: str, sets: ClassSets) -> list[str]:
+    """Labels a brief still has to name: every `required` entry, plus the nearest group (fewest labels missing,
+    first in the file on a tie), written `<group>: <label>`. Empty when the brief names the class sets."""
+    missing = [label for label, pattern in sets.required if not pattern.search(body)]
+    per_group = {
+        name: [label for label, pattern in entries if not pattern.search(body)]
+        for name, entries in sets.alternatives.items()
+    }
+    if all(per_group.values()):
+        nearest = min(per_group, key=lambda name: len(per_group[name]))
+        missing += [f"{nearest}: {label}" for label in per_group[nearest]]
+        missing.append(f"(name every set of one group: {', '.join(per_group)})")
+    return missing
 _SMOKE = re.compile(
     r"(?:one|1)[- ]job\s+smoke|smoke\s+(?:one|1)\s+job|smoke\s+test\s+of\s+(?:one|1)\s+job",
     re.IGNORECASE,
@@ -421,11 +500,13 @@ def lint_message(
     full: bool,
     footer: str | None = None,
     task_file_text: str | None = None,
+    class_sets_path: Path | None = None,
 ) -> list[Finding]:
     """All findings of one worker message; `full` adds the rules of a complete brief (see the module doc).
 
     `footer` is the text of .agents/policy/AGENT_BRIEF_FOOTER.md (None = unreadable, itself a finding of a full lint);
-    `task_file_text` is the text of the brief's `Task file:` (None = no slice check)."""
+    `task_file_text` is the text of the brief's `Task file:` (None = no slice check);
+    `class_sets_path` is the class-test-set file (None = `brief_lint_config.json` next to this module)."""
     text = text.replace("\r\n", "\n")
     body = _strip_footer(text)
     findings = [
@@ -434,12 +515,16 @@ def lint_message(
     findings += _base_url_findings(body)
     findings += _line_findings(body)
     if full:
-        findings += _brief_findings(text, body, footer, task_file_text)
+        findings += _brief_findings(text, body, footer, task_file_text, class_sets_path)
     return sorted(findings, key=lambda f: (f.line, f.rule))
 
 
 def _brief_findings(
-    text: str, body: str, footer: str | None, task_file_text: str | None
+    text: str,
+    body: str,
+    footer: str | None,
+    task_file_text: str | None,
+    class_sets_path: Path | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
     if footer is None or not footer.strip():
@@ -458,14 +543,31 @@ def _brief_findings(
     if kind == "feature" and not _RID.search(header.get("r-ids", (0, ""))[1]):
         message = "a feature brief needs an `R-IDs:` header line with at least one R-<n>"
         findings.append(Finding("r-ids", 1, message))
-    if kind in SETS_KINDS and not any(_SETS_WAIVER.match(line) for line in body.split("\n")):
-        missing = [label for label, pattern in _SET_PATTERNS.items() if not pattern.search(body)]
-        if missing:
-            message = (
-                "name the class test sets (mistake #25) or add `Test sets: not applicable: "
-                f"<reason>`; missing: {'; '.join(missing)}"
-            )
-            findings.append(Finding("test-sets", 1, message))
+    if kind in SETS_KINDS:
+        # A broken configuration is a finding (cli_worker lets a linter crash through), also behind a waiver.
+        try:
+            class_sets = load_class_sets(class_sets_path)
+        except ClassSetsConfigError as error:
+            findings.append(Finding("test-sets", 1, f"the class test sets cannot be loaded: {error}"))
+        else:
+            waived = any(_SETS_WAIVER.match(line) for line in body.split("\n"))
+            try:
+                missing = [] if waived else missing_class_sets(body, class_sets)
+            except Exception as error:  # noqa: BLE001 - a failure while matching must block as well
+                missing = []
+                findings.append(
+                    Finding(
+                        "test-sets",
+                        1,
+                        f"the class test sets cannot be applied: {type(error).__name__}: {error}",
+                    )
+                )
+            if missing:
+                message = (
+                    "name the class test sets (mistake #25) or add `Test sets: not applicable: "
+                    f"<reason>`; missing: {'; '.join(missing)}"
+                )
+                findings.append(Finding("test-sets", 1, message))
     if kind != "review" and is_fix_brief(body):
         absent = [
             label

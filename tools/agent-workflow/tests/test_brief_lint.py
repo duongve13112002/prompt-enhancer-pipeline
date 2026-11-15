@@ -30,9 +30,10 @@ def load(path: Path, name: str) -> ModuleType:
 
 bl = load(TOOLS / "brief_lint.py", "brief_lint_t_mem")
 SETS = (
-    'Run these sets: `rg -l "configs/" tests`, test_config_key_effect, test_evidence_hash_scopes, '
-    "test_json_depth, the digest-pin suites, and every test importing a changed module.\n"
+    "Run these sets: the tool suite `tools/agent-workflow/tests/`, the configuration override and refusal "
+    "tests, and the property tests of parsers and validators.\n"
 )
+PIPELINE_SETS = SETS.replace("the tool suite `tools/agent-workflow/tests/`", "the pipeline suite `tests/`")
 BASE_OK = "Run with `ANTHROPIC_BASE_URL` unset (remove the variable, never set it to empty).\n"
 SMOKE = "Smoke one job first (one-job smoke), `run_approval_gate.py check`, `gpu_preflight.py`.\n"
 
@@ -261,12 +262,9 @@ def test_feature_needs_r_ids() -> None:
 def test_code_brief_needs_every_class_set_or_a_reasoned_waiver() -> None:
     assert rules(brief("code")) == {"test-sets"}
     for needle in (
-        "test_config_key_effect",
-        "test_evidence_hash_scopes",
-        "test_json_depth",
-        "digest-pin",
-        "importing a changed module",
-        '`rg -l "configs/" tests`',
+        "tools/agent-workflow/tests/",
+        "configuration override and refusal tests",
+        "property tests",
     ):
         assert rules(brief("code", SETS.replace(needle, "x"))) == {"test-sets"}, needle
     waiver = "Test sets: not applicable: tooling only, no configs or src module\n"
@@ -283,6 +281,206 @@ def test_the_class_sets_are_required_for_feature_code_and_review_only() -> None:
     assert rules(brief("review", SETS)) == set()
     for kind in ("docs", "scout", "trivial"):
         assert "test-sets" not in rules(brief(kind))
+
+
+def sets_message(text: str, path: Path | None = None) -> str:
+    found = bl.lint_message(text, full=True, footer=FOOTER, class_sets_path=path)
+    return " | ".join(f.message for f in found if f.rule == "test-sets")
+
+
+def write_sets(tmp_path: Path, data: object) -> Path:
+    path = tmp_path / "brief_lint_config.json"
+    path.write_text(data if isinstance(data, str) else json.dumps(data), encoding="utf-8")
+    return path
+
+
+def test_shipped_class_sets_load_and_name_this_repositorys_suites() -> None:
+    sets = bl.load_class_sets()
+    assert [label for label, _ in sets.required]
+    assert set(sets.alternatives) == {"tooling", "pipeline"}
+    # Either suite satisfies the alternatives; the root `tests/` is not confused with the tool suite's `tests/`.
+    assert rules(brief("code", SETS)) == set()
+    assert rules(brief("code", PIPELINE_SETS)) == set()
+    assert rules(brief("review", PIPELINE_SETS)) == set()
+
+
+def test_a_missing_set_is_reported_by_its_configured_label() -> None:
+    message = sets_message(brief("code", SETS.replace("property tests", "x")))
+    assert "the property tests of parsers and validators" in message
+    assert "configuration override" not in message
+    message = sets_message(brief("code", SETS.replace("the tool suite `tools/agent-workflow/tests/`, ", "")))
+    assert "tooling: the tool suite `tools/agent-workflow/tests/`" in message
+    assert "name every set of one group: tooling, pipeline" in message
+    # The tool suite's path does not satisfy the pipeline group.
+    assert "pipeline: " not in message
+
+
+def test_the_nearest_group_is_reported_and_ties_keep_file_order(tmp_path: Path) -> None:
+    entry = lambda label, pattern: {"label": label, "pattern": pattern}  # noqa: E731
+    path = write_sets(
+        tmp_path,
+        {
+            "required": [],
+            "alternatives": {
+                "first": [entry("A1", "aaa"), entry("A2", "bbb")],
+                "second": [entry("B1", "ccc"), entry("B2", "ddd")],
+            },
+        },
+    )
+    assert "first: A1; first: A2" in sets_message(brief("code"), path)
+    assert "second: B2" in sets_message(brief("code", "ccc"), path)
+    assert sets_message(brief("code", "ddd ccc"), path) == ""
+    assert sets_message(brief("code", "aaa bbb"), path) == ""
+
+
+def test_a_non_default_class_set_file_changes_the_result(tmp_path: Path) -> None:
+    custom = write_sets(
+        tmp_path,
+        {
+            "required": [{"label": "the zebra suite", "pattern": "zebra"}],
+            "alternatives": {"only": [{"label": "the lion suite", "pattern": r"LION\d"}]},
+        },
+    )
+    assert "the zebra suite" in sets_message(brief("code", SETS), custom)
+    assert sets_message(brief("code", "zebra lion1"), custom) == ""  # patterns are case-insensitive
+    assert sets_message(brief("code", SETS)) == ""  # the shipped file is unchanged by the override
+
+
+def test_the_waiver_holds_for_any_valid_configuration(tmp_path: Path) -> None:
+    waiver = "Test sets: not applicable: tooling only, no configs or src module\n"
+    assert sets_message(brief("code", waiver)) == ""
+    entry = {"label": "the quokka suite", "pattern": "quokka-suite"}
+    custom = write_sets(tmp_path, {"required": [], "alternatives": {"g": [entry]}})
+    assert sets_message(brief("code", waiver), custom) == ""
+    assert "the quokka suite" in sets_message(brief("code", "Test sets: not applicable: n/a\n"), custom)
+
+
+_ENTRY = {"label": "L", "pattern": "x"}
+_GOOD = {"required": [], "alternatives": {"g": [_ENTRY]}}
+_BAD_CONFIGS = {
+    "empty object": ({}, "missing key required"),
+    "no alternatives key": ({"required": []}, "missing key alternatives"),
+    "no required key": ({"alternatives": {"g": [_ENTRY]}}, "missing key required"),
+    "unknown key": ({**_GOOD, "extra": 1}, "unknown key(s) extra"),
+    "not an object": ([], "must hold a JSON object"),
+    "alternatives empty": ({"required": [], "alternatives": {}}, "non-empty object"),
+    "alternatives a list": ({"required": [], "alternatives": [_ENTRY]}, "non-empty object"),
+    "group empty": ({"required": [], "alternatives": {"g": []}}, "at least one entry"),
+    "group not a list": ({"required": [], "alternatives": {"g": "x"}}, "expected a list"),
+    "required not a list": ({"required": "x", "alternatives": {"g": [_ENTRY]}}, "expected a list"),
+    "entry not an object": ({"required": ["x"], "alternatives": {"g": [_ENTRY]}}, "expected an object"),
+    "entry without label": ({"required": [{"pattern": "x"}], "alternatives": {"g": [_ENTRY]}}, "missing key label"),
+    "entry without pattern": ({"required": [{"label": "L"}], "alternatives": {"g": [_ENTRY]}}, "missing key pattern"),
+    "blank label": ({"required": [{"label": " ", "pattern": "x"}], "alternatives": {"g": [_ENTRY]}}, "label: expected"),
+    "pattern not a string": ({"required": [{"label": "L", "pattern": 3}], "alternatives": {"g": [_ENTRY]}}, "pattern: expected"),
+    "entry unknown key": ({"required": [{**_ENTRY, "flags": "i"}], "alternatives": {"g": [_ENTRY]}}, "unknown key(s) flags"),
+    "invalid regex": ({"required": [{"label": "L", "pattern": "("}], "alternatives": {"g": [_ENTRY]}}, "invalid regular expression"),
+    "pattern matches empty text": ({"required": [{"label": "L", "pattern": ".*"}], "alternatives": {"g": [_ENTRY]}}, "matches the empty text"),
+}
+
+
+def test_a_valid_minimal_class_set_file_loads(tmp_path: Path) -> None:
+    sets = bl.load_class_sets(write_sets(tmp_path, _GOOD))
+    assert sets.required == () and list(sets.alternatives) == ["g"]
+    assert bl.load_class_sets(write_sets(tmp_path, {"_comment": "c", **_GOOD})).required == ()
+
+
+@pytest.mark.parametrize("name", list(_BAD_CONFIGS))
+def test_an_invalid_class_set_file_is_refused_with_a_precise_message(tmp_path: Path, name: str) -> None:
+    data, expected = _BAD_CONFIGS[name]
+    path = write_sets(tmp_path, data)
+    with pytest.raises(bl.ClassSetsConfigError, match=expected.replace("(", r"\(").replace(")", r"\)")):
+        bl.load_class_sets(path)
+    # The lint turns the refusal into a blocking finding, since cli_worker only warns on a linter crash.
+    message = sets_message(brief("code", SETS), path)
+    assert message.startswith("the class test sets cannot be loaded") and expected in message
+
+
+def test_a_missing_empty_or_unreadable_class_set_file_is_refused(tmp_path: Path) -> None:
+    for path in (tmp_path / "absent.json", write_sets(tmp_path, ""), write_sets(tmp_path, "{not json")):
+        with pytest.raises(bl.ClassSetsConfigError, match="cannot read"):
+            bl.load_class_sets(path)
+        assert "cannot be loaded" in sets_message(brief("review", SETS), path)
+    # A waiver does not hide a broken file, and other kinds never read it.
+    waiver = "Test sets: not applicable: tooling only, no configs or src module\n"
+    assert "cannot be loaded" in sets_message(brief("code", waiver), tmp_path / "absent.json")
+    assert sets_message(brief("docs"), tmp_path / "absent.json") == ""
+
+
+_COMPILER_FAILURES = {
+    "too large a repetition (OverflowError)": ("x{4294967296}", "OverflowError"),
+    "deep nesting (RecursionError)": ("(" * 600 + "x" + ")" * 600, "RecursionError"),
+    "syntax error (re.error)": ("(", "error"),
+}
+
+
+@pytest.mark.parametrize("name", list(_COMPILER_FAILURES))
+def test_a_pattern_the_regex_compiler_rejects_blocks_with_and_without_a_waiver(
+    tmp_path: Path, name: str
+) -> None:
+    pattern, kind = _COMPILER_FAILURES[name]
+    path = write_sets(tmp_path, {"required": [{"label": "L", "pattern": pattern}], "alternatives": {"g": [_ENTRY]}})
+    with pytest.raises(bl.ClassSetsConfigError, match=kind):
+        bl.load_class_sets(path)  # a refusal, never another exception type
+    waiver = "Test sets: not applicable: tooling only, no configs or src module\n"
+    for extra in (SETS, waiver):
+        for kind_name in ("code", "review", "feature"):
+            text = brief(kind_name, extra, rids="R-261")
+            found = bl.lint_message(text, full=True, footer=FOOTER, class_sets_path=path)
+            assert [f.rule for f in found if f.rule == "test-sets"] == ["test-sets"]
+            assert "cannot be loaded" in sets_message(text, path)
+
+
+def test_a_deeply_nested_class_set_file_is_refused(tmp_path: Path) -> None:
+    path = write_sets(tmp_path, "[" * 5000 + "0" + "]" * 5000)
+    with pytest.raises(bl.ClassSetsConfigError, match="cannot read"):
+        bl.load_class_sets(path)
+    assert "cannot be loaded" in sets_message(brief("code", SETS), path)
+
+
+def test_a_failure_while_matching_blocks_instead_of_escaping(monkeypatch: pytest.MonkeyPatch) -> None:
+    def explode(body: str, sets: object) -> list[str]:
+        raise RecursionError("boom")
+
+    monkeypatch.setattr(bl, "missing_class_sets", explode)
+    assert "cannot be applied: RecursionError: boom" in sets_message(brief("code", SETS))
+    waiver = "Test sets: not applicable: tooling only, no configs or src module\n"
+    assert sets_message(brief("code", waiver)) == ""  # a waiver never matches, so it never fails to match
+
+
+def test_override_and_refusal_tests_are_two_independent_requirements() -> None:
+    both = "the tool suite `tools/agent-workflow/tests/`, the property tests, "
+    for naming, needs in (
+        ("configuration override tests", "refusal"),
+        ("configuration refusal tests", "override"),
+        ("override tests and refusal tests", None),
+        ("configuration override and refusal tests", None),
+        ("refusal tests and override tests", None),
+    ):
+        message = sets_message(brief("code", both + naming))
+        if needs is None:
+            assert message == "", naming
+        else:
+            assert f"the configuration {needs} tests" in message, naming
+    # The property tests need their own name, not only the word.
+    message = sets_message(brief("code", SETS.replace("property tests", "property values")))
+    assert "the property tests of parsers and validators" in message
+    # Naming neither reports both labels.
+    message = sets_message(brief("code", both))
+    assert "the configuration override tests" in message and "the configuration refusal tests" in message
+
+
+@given(st.text(max_size=40))
+def test_the_class_set_loader_never_crashes_on_arbitrary_patterns(pattern: str) -> None:
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as folder:
+        path = write_sets(Path(folder), {"required": [{"label": "L", "pattern": pattern}], "alternatives": {"g": [_ENTRY]}})
+        try:
+            sets = bl.load_class_sets(path)
+        except bl.ClassSetsConfigError:
+            return
+        assert sets.required[0][1].search("") is None
 
 
 def test_run_brief_needs_smoke_gate_and_preflight() -> None:

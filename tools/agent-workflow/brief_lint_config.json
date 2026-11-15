@@ -1,0 +1,31 @@
+{
+  "_comment": "Class test sets of rule `test-sets` (brief_lint.py, mistake #25), bound to this repository. A feature, code or review brief names every entry of `required` and every entry of at least one group of `alternatives`, or carries `Test sets: not applicable: <reason>`. Each entry is a label (shown when missing) and a case-insensitive regular expression over the brief text; the patterns match suite paths and fixed test names, not free language. Validated by brief_lint.load_class_sets.",
+  "required": [
+    {
+      "label": "the configuration override tests (docs/test-plan.md, Configuration)",
+      "pattern": "override(?:\\s+and\\s+refusal)?\\s+tests?"
+    },
+    {
+      "label": "the configuration refusal tests (docs/test-plan.md, Configuration)",
+      "pattern": "(?:override\\s+and\\s+)?refusal\\s+tests?"
+    },
+    {
+      "label": "the property tests of parsers and validators (docs/test-plan.md, Property)",
+      "pattern": "property\\s+tests?"
+    }
+  ],
+  "alternatives": {
+    "tooling": [
+      {
+        "label": "the tool suite `tools/agent-workflow/tests/`",
+        "pattern": "tools/agent-workflow/tests"
+      }
+    ],
+    "pipeline": [
+      {
+        "label": "the pipeline suite `tests/` at the repository root",
+        "pattern": "(?<![\\w./-])tests/"
+      }
+    ]
+  }
+}

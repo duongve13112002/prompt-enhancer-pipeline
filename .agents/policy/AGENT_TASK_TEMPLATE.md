@@ -11,7 +11,7 @@
 - **Run limit:** time, plus what is not allowed (GPU, network, paid calls).
 - **May assume / Must ask:** what the worker may decide alone and what it must bring back as a question (always filled for Codex workers, whose default is to assume).
 - **Role pack and CLI wrapper:** the worker's role (`implementer`, `reviewer`, `scout`, `researcher`, `runner`) and CLI; the PM pastes `.agents/policy/roles/<role>.md` above the footer and `.agents/policy/cli/<cli>.md` at the top.
-- **Test sets:** the tests this change must keep green, or `not applicable: <reason>` (the lint's built-in list still names another project's suites; task T-020 rebinds it).
+- **Test sets:** the tests this change must keep green, or `not applicable: <reason>` (the lint requires the sets listed in `tools/agent-workflow/brief_lint_config.json`: the configuration override and refusal tests, the property tests, and the tool suite `tools/agent-workflow/tests/` or the pipeline suite `tests/`).
 - **Trivial:** `yes` only for a wording or configuration-value edit; it skips Step 0.
 - **Small:** `yes` for a small task ([PM_POLICY](PM_POLICY.md) section 4, decision 49); Step 0 goes atop the report and the worker continues (Codex: still two messages). The done check and the review stay.
 - **Base:** the commit and the predecessor patches the worktree starts from (ORCHESTRATION section 5).
