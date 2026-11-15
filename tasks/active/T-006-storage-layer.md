@@ -40,7 +40,7 @@ Starts once T-005 is accepted (decision 96). Even pipeline task: Claude (Opus 5.
 - **Role pack and CLI wrapper:** implementer; Claude (profile `dev-large`, Opus 5.5 `high`).
 - **Test sets:** not applicable: the pipeline suite under `tests/` is the one T-005 created; run it all plus the new tests.
 - **Trivial:** no. **Small:** no.
-- **Base:** the pushed commit that accepts T-005 (worktree `.tmp/worktrees/T-006`, detached).
+- **Base:** commit 53535a3, which accepts T-005; working folder `.tmp/worktrees/T-006`.
 
 ### Research required before code
 

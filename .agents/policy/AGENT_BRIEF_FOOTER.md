@@ -10,7 +10,7 @@ These rules hold for every worker; a broken one fails the handoff. Rules for you
 4. **Report what happened:** quote the exact output of lint and `ruff format --check`; an unrun test or mutant is `not_run` with the reason; a test double is labelled as one.
 5. **Mutants and probes** run on a scratch copy of the trees they need, so the working tree stays clean.
 6. **Faulthandler:** in subprocess tests use `-X faulthandler` or `faulthandler.enable()`; bound hangs with test timeouts and report crashes and hangs as findings.
-7. **Leave nothing running:** stop every process you started, by its recorded PID, so no other session's process is touched.
+7. **Leave nothing running:** stop every process you started, by its recorded PID, so no other session's process is touched. **Nothing on the user's screen:** code and tests start Windows child processes with `CREATE_NO_WINDOW`, never `DETACHED_PROCESS`, `CREATE_NEW_CONSOLE` or `Start-Process` without `-NoNewWindow`/`-WindowStyle Hidden`, because the venv `python.exe` is a redirector whose interpreter child otherwise opens a console window ([PLATFORM_GPU_RULES](../../docs/rules/PLATFORM_GPU_RULES.md)).
 8. **Clean up** scratch before handoff, keeping the small reports you cite; remove links as links.
 9. **Configuration:** AGENTS.md section 5 and the template's audit.
 10. **Test slots:** run every pytest, mutant or probe command through the limiter from the project root: `<venv python> -B tools/agent-workflow/test_slot.py -- <interpreter> -m pytest ...`. It allows 4 test commands at once (limit file `.tmp/pm-state/test-slots/max`, else 2); never bypass it.

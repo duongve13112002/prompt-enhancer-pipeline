@@ -48,7 +48,7 @@ Starts once T-005 is accepted (decision 96; T-002 is accepted). Odd pipeline tas
 - **Role pack and CLI wrapper:** implementer; Codex (profile `codex-dev`).
 - **Test sets:** not applicable: the pipeline suite under `tests/` is the one T-005 created; run it all plus the new tests.
 - **Trivial:** no. **Small:** no.
-- **Base:** the pushed commit that accepts T-005 (worktree `.tmp/worktrees/T-009`, detached).
+- **Base:** commit 53535a3, which accepts T-005; working folder `.tmp/worktrees/T-009`.
 
 ### Research required before code
 
