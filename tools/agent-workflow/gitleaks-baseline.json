@@ -1,0 +1,20 @@
+[
+  {
+    "RuleID": "generic-api-key",
+    "File": "tools/agent-workflow/tests/test_recall.py",
+    "StartLine": 169,
+    "Commit": "1adb1eda51b41666aa4d5e17ba9ad127c8adccca",
+    "Fingerprint": "1adb1eda51b41666aa4d5e17ba9ad127c8adccca:tools/agent-workflow/tests/test_recall.py:generic-api-key:169",
+    "Reason": "Test data, not a secret: the literal input \"api_key = abcd1234efgh5678\" of test_redact_removes_each_secret_class, which checks that recall.redact removes it.",
+    "Decision": "PM decision pending user review (decision 94), T-022 round 4, 2026-11-15"
+  },
+  {
+    "RuleID": "private-key",
+    "File": "tools/agent-workflow/tests/test_recall.py",
+    "StartLine": 180,
+    "Commit": "1adb1eda51b41666aa4d5e17ba9ad127c8adccca",
+    "Fingerprint": "1adb1eda51b41666aa4d5e17ba9ad127c8adccca:tools/agent-workflow/tests/test_recall.py:private-key:180",
+    "Reason": "Test data, not a secret: a stub key block (BEGIN RSA PRIVATE KEY, MIIx, yy) in test_redact_private_spans_and_key_blocks_keep_line_numbers, which checks that recall.redact removes key blocks.",
+    "Decision": "PM decision pending user review (decision 94), T-022 round 4, 2026-11-15"
+  }
+]

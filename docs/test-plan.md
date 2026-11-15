@@ -12,6 +12,6 @@ Plan only; no tests exist yet. Categories are reported separately, and a double 
 | Dev-GPU smoke (E12) | The client against the dev server: image input, JSON schema, thinking off, several images; plumbing only, never quality or timing ([dev-machine](dev-machine.md)) | the dev machine |
 | Deployment smoke and measurement (E13) | One request with image plus schema plus thinking off; latency and throughput under concurrency ([serving](serving.md)) | the user's deployment, reported as measurements |
 | Quality | Metrics on the evaluation set ([G-evaluation](stages/G-evaluation.md)), card audit (E16), experiments E1 to E17 | deployment plus agent review |
-| Cross-platform | The suite above the dev-GPU line runs on Ubuntu and Windows in CI (R-025, [ci](ci.md)); OS- or hardware-specific live tests are marked `not_run` where unavailable, never inferred from another platform | GitHub Actions |
+| Cross-platform | The suite above the dev-GPU line (`tests/` and `tools/agent-workflow/tests`) runs on Ubuntu and Windows in CI, dispatched inside the visibility window by `tools/agent-workflow/ci_window.py`, with no test skipped or allowed to fail (R-025, [ci](ci.md)); OS- or hardware-specific live tests are marked `not_run` where unavailable, never inferred from another platform | GitHub Actions (`.github/workflows/ci.yml`) |
 
 Fixtures are tiny and synthetic; no real knowledge-base images and no model weights are committed to Git.

@@ -1,0 +1,32 @@
+{
+  "_comment": "Settings of tools/agent-workflow/ci_window.py (T-022, docs/ci.md). Every key is required; unknown keys are refused. The remote, branch, forbidden path prefixes and suffixes and the git timeout are read from guard_config.json (git_guard.push_remote, git_guard.push_branch, push_guard.forbidden_*, git_timeout_seconds), never repeated here. run_timeout_seconds = 2400 is a PM value pending measurement (T-022 PM approval point 5): refit from the measured run time after the first window. secret_scanner holds one entry per sys.platform value, because the binary is per platform: gitleaks 8.30.1, approved by the user with its download into the project (decision 113), installed by the PM for Windows x64 and checked against the release checksums; its executable path is relative to the project root, its SHA-256 is checked before and after every scan, and version must equal what the binary prints for version_args (gitleaks: `version`). run_ledger records the run ids this tool dispatched; a retained run or artifact not in it refuses the window (T-022 fix round 2, PM decision pending user review). ledger_lock_timeout_seconds (1-120) bounds the wait for another window's locked ledger read or write; past it the read refuses before publication and the write is a window error (T-022 fix round 3). linux stays pin_required, so a window opened on Linux refuses until that binary is placed and pinned.",
+  "schema_version": 1,
+  "workflow_file": "ci.yml",
+  "run_timeout_seconds": 2400,
+  "poll_interval_seconds": 15,
+  "dispatch_lookup_timeout_seconds": 60,
+  "gh_timeout_seconds": 60,
+  "restore_attempts": 3,
+  "gh_argv": ["gh"],
+  "report_dir": "runs/ci-window",
+  "run_ledger": "runs/ci-window/ledger.json",
+  "ledger_lock_timeout_seconds": 10,
+  "findings_dir": ".tmp/ci-window/findings",
+  "findings_raw_dir": ".tmp/ci-window/raw",
+  "extra_forbidden_prefixes": ["runs"],
+  "allowed_tracked_paths": [".secrets/README.md", "models/README.md"],
+  "scanner_baseline": {
+    "path": "tools/agent-workflow/gitleaks-baseline.json",
+    "sha256": "000bd13ca1a40af3fdba1e97e53a798b29ef01e60f2b61e40a0f8de572bbafe9"
+  },
+  "secret_scanner": {
+    "win32": {
+      "executable": ".tmp/tools/gitleaks/8.30.1/bin/gitleaks.exe",
+      "version": "8.30.1",
+      "version_args": ["version"],
+      "sha256": "17157e2ee8b76fc8b1d8bee607a250e34b8a8023c8bc81822d4b5ee4d78fcb7c",
+      "args": ["git", "--no-banner", "--redact", "--log-level=warn", "--ignore-gitleaks-allow", "--log-opts={revs}", "{repo}"]
+    },
+    "linux": "pin_required"
+  }
+}

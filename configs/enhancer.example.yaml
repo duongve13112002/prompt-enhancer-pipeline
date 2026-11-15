@@ -184,7 +184,7 @@ vlm:                                     # R-018: rules name no model; models ar
       unsupported_param_policy: warn
       base_urls: [deploy_required]
       endpoints: deploy_required
-      api_key_file: .secrets/anthropic.key   # the user puts the key file here; agents never open .secrets/
+      api_key_file: .secrets/claude.api-key   # the user's key file name (decision 118); agents never open .secrets/
       model: {id: claude-haiku-5-5, revision: none, source: none, file: none, mmproj_file: none}   # the user's default cloud model
       max_concurrency: design_required
       http: *model_http
@@ -199,7 +199,7 @@ vlm:                                     # R-018: rules name no model; models ar
       unsupported_param_policy: warn
       base_urls: [deploy_required]
       endpoints: deploy_required
-      api_key_file: .secrets/gemini.key
+      api_key_file: .secrets/gemini.api-key
       model: {id: gemini-3.1-flash-lite, revision: none, source: none, file: none, mmproj_file: none}   # the user's default; confirm the provider still offers it before use [A]
       max_concurrency: design_required
       http: *model_http

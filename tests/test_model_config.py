@@ -124,7 +124,8 @@ def test_anthropic_workspace_override_and_refusal(tmp_path, project_root):
     backend['anthropic_version'] = '2025-01-01'
     directory = tmp_path / '.secrets'
     directory.mkdir()
-    (directory / 'anthropic.key').write_text('synthetic', encoding='utf-8')
+    # The synthetic key takes the file name the example profile names, so renaming it there needs no test edit.
+    (directory / backend['api_key_file'].split('/')[-1]).write_text('synthetic', encoding='utf-8')
     path = tmp_path / 'config.yaml'
     for value in ('workspace-123', 'none'):
         backend['anthropic_workspace_id'] = value

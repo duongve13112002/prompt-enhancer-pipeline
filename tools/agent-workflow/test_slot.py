@@ -71,11 +71,25 @@ def _acquire() -> Path:
         time.sleep(POLL_SECONDS)
 
 
+def _suppress_crash_dialogs() -> None:
+    if not NATIVE_WINDOWS:
+        return
+    import ctypes
+
+    # Protocol-bound Windows error mode constants (Microsoft SetErrorMode documentation).
+    sem_failcriticalerrors = 0x0001
+    sem_nogpfaulterrorbox = 0x0002
+    kernel32 = ctypes.windll.kernel32
+    prev = kernel32.GetErrorMode()
+    kernel32.SetErrorMode(prev | sem_failcriticalerrors | sem_nogpfaulterrorbox)
+
+
 def main(argv: list[str]) -> int:
     if "--" not in argv or argv.index("--") == len(argv) - 1:
         print("usage: test_slot.py -- <command> [args...]", file=sys.stderr)
         return 2
     command = argv[argv.index("--") + 1 :]
+    _suppress_crash_dialogs()
     slot = _acquire()
     try:
         return subprocess.call(command)

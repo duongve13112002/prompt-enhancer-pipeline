@@ -1,0 +1,46 @@
+# CI of R-025 (docs/ci.md, T-022). Started only by manual dispatch, from tools/agent-workflow/ci_window.py inside the
+# visibility window, so a push never starts a run while the repository is private (decisions 26, 112).
+# Both legs run every test; nothing is skipped, deselected or allowed to fail (T-022 PM approval point 2).
+# Action pins: full commit SHAs of the latest releases, read by the PM from the official repositories with
+# `gh api repos/actions/<name>/releases/latest` and `.../git/ref/tags/<tag>` on 2026-11-15 16:12 (docs/ci.md);
+# ci_window.py refuses to open while any `uses:` is not a full SHA.
+name: ci
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # Below ci_window_config.json run_timeout_seconds (2400 s, PM value pending measurement).
+    timeout-minutes: 30
+    env:
+      PYTHONNOUSERSITE: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The tests need no authenticated git; v7 README: "Set `persist-credentials: false` to opt-out."
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          # artifact-bound: the dev machine runs 3.12.10; .agents/project.json python.min_version is 3.11
+          python-version: "3.12"
+      - name: Install the CPU profile (pyproject dependencies and the test extra; no GPU package)
+        run: python -m pip install ".[test]"
+      - name: Pipeline suite
+        env:
+          PYTHONPATH: src
+        run: python -B -X faulthandler -m pytest -q -p no:cacheprovider tests
+      - name: Tooling suite
+        # Runs after a red pipeline suite too, so one run reports both suites.
+        if: ${{ !cancelled() }}
+        run: python -B -X faulthandler -m pytest -q -p no:cacheprovider tools/agent-workflow/tests
