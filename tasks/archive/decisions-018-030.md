@@ -1,0 +1,19 @@
+# Decisions 18 to 30 (archived verbatim from tasks/DECISIONS_INDEX.md on 2026-11-15)
+
+Moved to keep the index within its character budget; the rows are unchanged and still in force unless a later decision replaces them.
+
+| ID | Date | Decision | Source | Applied |
+| --- | --- | --- | --- | --- |
+| 18 | 2026-11-11 | No hardcoding, no rule-based logic, no tricks; thresholds come from experiments | user answer ("ko hardcode ko rulebase hay trick") | applied: AGENTS.md, tasks/REQUIREMENTS.md |
+| 19 | 2026-11-11 | Every table and artifact is Parquet or Arrow, plus a serving index rebuilt from them per snapshot | user answer | applied: contracts/README.md, docs/stages/K5-index.md |
+| 20 | 2026-11-11 | Deployment model: Qwen3.8-27B on a GPU of at least 45 GB. Dev model: `unsloth/Qwen3.5-4B-GGUF`, file `Qwen3.5-4B-Q3_K_M.gguf`, on an RTX 5070 with 8 GB. Both are profile values | user answer | applied: configs/enhancer.dev.example.yaml, configs/overlays/deploy-vllm.example.yaml, docs/dev-machine.md |
+| 21 | 2026-11-11 | A response should take a few seconds while many requests run concurrently | user answer | applied: docs/serving.md |
+| 22 | 2026-11-11 | No gold prompts exist: the orchestrator has agents build the test set from the user's knowledge base | user answer | applied: docs/stages/G-evaluation.md, evalset/README.md |
+| 23 | 2026-11-11 | This repository is fully independent of the project the tooling was copied from | user answer | applied: .agents/project.json |
+| 24 | 2026-11-11 | Workflow improvements A to H are accepted: text changes now, tooling changes as backlog tasks with tests | user answer | applied: AGENTS.md, .agents/policy/PM_POLICY.md, tasks/IMPLEMENTATION_PLAN.md |
+| 25 | 2026-11-11 | Agent CLIs are Claude Code, Codex and Antigravity; the repository is named `prompt-enhancer-pipeline` | user answer | applied: .agents/project.json |
+| 26 | 2026-11-11 | Agents create GitHub Actions for the project on the latest Ubuntu and on Windows; for a run the repository is switched from private to public, and back to private when the run is green or red | user message | applied: docs/ci.md, AGENTS.md |
+| 27 | 2026-11-11 | After writing, the documents are given to Haiku, Sonnet and Opus agents to check they understand; their questions go to the user | user message | applied: .agents/policy/PM_POLICY.md, docs/agents/README.md |
+| 28 | 2026-11-11 | The enhancer supports cloud models as well as local ones: the model for each role is chosen in the configuration and defaults to the local backend; cloud providers are Claude (default model Haiku 5.5) and Gemini (default `gemini-3.1-flash-lite`); keys are files the user puts under `.secrets/`; before a cloud provider is used the user is asked how many requests it may spend | user message | applied: configs/enhancer.example.yaml, docs/rules/VLM_CALL_RULES.md, AGENTS.md, tasks/REQUIREMENTS.md |
+| 29 | 2026-11-11 | When a cloud backend's granted requests are used up, the role continues on the local backend with a warning instead of stopping; images may be sent to a cloud provider when a role is configured to use it, with a configuration switch that forbids it (requests with an image then run locally) | user answer ("ok với 2 suggest") | applied: configs/enhancer.example.yaml, contracts/vlm-request.md, docs/rules/VLM_CALL_RULES.md |
+| 30 | 2026-11-11 | The dev machine is Windows; folder names in the real knowledge base follow no format and never contain the vertical bar. A folder without an info file is named by a vision model that looks at a subset of its images with the folder name as a hint: when the name fits it is the concept name, otherwise the model proposes the concept name or names and descriptions. Replaces decision 11 | user answer | applied: kb/README.md, docs/stages/K2-observe.md, tasks/REQUIREMENTS.md |
