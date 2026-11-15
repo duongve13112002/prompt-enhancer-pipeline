@@ -55,6 +55,9 @@ def prepare(config, path):
                                                anthropic_version='2025-01-01', anthropic_workspace_id='none', api_key_file='.secrets/example.key')
     elif path == ('vlm', 'default_backend') or path[:2] == ('vlm', 'roles') and path[-1] == 'backend':
         config['vlm']['backends']['alternate'] = deepcopy(config['vlm']['backends']['main'])
+    elif path == ('embedding', 'backend'):  # T-008: the embedder is a named backend with an embeddings route
+        config['vlm']['backends']['alternate'] = deepcopy(config['vlm']['backends']['main'])
+        config['vlm']['backends']['alternate']['endpoints'] = {'embeddings': 'v1/embeddings', 'health': 'health'}
 
 
 def set_candidate(config, path, candidate):
@@ -79,7 +82,8 @@ def options(value):
             'draft', 'confirmed', 'active', 'plain', 'sectioned',
             'medium', 'cards', 'live', 'json_schema', 'json_object', 'engine_native',
             'response_format', 'from_vision', 'intent_ir.v0', 'verifier_result.v0', '2025-01-01',
-            'openai_compatible', 'anthropic', 'gemini', 'vllm', 'llama_cpp', 'fallback_to_default_backend', 'stop', 'arrow', '7d', 'refuse', 'flatten', '#123456', [],
+            'openai_compatible', 'anthropic', 'gemini', 'vllm', 'llama_cpp', 'fallback_to_default_backend', 'stop', 'arrow', '7d', 'refuse', 'flatten', '#123456',
+            'openai_input_content', 'native', [],
             ['alternative'], ['generate'], ['edit'], {}, {'other': 'alternative'},
             {'chat': 'chat', 'health': 'health'},
             {'source': 'source_image', 'format': 'png', 'quality': 80, 'transport': 'data_uri'},
@@ -105,7 +109,7 @@ def test_protocol_only_fields():
         else:
             constrained.append('.'.join(path))
     assert constrained == ['schema_version', 'knowledge.info_file.on_description_count_mismatch',
-                           'vision.alpha_policy.mode', 'vlm.backends.main.unsupported_param_policy',
+                           'vision.alpha_policy.mode', 'vision.transport', 'vlm.backends.main.unsupported_param_policy',
                            'vlm.roles.planner.mode', 'vlm.roles.planner.output.validate_response']
 
 
@@ -126,6 +130,7 @@ def test_all_constrained_fields_are_known():
             allowed = (path == ('schema_version',)
                        or path == ('knowledge', 'info_file', 'on_description_count_mismatch')
                        or path == ('vision', 'alpha_policy', 'mode')  # Refuse also removes the background member.
+                       or path == ('vision', 'transport')  # T-008: protocol-bound, data_uri is the only value
                        or path[:2] == ('vlm', 'backends') and path[-1] == 'unsupported_param_policy'
                        or path[:2] == ('vlm', 'roles') and path[-1] == 'mode' and len(path) == 4
                        or path[:2] == ('vlm', 'roles') and path[-2:] == ('output', 'validate_response'))
@@ -153,6 +158,12 @@ def test_config_override_and_refusal(path, tmp_path):
         parent[key] = 'verifier_result.v0' if original == 'intent_ir.v0' else 'intent_ir.v0'
     if path == ('vlm', 'default_backend') or path[:2] == ('vlm', 'roles') and path[-1] == 'backend':
         parent[key] = 'alternate'
+    if path == ('embedding', 'backend'):
+        parent[key] = 'alternate'
+    if path == ('embedding', 'chosen'):  # T-008: the chosen embedder is one of the listed candidates
+        parent[key] = EXAMPLE['embedding']['candidates'][1]['id']
+    if path == ('embedding', 'request', 'text_template'):  # T-008: exactly one {text} placeholder
+        parent[key] = 'query: {text}'
     if path == ('vision', 'format') or path[:2] == ('vlm', 'roles') and path[-2:] == ('image', 'format'):
         parent[key] = 'png' if original != 'png' else 'jpeg'
     if path[-1] == 'api_key_file' and path[:2] == ('vlm', 'backends'):

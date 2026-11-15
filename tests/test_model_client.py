@@ -212,6 +212,65 @@ def test_image_requires_verified_capability_and_is_resized(inherit):
     asyncio.run(run())
 
 
+# T-008 fix round 5 (R4F1): the oracle is Pillow's initialized registry, never a list of format or media type words.
+Image.init()
+SENT = [name for name in sorted(Image.SAVE) if str(Image.MIME.get(name, '')).startswith('image/')]
+NOT_SENT = [name for name in sorted(Image.SAVE) if name not in SENT]
+
+
+def image_call(fmt, data):
+    """One local image call with role image format `fmt`; the body the labelled transport double received."""
+    async def run():
+        role = {'backend': 'main', 'prompt_id': 'test', 'max_tokens': 30,
+                'sampling': {'temperature': 0.2}, 'image': {'max_side': 'none', 'format': fmt, 'quality': 90},
+                'reasoning': {'mode': 'auto', 'effort': 'none', 'budget_tokens': 'none'},
+                'output': {'format': 'none', 'schema_id': 'none', 'strict': False, 'validate_response': False}}
+        backend = {'provider': 'openai_compatible', 'engine': {'name': 'llama_cpp', 'version': 'test-version'},
+                   'model': {'id': 'local', 'revision': 'r'}, 'endpoints': {'chat': 'chat'},
+                   'image': {'max_decode_pixels': 1000}}
+        config = {'vision': {'max_image_side': 'none', 'format': 'png', 'quality': 90,
+                             'alpha_policy': {'mode': 'refuse'}},
+                  'vlm': {'roles': {'planner': role}, 'backends': {'main': backend}, 'default_backend': 'main'}}
+        double = DoubleTransport('done')
+        schema = SchemaRegistry(Path(__file__).resolve().parents[1] / 'contracts' / 'schemas')
+        probe = ProbeResult('complete', {'image': True, 'sampling.temperature': True}, {})
+        client = RoleClient(config, {'main': double}, {'main': probe}, schema)
+        await client.call('planner', b'system', 'data', images=[('source_image', data)])
+        return double.body
+
+    return asyncio.run(run())
+
+
+def png_bytes():
+    source = BytesIO()
+    Image.new('RGB', (8, 4)).save(source, format='PNG')
+    return source.getvalue()
+
+
+def test_jpeg2000_is_sent_with_its_registered_media_type():
+    """Retest 4 (R4F1) on the T-009 builder: the header named the encoder, image/jpeg2000; Pillow registers
+    image/jp2 (PIL/Jpeg2KImagePlugin.py:442)."""
+    url = image_call('jpeg2000', png_bytes())['messages'][1]['content'][1]['image_url']['url']
+    with Image.open(BytesIO(base64.b64decode(url.split(',', 1)[1]))) as prepared:
+        assert prepared.format == 'JPEG2000'
+        assert url.startswith(f'data:{Image.MIME[prepared.format]};base64,') and url.startswith('data:image/jp2;')
+
+
+@pytest.mark.parametrize('encoder', SENT)
+def test_every_installed_encoder_sends_its_registered_media_type(monkeypatch, encoder):
+    # Labelled double of the image preparation: the header, not the encoding, is under test for every encoder.
+    monkeypatch.setattr('prompt_enhancer.model_client.prepare_image', lambda *args, **kwargs: b'labelled bytes')
+    url = image_call(encoder.lower(), png_bytes())['messages'][1]['content'][1]['image_url']['url']
+    assert url.split(',', 1)[0] == f'data:{Image.MIME[encoder]};base64'
+
+
+@pytest.mark.parametrize('encoder', NOT_SENT)
+def test_an_encoder_without_a_registered_image_media_type_is_refused_before_the_request(encoder):
+    with pytest.raises(ModelCallError, match='^CONFIGURATION_INVALID:') as caught:
+        image_call(encoder.lower(), png_bytes())
+    assert 'registers no image/ media type' in str(caught.value.__cause__)
+
+
 def test_client_runs_configured_probe_through_transport():
     async def run():
         backend = {'provider': 'openai_compatible', 'engine': {'name': 'llama_cpp', 'version': 'test-version'}, 'endpoints': {'chat': 'chat'},
@@ -312,6 +371,43 @@ def test_cloud_requires_ledger_and_uses_synthetic_key(tmp_path):
         assert double.headers['anthropic-version'] == '2025-01-01'
         assert record['engine'] == {'name': 'anthropic', 'version': '2025-01-01'}
         assert 'synthetic-key' not in str(record)
+
+    asyncio.run(run())
+
+
+def test_cloud_image_states_the_registered_media_type(tmp_path):
+    """T-008 fix round 5 (R4F1): the Anthropic image `media_type` is Pillow's registered type, not the encoder name.
+    A labelled transport double; the key is synthetic, under the test's own tmp_path."""
+    async def run():
+        (tmp_path / '.secrets').mkdir()
+        (tmp_path / '.secrets' / 'fake.key').write_text('synthetic-key', encoding='utf-8')
+        role = {'backend': 'cloud', 'prompt_id': 'test', 'max_tokens': 10, 'sampling': {},
+                'image': {'max_side': 'none', 'format': 'jpeg2000', 'quality': 90},
+                'reasoning': {'mode': 'auto', 'effort': 'none', 'budget_tokens': 'none'},
+                'output': {'format': 'none', 'schema_id': 'none', 'strict': False, 'validate_response': False}}
+        backend = {'provider': 'anthropic', 'engine': {'name': 'anthropic'}, 'api_key_file': '.secrets/fake.key',
+                   'anthropic_version': '2025-01-01', 'anthropic_workspace_id': 'none', 'allow_images': True,
+                   'model': {'id': 'fake', 'revision': 'r'}, 'endpoints': {'chat': 'messages'},
+                   'image': {'max_decode_pixels': 1000}}
+        config = {'vision': {'max_image_side': 'none', 'format': 'png', 'quality': 90,
+                             'alpha_policy': {'mode': 'refuse'}},
+                  'vlm': {'roles': {'planner': role}, 'backends': {'cloud': backend}, 'default_backend': 'cloud'}}
+
+        class CloudDouble:
+            ledger = object()
+
+            async def post(self, route, body, headers):
+                self.body = body
+                return httpx.Response(200, json={'stop_reason': 'end_turn', 'content': [{'type': 'text', 'text': 'ok'}]},
+                                      request=httpx.Request('POST', 'https://example.org'))
+
+        double = CloudDouble()
+        client = RoleClient(config, {'cloud': double}, {'cloud': ProbeResult('complete', {'image': True}, {})}, None,
+                            project_root=tmp_path)
+        await client.call('planner', b'system', 'data', images=[('source_image', png_bytes())])
+        source = double.body['messages'][0]['content'][1]['source']
+        with Image.open(BytesIO(base64.b64decode(source['data']))) as prepared:
+            assert source['media_type'] == Image.MIME[prepared.format] == 'image/jp2'
 
     asyncio.run(run())
 

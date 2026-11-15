@@ -48,6 +48,16 @@ embedding:                               # K1, experiment E5
   chosen: fit_from_gt
   revision: pin_required
   query_text_limit: design_required      # some encoders cap text length (SigLIP 2 does, N008); applies to that candidate only
+  backend: deploy_required               # name of the vlm.backends entry that serves the embedder (openai_compatible only); its model.revision must equal revision above
+  request:                               # T-008: the documented image request layouts differ per engine and model; fixed by the live smoke
+    shape: design_required               # openai_input_content (llama.cpp /v1/embeddings with --mmproj) | vllm_chat_messages (vLLM /v1/embeddings with messages)
+    image_instruction: design_required   # system text sent with each image, or none (Qwen3-VL-Embedding card default "Represent the user's input."; EmbeddingGemma 2: none)
+    extra_body: design_required          # vllm_chat_messages only: {continue_final_message, add_special_tokens} as the vLLM example sends them; {} otherwise
+    text_template: design_required       # concept text request; exactly one {text} placeholder (EmbeddingGemma 2 uses task prefixes, N104)
+  dimension: fit_from_gt                 # vector length stored per row; E5 fits it when the embedder supports truncation
+  dimension_mode: design_required        # native | request_field (sends `dimensions`, vLLM only) | client_prefix_l2 (keep the leading values, then L2-normalise, N104)
+  batch_size: deploy_required            # images per request; vllm_chat_messages carries one per request
+  # Devices are not a client setting: the embedding server's launch places the model (runtime.gpus, vram_budget_gb, gpu-live-run).
 
 observe:                                 # K2
   one_image_per_call: true               # R-010, N107, N108: models mix up several images in one call
@@ -155,7 +165,7 @@ vision:                                  # S0
   max_image_side: none                   # decision 84: `none` sends the original image; an integer N downscales so the longer side is N, keeping the aspect ratio, never upscaling. Applies to every image sent to any model (VLM roles, image embedder); a role may override with `image.max_side`. Experiments and benchmarks use 1024 (N102: large originals cost latency and cloud tokens)
   format: jpeg
   quality: design_required
-  transport: data_uri
+  transport: data_uri                    # the only accepted value: both engines document base64 data URIs; file:// needs a server --media-path and exposes paths (T-008)
 
 profiles:
   root: configs/profiles

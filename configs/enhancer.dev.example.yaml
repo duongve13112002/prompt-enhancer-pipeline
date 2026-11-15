@@ -18,6 +18,10 @@ vision:
 
 embedding:
   chosen: embeddinggemma-2              # N104; the smoke choice for the dev machine, small enough to share the dev GPU; experiment E5 chooses for the full profile
+  backend: embedder                      # [A] no primary source yet confirms EmbeddingGemma 2 image embedding on llama.cpp (T-008 Step 0, A1-A3)
+  dimension: 768                         # native output dimension, N104
+  dimension_mode: native
+  batch_size: 8                          # a profile value for the dev GPU [P]
 
 vlm:
   backends:
@@ -37,3 +41,15 @@ vlm:
       http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
       probe: {max_requests: design_required, timeout_s: design_required}
       image: {max_decode_pixels: deploy_required}
+    embedder:                            # K1 embedding server (llama-server with --embedding and --mmproj, N055); T-008
+      provider: openai_compatible
+      engine: {name: llama_cpp, version: pin_required}
+      unsupported_param_policy: warn
+      base_urls: [deploy_required]       # a loopback URL of the local embedding server, set per machine
+      api_key_file: none
+      model: {id: deploy_required, revision: pin_required, source: none, file: none, mmproj_file: none}
+      max_concurrency: 1
+      http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
+      probe: {max_requests: design_required, timeout_s: design_required}   # unused by K1; required by the backend schema
+      image: {max_decode_pixels: deploy_required}
+      endpoints: {embeddings: v1/embeddings, health: health}

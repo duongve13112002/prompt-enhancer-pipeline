@@ -1,8 +1,11 @@
 """In-memory HTTP double; no network or provider calls."""
 
 import asyncio
+from fractions import Fraction
+import sys
 
 import httpx
+from hypothesis import HealthCheck, given, settings as hsettings, strategies as st
 import pytest
 
 from prompt_enhancer.model_resources import BackendConcurrency, BudgetExhausted, SingleRunBudgetLedger
@@ -99,3 +102,72 @@ def test_transport_timeout_and_cancellation_release_concurrency():
             await client.close()
 
     asyncio.run(run())
+
+
+# T-008 fix round 5 (N1): capped backoff without the unbounded product 2**attempt.
+FLOAT_MAX = sys.float_info.max  # test-only oracle: the largest finite binary64 value
+LARGEST_TIMER = 2 ** 1024 - 2 ** 970 - 1  # test-only oracle: the largest int float() converts (T-008 timer_probe)
+
+
+def retry_delays(max_retries, initial, cap, monkeypatch=None):
+    """One post against a labelled HTTP double that always answers 503: the response, the sleeps, the requests.
+    With `monkeypatch`, asyncio.sleep is replaced by a labelled recording double, so a large delay is not awaited."""
+    delays, attempts = [], []
+
+    async def recording_sleep(delay):
+        delays.append(delay)
+
+    def handler(request):
+        attempts.append(request)
+        return httpx.Response(503)
+
+    async def run():
+        settings = {'provider': 'openai_compatible', 'base_urls': ['http://127.0.0.1'],
+                    'http': dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
+                                 max_retries=max_retries, retry_statuses=[503], backoff_initial_s=initial,
+                                 backoff_max_s=cap)}
+        client = ModelTransport('main', settings, BackendConcurrency({'main': 1}),
+                                transport=httpx.MockTransport(handler))
+        try:
+            return await client.post('chat', {}, {})
+        finally:
+            await client.close()
+
+    if monkeypatch is not None:
+        monkeypatch.setattr('prompt_enhancer.model_transport.asyncio.sleep', recording_sleep)
+    return asyncio.run(run()), delays, attempts
+
+
+def expected_delays(initial, cap, count):
+    """Exact oracle: min(initial * 2**k, cap) in rational arithmetic, so the oracle itself cannot overflow."""
+    return [Fraction(cap) if Fraction(initial) * 2 ** k > Fraction(cap) else Fraction(initial) * 2 ** k
+            for k in range(count)]
+
+
+@pytest.mark.parametrize(('initial', 'cap'), [(0.0, 0.0), (0, 0), (5e-324, 1e-9)])
+def test_a_long_retry_sequence_with_zero_or_tiny_backoff_finishes_with_real_sleep(initial, cap):
+    """Retest 4 (N1): 1025 retries with float zero backoffs raised OverflowError at attempt 1024."""
+    response, _, attempts = retry_delays(1025, initial, cap)
+    assert response.status_code == 503 and len(attempts) == 1026
+
+
+@pytest.mark.parametrize(('initial', 'cap'), [(0.0, 0.0), (5e-324, 5e-324), (1.0, FLOAT_MAX), (FLOAT_MAX, FLOAT_MAX),
+                                              (0.5, 0.75), (1, LARGEST_TIMER), (1.0, LARGEST_TIMER), (3, 10 ** 300)])
+@pytest.mark.parametrize('max_retries', [1024, 1025, 1100])
+def test_capped_backoff_past_the_float_exponent_limit(monkeypatch, max_retries, initial, cap):
+    response, delays, attempts = retry_delays(max_retries, initial, cap, monkeypatch)
+    assert response.status_code == 503 and len(attempts) == max_retries + 1
+    assert [Fraction(delay) for delay in delays] == expected_delays(initial, cap, max_retries)
+
+
+TIMER = st.one_of(st.floats(min_value=0, max_value=FLOAT_MAX, allow_nan=False, allow_infinity=False),
+                  st.integers(min_value=0, max_value=LARGEST_TIMER))
+
+
+@hsettings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(max_retries=st.integers(min_value=0, max_value=1100), pair=st.tuples(TIMER, TIMER))
+def test_backoff_delays_are_the_capped_doubling_for_any_valid_pair(monkeypatch, max_retries, pair):
+    initial, cap = sorted(pair)  # the loader keeps backoff_initial_s <= backoff_max_s
+    response, delays, attempts = retry_delays(max_retries, initial, cap, monkeypatch)
+    assert response.status_code == 503 and len(attempts) == max_retries + 1
+    assert [Fraction(delay) for delay in delays] == expected_delays(initial, cap, max_retries)

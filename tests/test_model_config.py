@@ -295,7 +295,7 @@ CONFIG_VALUES = [
     ('vision.max_image_side', 640, 0),
     ('vision.format', 'png', 12),
     ('vision.quality', 75, -1),
-    ('vision.transport', 'alternate_transport', 12),
+    ('vision.transport', 'data_uri', 'alternate_transport'),  # T-008: an enum whose only value is data_uri
     ('vlm.backends.main.base_urls', ['http://127.0.0.1:8080'], []),
     ('vlm.backends.main.base_urls', ['http://127.0.0.1:8080'], ['']),
     ('vlm.backends.main.base_urls', ['http://127.0.0.1:8080'], ['http://127.0.0.1:8080', 'http://127.0.0.1:8081']),

@@ -1057,6 +1057,23 @@ class Checkpoints:
         return row
 
     @_writer_operation
+    def reusable(self, input_key):
+        """A done row of any run whose intact artifact a live snapshot or an unfinished build references.
+
+        Those bytes cannot change (R2), so a stage whose output is not bit-reproducible (model embeddings) reuses
+        them instead of recomputing when `done` declines the row, for example with sync.resume false (T-008 Q5)."""
+        row = self._rows.get(check_artifact_key(input_key))
+        if row is None or row['state'] != 'done' or not row['output_key']:
+            return None
+        if row['output_key'] not in self.writer._referenced():
+            return None
+        try:
+            _verify(self.writer.store.path(row['output_key']), row['output_size'], row['output_sha256'], fresh=True)
+        except StorageError:
+            return None
+        return row
+
+    @_writer_operation
     def commit(self, input_key, kind, data, *, revisions, table=None, dim=None, call_records=()):
         """Write the artifact atomically, then its done row; a crash between leaves no row and it is redone.
 

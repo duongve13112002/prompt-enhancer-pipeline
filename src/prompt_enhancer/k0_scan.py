@@ -185,6 +185,38 @@ def _read(path, parent_fd, name, *, text_encoding, cache=None):
         return record
 
 
+def read_source_file(root, parts):
+    """Read one regular file at `root`/`parts` read-only, refusing a link on every component (R-014, K1 input).
+
+    `root` is the already resolved knowledge root; `parts` are the relative components K0 recorded.
+    """
+    parts = tuple(parts)
+    if not parts or any(not part or part in ('.', '..') or '/' in part or '\\' in part or '\x00' in part
+                        for part in parts):
+        raise ScanError(f'invalid relative source path {parts!r}')
+    root = Path(root)
+    with ExitStack() as stack:
+        anchor = Path(root.anchor)
+        parent = stack.enter_context(_opened(anchor, None, str(anchor), True))
+        current = anchor
+        for part in root.parts[1:] + parts[:-1]:
+            current = current / part
+            parent = stack.enter_context(_opened(current, parent, part, True))
+        path = current / parts[-1]
+        with _opened(path, parent, parts[-1], False) as fd:
+            initial = os.fstat(fd)
+            chunks = []
+            while True:
+                block = os.read(fd, _CHUNK_BYTES)
+                if not block:
+                    break
+                chunks.append(block)
+            final = os.fstat(fd)
+            if (initial.st_size, initial.st_mtime_ns) != (final.st_size, final.st_mtime_ns):
+                raise ScanError(f'{path}: changed while reading')
+    return b''.join(chunks)
+
+
 def scan_source(root, *, info_names, encoding, extensions, separator, previous, cache=None, workers=1,
                 resolved_root=None):
     """Scan a source tree, preserving supplied previous records on file read failure.

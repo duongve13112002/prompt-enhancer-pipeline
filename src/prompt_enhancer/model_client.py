@@ -8,7 +8,8 @@ from copy import deepcopy
 
 from jsonschema.exceptions import ValidationError
 
-from .config import ConfigurationError, _sentinel, resolve_backend_engine, resolve_writer_format
+from .config import (ConfigurationError, NO_MEDIA_TYPE, _sentinel, image_media_type, resolve_backend_engine,
+                     resolve_writer_format)
 from .model_cloud import cloud_headers, cloud_request
 from .model_mapping import map_generation_fields
 from .model_image import configure_decode_backstop, prepare_image
@@ -266,6 +267,11 @@ class RoleClient:
                 fmt = image_settings['format']
                 fmt = vision['format'] if fmt == 'from_vision' else fmt
                 quality = image_settings['quality']
+                # The registered type of the encoded bytes, not the encoder name (T-008 fix round 5, R4F1); the
+                # loader refuses a format without one, so this guards only a profile that skipped it.
+                media_type = image_media_type(fmt)
+                if media_type is None:
+                    raise ConfigurationError(f'vlm.roles.{role_name}.image.format: {NO_MEDIA_TYPE.format(fmt)}')
                 content = [{'type': 'text', 'text': user_text}]
                 for image_role, image_data in images:
                     if image_role not in ('source_image', 'user_reference', 'knowledge_reference'):
@@ -276,8 +282,8 @@ class RoleClient:
                     except Exception as error:
                         raise ModelCallError('IMAGE_INVALID: image preparation failed') from error
                     encoded = base64.b64encode(prepared).decode('ascii')
-                    cloud_images.append((f'image/{fmt}', prepared))
-                    content.append({'type': 'image_url', 'image_url': {'url': f'data:image/{fmt};base64,{encoded}'}})  # O
+                    cloud_images.append((media_type, prepared))
+                    content.append({'type': 'image_url', 'image_url': {'url': f'data:{media_type};base64,{encoded}'}})  # O
             body['messages'] = [{'role': 'system', 'content': system_prompt.decode('utf-8')},
                                 {'role': 'user', 'content': content}]
             reasoning = role['reasoning']

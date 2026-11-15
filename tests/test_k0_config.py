@@ -16,7 +16,8 @@ def config(model_test_profile):
     config['knowledge']['naming']['rename_on_change'] = 0.5
     config['sync'].update(mass_deletion_guard={'max_removed_fraction': 0.5},
                           snapshots={'keep': 1}, gc={'retention': '1d'})
-    config['embedding'].update(chosen='synthetic', revision='test', query_text_limit=128)
+    # T-008: embedding.chosen must be a listed candidate; the conftest embedder resolves the K1 keys.
+    config['embedding'].update(chosen='embeddinggemma-2', revision='test', query_text_limit=128)
     config['observe'].update(representatives_per_folder=1, facet_schema_version='test')
     config['cards']['min_visible_images'] = 1
     config['index'].update(ann={'method': 'test', 'params': {}}, exact_search_below_count=1)

@@ -786,13 +786,43 @@
                   ]
                 }
               ]
-            }
+            },
+            "backend": {"anyOf": [{"type": "string", "minLength": 1}, {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}]},
+            "request": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "shape": {"anyOf": [{"enum": ["openai_input_content", "vllm_chat_messages"]}, {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}]},
+                    "image_instruction": {"type": "string"},
+                    "extra_body": {
+                      "anyOf": [
+                        {"type": "object", "properties": {"continue_final_message": {"type": "boolean"}, "add_special_tokens": {"type": "boolean"}}, "additionalProperties": false},
+                        {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}
+                      ]
+                    },
+                    "text_template": {"type": "string", "minLength": 1}
+                  },
+                  "required": ["shape", "image_instruction", "extra_body", "text_template"],
+                  "additionalProperties": false
+                },
+                {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}
+              ]
+            },
+            "dimension": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 2147483647}, {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}]},
+            "dimension_mode": {"anyOf": [{"enum": ["native", "request_field", "client_prefix_l2"]}, {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}]},
+            "batch_size": {"anyOf": [{"type": "integer", "minimum": 1}, {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}]}
           },
           "required": [
             "candidates",
             "chosen",
             "revision",
-            "query_text_limit"
+            "query_text_limit",
+            "backend",
+            "request",
+            "dimension",
+            "dimension_mode",
+            "batch_size"
           ],
           "additionalProperties": false
         },
@@ -2970,7 +3000,7 @@
             "transport": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "const": "data_uri"
                 },
                 {
                   "enum": [
@@ -3518,12 +3548,13 @@
                                         ]
                                       }
                                     ]
-                                  }
+                                  },
+                                  "embeddings": {"anyOf": [{"type": "string", "minLength": 1}, {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}]}
                                 },
                                 "required": [
-                                  "chat",
                                   "health"
                                 ],
+                                "anyOf": [{"required": ["chat"]}, {"required": ["embeddings"]}],
                                 "additionalProperties": false
                               },
                               {

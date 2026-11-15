@@ -45,6 +45,10 @@ class ModelTransport:
     async def post(self, route, body, headers):
         http = self.settings['http']
         url = endpoint_url(self.settings['base_urls'][0], route)
+        cap = http['backoff_max_s']
+        # The running delay doubles and is capped each time, so it equals min(initial * 2**attempt, cap) without
+        # forming 2**attempt, which overflows a float product after 1024 attempts (T-008 fix round 5, N1).
+        delay = min(http['backoff_initial_s'], cap)
         async with self.concurrency.for_backend(self.backend):
             for attempt in range(http['max_retries'] + 1):
                 token = None
@@ -62,4 +66,5 @@ class ModelTransport:
                 else:
                     if response.status_code not in http['retry_statuses'] or attempt == http['max_retries']:
                         return response
-                await asyncio.sleep(min(http['backoff_initial_s'] * (2 ** attempt), http['backoff_max_s']))
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, cap)

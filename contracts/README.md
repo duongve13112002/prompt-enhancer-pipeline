@@ -67,6 +67,7 @@ Values are exact strings; the schema files use the same spelling.
 | evidence mode | `cards` (default, decision 13), `live`, `cards_then_live` |
 | retrieval state | `disabled` (`rag.enabled` false); `skipped_no_knowledge_needed` (the planner lists no knowledge need); `no_match` (no mention resolved to a concept, or concepts resolved but no fact passed the filters); `retrieved` (at least one fact or image was assembled); `failed` (a knowledge access failed) |
 | image role | `source_image`, `user_reference`, `knowledge_reference` (R-012) |
+| decode status | `images.decode_status`, written by K1: `ok`, `undecodable` (Pillow cannot read it), `exceeds_max_decode_pixels`, `alpha_refused` (`vision.alpha_policy` is `refuse`), `encode_failed` (the shared resize cannot encode it in `vision.format`); null until K1 reads the image (T-008). `images.format`, `width` and `height` are the stored file's format and pixel size before any orientation; they stay null when Pillow cannot open or decode the file (`undecodable`) and when Pillow refuses an oversized image before its size is known (`exceeds_max_decode_pixels`) |
 | fact origin | `info_file`, `override`, `generated` (a model wrote it, with its revision; this includes a concept name and description the `folder_namer` role produced for a folder without a usable info file); a name or description you wrote is never overwritten, with one exception: when a model judges an info file unclear (decision 40) and its names do not fit the images, the model's names are used, your text stays in the record, the sync report lists the folder, and `kb_overrides.yaml` still wins |
 | constraint types | see the table below |
 | left-out reasons | `OUT_OF_SCOPE` (role-by-facet matrix), `USER_LOCKED` (the user fixed it), `NEGATED_BY_USER`, `UNSTABLE` (label does not allow use), `VARIANT_NOT_CHOSEN`, `BUDGET` |
@@ -141,7 +142,7 @@ Missing and unknown-key validation covers the keys defined in the configuration 
 
 | Setting without a defined key | Owner |
 | --- | --- |
-| Embedding backend, dimension, batch size and devices (K1) | T-008 |
+| Embedding backend, dimension, batch size (K1); devices belong to the embedding server's launch (`runtime.gpus`, `runtime.vram_budget_gb`, the `gpu-live-run` plan), not to a client key | T-008 |
 | Intake runtime deadlines (S0) | T-013 |
 
 ## Commit protocol and snapshots

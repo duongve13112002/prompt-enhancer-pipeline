@@ -13,6 +13,25 @@ Decisions, deviations, assumptions, tradeoffs, rejected alternatives and risks, 
 - **Risks:** a wrong concept card affects every request that uses it (audit E16 is the gate); most research notes are agent-read; the workflow changes of decision 24 rest on vendor guidance and are unmeasured (T-023); GitHub facts behind the CI window are unverified ([N134](note/N134-github-visibility-and-actions.md)).
 - **Not done:** no tool, hook or test was run in this repository beyond the read-only `setup_project.py check` at seeding (result in [tasks/STATUS.md](../tasks/STATUS.md)); nothing was benchmarked.
 
+## 2026-11-16 K1 embeddings (T-008)
+
+- **Design:**
+  - K1 embeds new or changed images (decoded once, resized by T-009's `prepare_image`) and concept text through a named `vlm.backends` entry over HTTP. Rows are keyed by content hash plus embedder identity and revision.
+  - Checkpoints are kept per input hash, so a resumed run makes no extra calls.
+  - Every key K1 reads is validated before any read or request. `vision.format` must be a Pillow encoder with an `image/` media type, and the media type is read from Pillow's registry (`config.image_media_type`, shared with T-009). Every timer and backoff must convert to a finite float.
+  - Retry backoff is doubled and capped after each attempt, with no power, so long retry counts cannot overflow.
+  - Task file: [T-008](../tasks/active/T-008-k1-embed.md).
+- **PM decisions pending user review:**
+  - The embedder is a named `vlm.backends` entry, and there is no `embedding.devices` key.
+  - Both the llama.cpp and the vLLM image adapters are built, and the request shape stays `design_required` until a live smoke.
+  - Pixel size is stored before EXIF orientation.
+  - The finite-float timer rule applies to every backend.
+- **Integration:** the `config.py` import line was merged by hand onto the anchored layer. K1's helper `_commit` was renamed `_commit_record`, because the anchored-writes AST guard refuses that name, which belonged to a removed storage helper; behaviour is unchanged.
+- **Risks:**
+  - No live embedder has run yet (E5, E12).
+  - ICO under 16 px gives an empty container (P2, inherited from T-009).
+  - MPO is labelled `image/mpo` while its bytes are JPEG.
+
 ## 2026-11-16 storage: one anchored write layer (T-006 race follow-up, T-006-int)
 
 - **Decision (user, decision 123):** the store is locked while a release deletes; a junction or link swapped into a store path between check and act must never redirect a write.

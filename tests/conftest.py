@@ -1,5 +1,6 @@
 """Give temporary test inputs an explicit, self-contained project root."""
 
+from copy import deepcopy
 from functools import partial
 from pathlib import Path
 import shutil
@@ -32,6 +33,15 @@ def model_test_profile():
         if isinstance(role['image'], dict):
             role['image'].update(source='source_image', quality=80)
     profile['vision']['quality'] = 80
+    # T-008: kb sync reads the embedder; a synthetic local embedding backend with every K1 field resolved.
+    embedder = deepcopy(backend)
+    embedder['endpoints'] = {'embeddings': 'v1/embeddings', 'health': 'health'}
+    embedder['model'] = dict(backend['model'], id='synthetic-embedder', revision='test')
+    profile['vlm']['backends']['embedder'] = embedder
+    profile['embedding'].update(chosen='embeddinggemma-2', revision='test', backend='embedder', dimension=4,
+                                dimension_mode='native', batch_size=2,
+                                request={'shape': 'openai_input_content', 'image_instruction': 'none',
+                                         'extra_body': {}, 'text_template': '{text}'})
     return profile
 
 

@@ -10,7 +10,7 @@ import os
 from pathlib import Path, PureWindowsPath
 import re
 
-from jsonschema import Draft202012Validator, exceptions
+from jsonschema import Draft202012Validator, exceptions, validators
 import yaml
 
 
@@ -501,8 +501,8 @@ def _mark_sources(data, path, sources, prefix=''):
             _mark_sources(value, path, sources, key)
 
 
-def _validate(value, schema, path, prefix='', sources=None):
-    errors = list(Draft202012Validator(schema).iter_errors(value))
+def _validate(value, schema, path, prefix='', sources=None, validator=Draft202012Validator):
+    errors = list(validator(schema).iter_errors(value))
     if errors:
         def leaves(error):
             if not error.context:
@@ -682,6 +682,8 @@ def _validate_model_bindings(config, path):
         local = backends[default]
         if isinstance(local, dict) and local['provider'] not in SENTINELS and local['provider'] != 'openai_compatible':
             raise ConfigurationError(f'{path}: vlm.default_backend: expected an existing local backend')
+        if isinstance(local, dict) and isinstance(local['endpoints'], dict) and 'chat' not in local['endpoints']:
+            raise ConfigurationError(f'{path}: vlm.default_backend: backend {default!r} has no endpoints.chat')
     for name, backend in backends.items():
         if isinstance(backend, dict):
             provider = backend['provider']
@@ -691,7 +693,8 @@ def _validate_model_bindings(config, path):
                         or (provider in ('anthropic', 'gemini') and engine_name != provider)):
                     raise ConfigurationError(f'{path}: vlm.backends.{name}.engine.name: incompatible with provider')
             endpoints = backend['endpoints']
-            if provider == 'gemini' and isinstance(endpoints, dict) and endpoints['chat'] not in SENTINELS:
+            if (provider == 'gemini' and isinstance(endpoints, dict) and 'chat' in endpoints
+                    and endpoints['chat'] not in SENTINELS):
                 _gemini_api_version(endpoints['chat'], f'{path}: vlm.backends.{name}')
         if isinstance(backend, dict) and backend['provider'] in ('anthropic', 'gemini'):
             if isinstance(backend['base_urls'], list) and 'provider_default' in backend['base_urls']:
@@ -701,22 +704,25 @@ def _validate_model_bindings(config, path):
         bases, endpoints = backend['base_urls'], backend['endpoints']
         if isinstance(bases, list) and len(bases) > 1:
             raise ConfigurationError(f'{path}: vlm.backends.{name}.base_urls: multiple URLs are not supported')
-        route = endpoints['chat'] if isinstance(endpoints, dict) else 'chat'
-        if route in SENTINELS:
-            route = 'chat'
-        if isinstance(bases, list):
-            for base in bases:
-                if base in SENTINELS:
-                    continue
+        # chat and embeddings are both relative routes under the one base URL (embeddings: T-008).
+        routes = [field for field in ('chat', 'embeddings') if not isinstance(endpoints, dict) or field in endpoints]
+        for field in routes:
+            route = endpoints[field] if isinstance(endpoints, dict) else field
+            if route in SENTINELS:
+                route = field
+            if isinstance(bases, list):
+                for base in bases:
+                    if base in SENTINELS:
+                        continue
+                    try:
+                        endpoint_url(base, route)
+                    except ValueError as error:
+                        raise ConfigurationError(f'{path}: vlm.backends.{name}.base_urls/endpoints.{field}: {error}') from error
+            if isinstance(endpoints, dict) and endpoints[field] not in SENTINELS:
                 try:
-                    endpoint_url(base, route)
+                    endpoint_url('https://localhost', endpoints[field])
                 except ValueError as error:
-                    raise ConfigurationError(f'{path}: vlm.backends.{name}.base_urls/endpoints.chat: {error}') from error
-        if isinstance(endpoints, dict) and endpoints['chat'] not in SENTINELS:
-            try:
-                endpoint_url('https://localhost', endpoints['chat'])
-            except ValueError as error:
-                raise ConfigurationError(f'{path}: vlm.backends.{name}.endpoints.chat: {error}') from error
+                    raise ConfigurationError(f'{path}: vlm.backends.{name}.endpoints.{field}: {error}') from error
     Image.init()
     for name, role in vlm['roles'].items():
         if not isinstance(role, dict):
@@ -733,6 +739,9 @@ def _validate_model_bindings(config, path):
         if bound not in backends:
             raise ConfigurationError(f'{path}: {key}.backend: unknown backend {bound!r}')
         backend = backends[bound]
+        if isinstance(backend, dict) and isinstance(backend['endpoints'], dict) and 'chat' not in backend['endpoints']:
+            # A backend may serve only embeddings (T-008); a role that chats needs the chat route.
+            raise ConfigurationError(f'{path}: {key}.backend: backend {bound!r} has no endpoints.chat')
         if not isinstance(backend, dict) or backend['provider'] in SENTINELS:
             continue
         provider = backend['provider']
@@ -758,8 +767,220 @@ def _validate_model_bindings(config, path):
             if fmt == 'from_vision':
                 vision = config['vision']
                 fmt = vision.get('format') if isinstance(vision, dict) else vision
-            if fmt not in SENTINELS and fmt.upper() not in Image.SAVE:
+            if fmt not in SENTINELS and not installed_encoder(fmt):
                 raise ConfigurationError(f'{path}: {key}.image.format: no installed encoder for {fmt!r}')
+            if fmt not in SENTINELS and image_media_type(fmt) is None:  # the request header names it (R4F1)
+                raise ConfigurationError(f'{path}: {key}.image.format: {NO_MEDIA_TYPE.format(fmt)}')
+
+
+def installed_encoder(name):
+    """Whether Pillow can encode `name`, looked up as `Image.save` looks it up: `SAVE[name.upper()]` once every
+    plugin is registered (PIL/Image.py:2564-2573). The installed plugins decide, not a list of format words; an
+    empty name is no encoder."""
+    from PIL import Image  # imported where needed, as in _validate_model_bindings
+
+    Image.init()
+    return isinstance(name, str) and name.upper() in Image.SAVE
+
+
+def image_media_type(name):
+    """The media type Pillow registers for the encoder `name` (`Image.MIME`, keyed as `Image.SAVE`), or None when
+    the encoder is not installed or registers no `image/` type. Encoder names and media types are separate
+    namespaces (JPEG2000 registers image/jp2, PIL/Jpeg2KImagePlugin.py:442), so a request header is never built
+    from the name (T-008 fix round 5, R4F1)."""
+    from PIL import Image
+
+    if not installed_encoder(name):  # registers every plugin, so MIME is complete too
+        return None
+    media_type = Image.MIME.get(name.upper())
+    return media_type if isinstance(media_type, str) and media_type.startswith('image/') else None
+
+
+NO_MEDIA_TYPE = 'the Pillow encoder {!r} registers no image/ media type'
+
+
+# K1 reads exactly these keys (T-008); the embedder backend contributes only the transport fields it uses. A container
+# comes before the leaves K1 indexes in it, so a sentinel container and a missing leaf are each refused by name.
+# `candidates` is read to check `chosen` against it (fix round 1, F2).
+K1_READS = ('embedding.chosen', 'embedding.candidates', 'embedding.revision', 'embedding.backend', 'embedding.request',
+            'embedding.request.shape', 'embedding.request.image_instruction', 'embedding.request.extra_body',
+            'embedding.request.text_template', 'embedding.dimension', 'embedding.dimension_mode',
+            'embedding.batch_size', 'vision.max_image_side', 'vision.format', 'vision.quality', 'vision.alpha_policy',
+            'vision.transport')
+EMBEDDER_BACKEND_READS = ('provider', 'engine', 'engine.name', 'engine.version', 'base_urls', 'model.id',
+                          'model.revision', 'endpoints.embeddings', 'http', 'http.connect_timeout_s',
+                          'http.read_timeout_s', 'http.write_timeout_s', 'http.pool_timeout_s', 'http.max_retries',
+                          'http.backoff_initial_s', 'http.backoff_max_s', 'http.retry_statuses', 'max_concurrency',
+                          'image.max_decode_pixels')
+# protocol-bound: request layout -> the engine whose documentation defines it (T-008 Step 0, A1 and A2).
+EMBEDDING_SHAPE_ENGINE = {'openai_input_content': 'llama_cpp', 'vllm_chat_messages': 'vllm'}
+TEXT_PLACEHOLDER = '{text}'  # protocol-bound: the one placeholder of embedding.request.text_template
+# jsonschema's Draft 2020-12 checker counts an integral float such as 2.0 as an integer (jsonschema/_types.py:195-201).
+# K1 slices, counts and passes these values to C-level code, so its read set takes exact ints (never bool or float).
+_EXACT_INTEGERS = validators.extend(Draft202012Validator, type_checker=Draft202012Validator.TYPE_CHECKER.redefine(
+    'integer', lambda checker, instance: type(instance) is int))
+
+
+def embedder_reads(config, path):
+    """K1's read keys, with the backend fields resolved through embedding.backend."""
+    name = _get(config, 'embedding.backend', path)
+    _sentinel(name, path, 'embedding.backend', {})
+    return K1_READS + tuple(f'vlm.backends.{name}.{field}' for field in EMBEDDER_BACKEND_READS)
+
+
+def _schema_at(schema, key):
+    """The configuration schema's node for a dotted key: object branches of anyOf/oneOf, then properties or the
+    additionalProperties of a mapping such as vlm.backends. A key the schema does not describe is a defect."""
+    def objects(nodes):
+        for node in nodes:
+            if 'properties' in node or isinstance(node.get('additionalProperties'), dict):
+                yield node
+            for keyword in ('anyOf', 'oneOf'):
+                yield from objects(node.get(keyword, ()))
+
+    nodes = [schema]
+    for part in key.split('.'):
+        nodes = [node['properties'][part] if part in node.get('properties', {}) else node['additionalProperties']
+                 for node in objects(nodes)
+                 if part in node.get('properties', {}) or isinstance(node.get('additionalProperties'), dict)]
+        if not nodes:
+            raise KeyError(f'the configuration schema has no node for {key}')
+    return nodes[0] if len(nodes) == 1 else {'anyOf': nodes}
+
+
+def _require_finite(value, path, key, sources):
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: expected a finite number')
+    if isinstance(value, dict):
+        for name, child in value.items():
+            _require_finite(child, path, f'{key}.{name}', sources)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _require_finite(child, path, f'{key}.{index}', sources)
+
+
+def _schema_types(node):
+    """Every JSON type a schema node admits, through its anyOf/oneOf branches (not through properties)."""
+    declared = node.get('type', ())
+    types = {declared} if isinstance(declared, str) else set(declared)
+    for keyword in ('anyOf', 'oneOf'):
+        for branch in node.get(keyword, ()):
+            types |= _schema_types(branch)
+    return types
+
+
+def _require_float_seconds(value, path, key, sources):
+    """A schema `number` of a backend's http or probe settings (all of K1's numbers) is a duration in seconds that a
+    float clock adds: AnyIO's deadline for every HTTP timeout (`current_time() + delay`, anyio/_core/_tasks.py:177,
+    through httpcore/_backends/anyio.py) and asyncio's for the backoff sleep (`self.time() + delay`,
+    asyncio/base_events.py:765) and the probe's wait_for (asyncio/timeouts.py:146). They accept exactly the values
+    that convert to a finite float and raise OverflowError on the rest (T-008 fix round 4, R3F2, timer_probe), so
+    that is the rule: a large convertible value such as 10**300 stays valid. Floats are already finite
+    (`_require_finite`)."""
+    if type(value) is int and not _converts_to_float(value):
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: the number does not convert to a finite '
+                                 'float, which the timer clocks require')
+
+
+def _converts_to_float(value):
+    try:
+        float(value)
+    except OverflowError:
+        return False
+    return True
+
+
+def _check_backoff_order(http, path, key, sources):
+    initial, maximum = http['backoff_initial_s'], http['backoff_max_s']
+    if type(initial) in (int, float) and type(maximum) in (int, float) and initial > maximum:
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}.backoff_max_s: less than initial backoff')
+
+
+def validate_embedder_reads(config, path, sources, project_root=None):
+    """K1's read set: present, resolved, and inside the domain the configuration schema states for each key.
+
+    One check for both paths: the loader's `kb sync` and K1's standalone entry points call it, so a profile that
+    skips the loader meets the same rules (T-008 fix round 3, R2F2). Each value is validated against the schema's
+    own node for its key, with exact integers; every float must be finite; the backoff pair keeps its order. The
+    schema maximum of embedding.dimension, 2**31 - 1, is Arrow's C-int list size (pyarrow/types.pxi:4959, RT3).
+    Fix round 4 (R3F1, R3F2) adds the domains of the consumers: a schema `number` must convert to a finite float
+    (the timer clocks), and vision.format must name an installed Pillow encoder; fix round 5 (R4F1): one that
+    registers an image/ media type, the type the data URI states.
+    """
+    keys = embedder_reads(config, path)
+    for key in keys:
+        _sentinel(_get(config, key, path), path, key, sources)
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    schema = _schema(root, 'enhancer_config.v0')
+    for key in keys:
+        value = _get(config, key, path)
+        node = _schema_at(schema, key)
+        _validate(value, node, path, key, sources, _EXACT_INTEGERS)
+        _require_finite(value, path, key, sources)
+        if 'number' in _schema_types(node):
+            _require_float_seconds(value, path, key, sources)
+    fmt = config['vision']['format']
+    if not installed_encoder(fmt):  # K1 encodes every image with it (R3F1); role formats are checked separately
+        key = 'vision.format'
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: no installed Pillow encoder for {fmt!r}')
+    if image_media_type(fmt) is None:  # the data URI states the registered type of the bytes (R4F1)
+        key = 'vision.format'
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {NO_MEDIA_TYPE.format(fmt)}')
+    name = config['embedding']['backend']
+    _check_backoff_order(config['vlm']['backends'][name]['http'], path, f'vlm.backends.{name}.http', sources)
+
+
+def _validate_embedding(config, path, sources):
+    """Cross-field rules of the embedder settings; sentinel values are checked when a command reads them."""
+    embedding = config['embedding']
+    if not isinstance(embedding, dict):
+        return
+
+    def refuse(key, message):
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {message}')
+
+    chosen, candidates = embedding['chosen'], embedding['candidates']
+    if chosen not in SENTINELS and isinstance(candidates, list):
+        if chosen not in [item['id'] for item in candidates if isinstance(item, dict)]:
+            refuse('embedding.chosen', 'not one of embedding.candidates')
+    request = embedding['request']
+    shape = request['shape'] if isinstance(request, dict) else request
+    if isinstance(request, dict):
+        template, extra = request['text_template'], request['extra_body']
+        if template not in SENTINELS and template.count(TEXT_PLACEHOLDER) != 1:
+            refuse('embedding.request.text_template', f'expected exactly one {TEXT_PLACEHOLDER} placeholder')
+        if shape == 'openai_input_content' and isinstance(extra, dict) and extra:
+            refuse('embedding.request.extra_body', 'only vllm_chat_messages sends extra body fields')
+    batch = embedding['batch_size']
+    if shape == 'vllm_chat_messages' and type(batch) is int and batch > 1:
+        refuse('embedding.batch_size', 'vllm_chat_messages carries one item per request')
+    name = embedding['backend']
+    if name in SENTINELS:
+        return
+    vlm = config['vlm']
+    backends = vlm['backends'] if isinstance(vlm, dict) else None
+    if not isinstance(backends, dict):
+        return
+    if name not in backends:
+        refuse('embedding.backend', f'unknown backend {name!r}')
+    backend = backends[name]
+    if not isinstance(backend, dict):
+        return
+    if backend['provider'] not in SENTINELS and backend['provider'] != 'openai_compatible':
+        refuse('embedding.backend', 'the embedder must be a local openai_compatible backend (R-018)')
+    if isinstance(backend['endpoints'], dict) and 'embeddings' not in backend['endpoints']:
+        refuse('embedding.backend', f'backend {name!r} has no endpoints.embeddings')
+    model = backend['model']
+    revision = model.get('revision') if isinstance(model, dict) else model
+    if (embedding['revision'] not in SENTINELS and revision not in SENTINELS
+            and embedding['revision'] != revision):
+        refuse('embedding.revision', f'differs from vlm.backends.{name}.model.revision')
+    engine = backend['engine']['name']
+    if engine not in SENTINELS:
+        if shape in EMBEDDING_SHAPE_ENGINE and EMBEDDING_SHAPE_ENGINE[shape] != engine:
+            refuse('embedding.request.shape', f'{shape} is not documented for engine {engine}')
+        if embedding['dimension_mode'] == 'request_field' and engine != 'vllm':
+            refuse('embedding.dimension_mode', f'request_field is not documented for engine {engine}')
 
 
 def load_config(path, command, *, overlay=None, project_root=None):
@@ -797,17 +1018,20 @@ def load_config(path, command, *, overlay=None, project_root=None):
         raise ConfigurationError(f'{path}: schema_version: {error}') from error
     _validate(config, config_schema, path, sources=sources)
     _validate_model_bindings(config, path)
+    _validate_embedding(config, path, sources)
     for name, backend in config['vlm']['backends'].items():
         if not isinstance(backend, dict):
             continue
-        http = backend['http']
         for section in ('http', 'probe'):
             for field, value in backend[section].items():
                 if isinstance(value, float) and not math.isfinite(value):
                     raise ConfigurationError(f'{path}: vlm.backends.{name}.{section}.{field}: expected finite number')
-        initial, maximum = http['backoff_initial_s'], http['backoff_max_s']
-        if isinstance(initial, (int, float)) and isinstance(maximum, (int, float)) and initial > maximum:
-            raise ConfigurationError(f'{path}: vlm.backends.{name}.http.backoff_max_s: less than initial backoff')
+                key = f'vlm.backends.{name}.{section}.{field}'
+                if 'number' in _schema_types(_schema_at(config_schema, key)):
+                    # The same timer rule K1's preflight applies (fix round 4, R3F2), before the order check, so an
+                    # unconvertible value is refused under its own key on every backend.
+                    _require_float_seconds(value, path, key, {})
+        _check_backoff_order(backend['http'], path, f'vlm.backends.{name}.http', {})
     _validate_configured_paths(config, root, path, sources)
     for name, role in config['vlm']['roles'].items():
         if not isinstance(role, dict) or not isinstance(role.get('output'), dict):
@@ -837,6 +1061,7 @@ def load_config(path, command, *, overlay=None, project_root=None):
         default_key = 'vlm.backends.' + default
         _sentinel(_get(config, default_key, path), path, default_key, sources)
     if command == 'kb sync':
+        validate_embedder_reads(config, path, sources, root)  # K1 is part of kb sync; the same check K1 runs
         source = _resolve_within(_lexical_path(config['knowledge']['root'], root, path, 'knowledge.root'), root,
                                  {os.path.normcase('.secrets'), os.path.normcase('models')}, path, 'knowledge.root')
         for key in ('storage.kb_store', 'storage.data_root'):
