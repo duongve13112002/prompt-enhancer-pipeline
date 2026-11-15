@@ -648,15 +648,16 @@ def test_malformed_baseline_entries_refuse(world: Path, tmp_path: Path, bad: dic
                 root=tmp_path)  # fmt: skip
 
 
-def test_shipped_baseline_holds_exactly_the_two_reviewed_findings() -> None:
+def test_shipped_baseline_holds_exactly_the_reviewed_findings() -> None:
     cfg = cw.load(cw.DEFAULT_CONFIG)
     root = gc.ROOT
     data = json.loads((root / cfg["scanner_baseline"]["path"]).read_text(encoding="utf-8"))
     assert sorted(e["Fingerprint"] for e in data) == [
         "1adb1eda51b41666aa4d5e17ba9ad127c8adccca:tools/agent-workflow/tests/test_recall.py:generic-api-key:169",
         "1adb1eda51b41666aa4d5e17ba9ad127c8adccca:tools/agent-workflow/tests/test_recall.py:private-key:180",
+        "e9b2781a19fffcc6a7c53c3fab298d572e4ff5d3:docs/ci.md:generic-api-key:197",
     ]
-    assert all(e["Reason"].startswith("Test data, not a secret") and "decision 94" in e["Decision"] for e in data)
+    assert all(", not a secret:" in e["Reason"] and "decision 94" in e["Decision"] for e in data)
     raw = (root / cfg["scanner_baseline"]["path"]).read_bytes().replace(b"\r\n", b"\n")
     assert hashlib.sha256(raw).hexdigest() == cfg["scanner_baseline"]["sha256"]  # the pin matches the LF blob
 

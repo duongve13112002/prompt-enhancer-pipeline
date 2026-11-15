@@ -158,7 +158,8 @@ def test_the_audit_brief_is_a_valid_scout_brief_with_the_agreed_contract() -> No
     template = (TOOLS / "audit_brief.md").read_text(encoding="utf-8")
     filled = template.replace("<DATE>", "2026-10-29").replace("<SINCE>", "2026-10-28")
     footer = (REPO / ".agents" / "policy" / "AGENT_BRIEF_FOOTER.md").read_text(encoding="utf-8")
-    findings = bl.lint_message(filled + "\n\n" + footer, full=True, footer=footer)
+    assert filled.count("<FOOTER>") == 1  # the footer goes above the closing `## Task` block (T-021)
+    findings = bl.lint_message(filled.replace("<FOOTER>", footer), full=True, order=True, footer=footer)
     assert findings == []
     for needle in (
         "report only",

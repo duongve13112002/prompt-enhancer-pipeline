@@ -540,6 +540,32 @@ LINT_WAIVE_HELP = (
 )
 
 
+# Protocol-bound registry marker (T-021): a worker started under brief_lint's `brief-order` rule ("context first, task
+# last"). Written by `start` only; a worker without it was started before T-021 and keeps the old order on its sends.
+BRIEF_ORDER_KEY = "brief_order"
+BRIEF_ORDER = 2
+
+
+def brief_order_applies(command: str, name: str) -> bool:
+    """Whether the `brief-order` rule runs: always for a `start`; for a `send`, when the worker's registry entry carries
+    the marker. An entry without the marker is a worker from before T-021 (legacy order); any other marker value is
+    refused, never guessed. A `send` to a name with no entry is checked strictly (it is refused later anyway)."""
+    if command == "start":
+        return True
+    entry = load().get(name)
+    if not isinstance(entry, dict):
+        return True
+    if BRIEF_ORDER_KEY not in entry:
+        return False
+    value = entry[BRIEF_ORDER_KEY]
+    if type(value) is int and value == BRIEF_ORDER:
+        return True
+    raise SystemExit(
+        f"worker {name} has an unknown {BRIEF_ORDER_KEY} marker {value!r} (this launcher writes {BRIEF_ORDER}); "
+        "refusing to guess its brief layout: retire it and start a new worker"
+    )
+
+
 def lint_gate(command: str, name: str, message: str, waive: str | None) -> None:
     """Refuse to launch on a brief_lint finding (T-MEM); `--lint-waive "<reason>"` logs the override instead.
 
@@ -553,12 +579,26 @@ def lint_gate(command: str, name: str, message: str, waive: str | None) -> None:
         lint = importlib.util.module_from_spec(spec)
         sys.modules.setdefault("brief_lint", lint)
         spec.loader.exec_module(lint)
-        full = command == "start" or lint.is_brief_message(message)
-        task_text, extra = lint.task_file_findings(message, ROOT) if full else (None, [])
-        footer = None
+        footer = None  # None: unreadable, itself a finding of a full lint
         with contextlib.suppress(OSError):
             footer = (ROOT / ".agents" / "policy" / "AGENT_BRIEF_FOOTER.md").read_text(encoding="utf-8-sig")
-        findings = lint.lint_message(message, full=full, footer=footer, task_file_text=task_text)
+        # The worker's layout is known before any reader runs, so a send to a worker started before T-021 (no marker)
+        # is read by the base readers only, byte for byte. An unknown marker reads strictly and refuses a brief.
+        unknown: SystemExit | None = None
+        try:
+            layout = brief_order_applies(command, name)
+        except SystemExit as refusal:
+            layout, unknown = True, refusal
+        full = command == "start" or lint.is_brief_message(message, footer=footer, order=layout)
+        if full and unknown is not None:
+            raise unknown
+        order = full and layout
+        task_text, extra = (
+            lint.task_file_findings(message, ROOT, footer=footer, order=order) if full else (None, [])
+        )
+        findings = lint.lint_message(
+            message, full=full, order=order, footer=footer, task_file_text=task_text
+        )
         findings = sorted([*findings, *extra], key=lambda f: (f.line, f.rule))
     except Exception as exc:  # fail closed (T-024 final round): an unchecked brief never starts a worker
         log_waiver({"command": command, "worker": name, "lint_error": type(exc).__name__})
@@ -2669,6 +2709,7 @@ def main() -> int:
                     "autocompact_window": None,
                     "hooks": {"ctx_nudge": "off", "loop_window": 0, "task_file": task_file},
                     "codex": codex_start["codex"],
+                    BRIEF_ORDER_KEY: BRIEF_ORDER,
                 }
             else:
                 data[a.name] = claude_entry(a, cwd, task_file)
@@ -2777,6 +2818,7 @@ def claude_entry(a: argparse.Namespace, cwd: Path, task_file: str | None) -> dic
         "profile": a.profile,
         "mcp": a.mcp,
         "advisor": None if a.advisor == "off" else a.advisor,
+        BRIEF_ORDER_KEY: BRIEF_ORDER,
         "hooks": {
             "process_guard": a.process_guard == "on",
             "ctx_nudge": validate_ctx_nudge(a.ctx_nudge),

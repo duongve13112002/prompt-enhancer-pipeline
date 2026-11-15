@@ -215,6 +215,16 @@ def test_start_stores_the_default_window_and_a_custom_one(
     assert stored(tmp_path)["autocompact_window"] == 150000
 
 
+def test_start_records_the_brief_order_marker(
+    registry: tuple[Path, list[dict]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # T-021: the marker lets later sends hold this worker to the brief order; older entries lack it.
+    msg, turns = registry
+    cli(monkeypatch, tmp_path, msg)
+    assert stored(tmp_path)[cw.BRIEF_ORDER_KEY] == cw.BRIEF_ORDER == 2
+    assert turns[-1][cw.BRIEF_ORDER_KEY] == 2
+
+
 def test_start_off_stores_null_and_out_of_range_is_refused(
     registry: tuple[Path, list[dict]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

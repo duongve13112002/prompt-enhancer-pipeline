@@ -48,12 +48,29 @@ def brief(
     rids: str = "",
     approach: str = APPROACH,
 ) -> str:
+    """A brief in the T-021 order: header lines and context, the footer, then the closing `## Task` block."""
     head = f"[NEW TASK: X]\nKind: {kind}\n" + approach + (f"R-IDs: {rids}\n" if rids else "")
-    return head + "Goal: do it.\n" + extra + "\n\n" + footer
+    return head + CONTEXT + footer + "\n\n" + TASK_BLOCK + extra
 
 
-def rules(text: str, full: bool = True, footer: str | None = FOOTER, task: str | None = None):
-    return {f.rule for f in bl.lint_message(text, full=full, footer=footer, task_file_text=task)}
+CONTEXT = "Context: the task file and the scout note.\n\n"
+TASK_BLOCK = "## Task\n\nGoal: do it.\n"
+
+
+def legacy_brief(kind: str = "docs", extra: str = "") -> str:
+    """A brief in the order used before T-021: header and task first, the footer last."""
+    return f"[NEW TASK: X]\nKind: {kind}\n{APPROACH}Goal: do it.\n{extra}\n\n{FOOTER}"
+
+
+def rules(
+    text: str,
+    full: bool = True,
+    footer: str | None = FOOTER,
+    task: str | None = None,
+    order: bool = True,
+):
+    found = bl.lint_message(text, full=full, order=order, footer=footer, task_file_text=task)
+    return {f.rule for f in found}
 
 
 def test_clean_briefs_of_every_kind_pass() -> None:
@@ -74,13 +91,7 @@ RCA = (
 
 
 def fix_brief(tag: str, kind: str = "code", extra: str = "") -> str:
-    return (
-        f"[NEW TASK: {tag}]\nKind: {kind}\n{APPROACH}Goal: do it.\n"
-        + SETS
-        + extra
-        + "\n\n"
-        + FOOTER
-    )
+    return f"[NEW TASK: {tag}]\nKind: {kind}\n{APPROACH}" + CONTEXT + FOOTER + "\n\n" + TASK_BLOCK + SETS + extra
 
 
 @pytest.mark.parametrize(
@@ -235,22 +246,30 @@ def test_root_cause_rule_scope() -> None:
 
 
 def test_kind_header_is_required_and_checked() -> None:
-    assert rules("Goal: x\n\n" + FOOTER) == {"kind"}
+    # Hand-built old-order texts: the order rule is off so that only the header rule is under test.
+    assert rules("Goal: x\n\n" + FOOTER, order=False) == {"kind"}
     assert rules(brief("banana")) == {"kind"}
     assert rules(brief("")) == {"kind"}
     bold = "**Kind:** docs\n\n" + FOOTER
-    assert rules(bold) == set()
+    assert rules(bold, order=False) == set()
     fenced = "```\nKind: docs\n```\n\n" + FOOTER
-    assert rules(fenced) == {"kind"}  # an example in a code block is not the header
+    assert rules(fenced, order=False) == {"kind"}  # an example in a code block is not the header
 
 
 def test_footer_must_be_verbatim() -> None:
-    assert rules(brief("docs", footer="")) == {"footer"}
-    # Position-based, so a later footer rewording cannot turn this into a no-op.
-    assert rules(brief("docs", footer=FOOTER[:-40] + "x" + FOOTER[-40:])) == {"footer"}
+    # No footer heading at all: nothing sits above the task block, so the order rule fires as well.
+    assert rules(brief("docs", footer="")) == {"footer", "brief-order"}
+    # Position-based, so a later footer rewording cannot turn this into a no-op. The order rule is bound to the
+    # verbatim footer span (fix round 1), so an edited footer places no task block either; the old order keeps only
+    # the unchanged verbatim rule.
+    edited = FOOTER[:-40] + "x" + FOOTER[-40:]
+    assert rules(brief("docs", footer=edited)) == {"footer", "brief-order"}
+    assert rules(legacy_brief("docs").replace(FOOTER, edited), order=False) == {"footer"}
     assert rules(brief("docs", footer=FOOTER.replace("\n", "\r\n"))) == set()
-    assert rules(brief("docs"), footer=None) == {"footer"}
-    assert rules(brief("docs"), footer="") == {"footer"}
+    # An unreadable footer: no span can be bound, so the order rule fails closed beside the `footer` rule.
+    assert rules(brief("docs"), footer=None) == {"footer", "brief-order"}
+    assert rules(brief("docs"), footer="") == {"footer", "brief-order"}
+    assert rules(legacy_brief("docs"), footer=None, order=False) == {"footer"}
 
 
 def test_feature_needs_r_ids() -> None:
@@ -284,7 +303,7 @@ def test_the_class_sets_are_required_for_feature_code_and_review_only() -> None:
 
 
 def sets_message(text: str, path: Path | None = None) -> str:
-    found = bl.lint_message(text, full=True, footer=FOOTER, class_sets_path=path)
+    found = bl.lint_message(text, full=True, order=True, footer=FOOTER, class_sets_path=path)
     return " | ".join(f.message for f in found if f.rule == "test-sets")
 
 
@@ -426,7 +445,7 @@ def test_a_pattern_the_regex_compiler_rejects_blocks_with_and_without_a_waiver(
     for extra in (SETS, waiver):
         for kind_name in ("code", "review", "feature"):
             text = brief(kind_name, extra, rids="R-261")
-            found = bl.lint_message(text, full=True, footer=FOOTER, class_sets_path=path)
+            found = bl.lint_message(text, full=True, order=True, footer=FOOTER, class_sets_path=path)
             assert [f.rule for f in found if f.rule == "test-sets"] == ["test-sets"]
             assert "cannot be loaded" in sets_message(text, path)
 
@@ -557,7 +576,7 @@ def test_every_slice_id_of_the_task_file_must_be_in_the_brief() -> None:
         "slices"
     }  # not a substring match
     assert rules(brief("docs", "Do nothing."), task="# T\nno table\n") == set()
-    assert bl._slice_ids(TASK) == ["E2a", "E2f"]
+    assert bl._slice_ids(TASK, order=True) == bl._slice_ids(TASK, order=False) == ["E2a", "E2f"]
 
 
 def test_main_brief_mode_reports_rule_and_line(tmp_path: Path, capsys) -> None:
@@ -584,9 +603,9 @@ KIND_TOKEN = st.text(
 )
 
 
-@given(st.text(max_size=400), st.booleans())
-def test_property_lint_never_raises(text: str, full: bool) -> None:
-    result = bl.lint_message(text, full=full, footer=FOOTER, task_file_text=TASK)
+@given(st.text(max_size=400), st.booleans(), st.booleans())
+def test_property_lint_never_raises(text: str, full: bool, order: bool) -> None:
+    result = bl.lint_message(text, full=full, order=order, footer=FOOTER, task_file_text=TASK)
     assert all(isinstance(f.line, int) and f.line >= 1 for f in result)
 
 
@@ -623,6 +642,8 @@ def test_property_any_footer_edit_is_caught(index: int, char: str) -> None:
 def cw(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     module = load(TOOLS / "cli_worker.py", "cli_worker_lint_gate")
     monkeypatch.setattr(module, "ROOT", tmp_path)
+    # The `send` lookup of the brief-order marker reads this registry, never the live one.
+    monkeypatch.setattr(module, "REGISTRY", tmp_path / "registry" / "cli-workers.json")
     (tmp_path / "tasks").mkdir()
     (tmp_path / ".agents" / "policy").mkdir(parents=True)
     (tmp_path / ".agents" / "policy" / "AGENT_BRIEF_FOOTER.md").write_text(FOOTER, encoding="utf-8")
@@ -732,12 +753,14 @@ NOT_BRIEFS = {
 
 @pytest.mark.parametrize("text", list(BRIEF_MESSAGES.values()), ids=list(BRIEF_MESSAGES))
 def test_a_message_with_a_tag_line_or_a_kind_header_is_a_brief(text: str) -> None:
-    assert bl.is_brief_message(text) is True
+    for order in (True, False):  # the invariant holds for both layouts
+        assert bl.is_brief_message(text, footer=FOOTER, order=order) is True
 
 
 @pytest.mark.parametrize("text", list(NOT_BRIEFS.values()), ids=list(NOT_BRIEFS))
 def test_feedback_without_a_kind_header_is_not_a_brief(text: str) -> None:
-    assert bl.is_brief_message(text) is False
+    for order in (True, False):
+        assert bl.is_brief_message(text, footer=FOOTER, order=order) is False
 
 
 @pytest.mark.parametrize("text", list(BRIEF_MESSAGES.values()), ids=list(BRIEF_MESSAGES))
@@ -796,7 +819,8 @@ TAGS = ["[NEW TASK: X]", "[new task]", "[New Task: Y]", "［NEW TASK］", "[NEW 
 def test_property_a_tag_line_is_a_brief_whatever_precedes_it(
     first: str, second: str, tag: str, eol: str
 ) -> None:
-    assert bl.is_brief_message(first + second + tag + eol + "Goal: x") is True
+    for order in (True, False):
+        assert bl.is_brief_message(first + second + tag + eol + "Goal: x", footer=FOOTER, order=order)
 
 
 @given(
@@ -805,7 +829,8 @@ def test_property_a_tag_line_is_a_brief_whatever_precedes_it(
 )
 def test_property_feedback_without_the_letter_k_can_never_be_a_brief(tag: str, body: str) -> None:
     """`kind` and `task` both need a `k`: such a body has neither a header nor a tag."""
-    assert bl.is_brief_message(tag + "\n" + body) is False
+    for order in (True, False):
+        assert bl.is_brief_message(tag + "\n" + body, footer=FOOTER, order=order) is False
 
 
 # ---- A3, A4 ----
@@ -879,3 +904,474 @@ def test_a_missing_task_file_inside_the_checkout_is_not_a_containment_problem(
     assert bl.read_task_file(tmp_path, "tasks/none.md") == (None, None)
     text, problem = bl.read_task_file(tmp_path, "x\0y")
     assert text is None and problem is not None
+
+
+# ---- brief order (T-021: context first, task last) ----
+# Context blocks a brief may carry above the footer; the last one hides a task heading and top headings in a fence.
+TOP_CONTEXT = [
+    "## Wrapper: Claude Code workers\n\n- State the action mode.\n",
+    "# T-1 stub task file\n\nThe task file is tasks/T.md.\n",
+    "## Role: implementer\n\n- Make the change the brief asks for.\n",
+    "## PM dispatch: T-1 phase P1\n\nContext for the phase.\n",
+]
+CONTEXT_POOL = [
+    *TOP_CONTEXT,
+    "### Notes\n\nA level-3 heading is context too.\n",
+    "Plain context paragraph.\n",
+    "```\n## Task\n# an output skeleton heading\n```\n",
+]
+TASK_POOL = [
+    "<goal>finish phase P1</goal>\n",
+    "### Done check\n\nthe tool suite passes\n",
+    "Scope: tools/agent-workflow/brief_lint.py\n",
+    "```\n# Output skeleton\n## Section\n```\n",
+]
+
+
+def ordered(context: list[str], task: list[str], footer: str = FOOTER) -> str:
+    head = f"[NEW TASK: X]\nKind: docs\n{APPROACH}"
+    return head + "\n".join(context) + "\n" + footer + "\n\n## Task\n\n" + "".join(task)
+
+
+@given(
+    st.lists(st.sampled_from(CONTEXT_POOL), max_size=6),
+    st.lists(st.sampled_from(TASK_POOL), max_size=4),
+)
+def test_property_context_in_any_order_with_the_task_block_last_passes(
+    context: list[str], task: list[str]
+) -> None:
+    assert rules(ordered(context, task)) == set()
+
+
+@given(
+    st.lists(st.sampled_from(CONTEXT_POOL), max_size=4),
+    st.sampled_from(TOP_CONTEXT),
+    st.lists(st.sampled_from(TASK_POOL), max_size=3),
+    st.integers(min_value=0, max_value=3),
+)
+def test_property_a_top_level_context_block_after_the_task_fails(
+    context: list[str], moved: str, task: list[str], at: int
+) -> None:
+    task = [*task[:at], moved, *task[at:]]
+    assert "brief-order" in rules(ordered(context, task))
+
+
+@given(
+    st.lists(st.sampled_from(CONTEXT_POOL), max_size=4),
+    st.lists(st.sampled_from(TASK_POOL), max_size=3),
+)
+def test_property_crlf_line_ends_keep_the_same_verdict(context: list[str], task: list[str]) -> None:
+    text = ordered(context, task)
+    assert rules(text.replace("\n", "\r\n")) == rules(text) == set()
+
+
+def test_the_task_heading_is_exact_and_fences_hide_it() -> None:
+    head = "[NEW TASK: X]\nKind: docs\n" + APPROACH + CONTEXT + FOOTER
+    assert rules(head + "\n\n## Task brief\n\nGoal: x.\n") == {"brief-order"}
+    assert rules(head + "\n\n```\n## Task\n```\nGoal: x.\n") == {"brief-order"}
+    assert rules(brief("docs")) == set()
+
+
+def test_two_task_blocks_are_flagged_at_the_second() -> None:
+    text = brief("docs", "\n## Task\n\nGoal: again.\n")
+    lines = text.split("\n")
+    second = lines.index("## Task", lines.index("## Task") + 1) + 1
+    found = bl.lint_message(text, full=True, order=True, footer=FOOTER)
+    assert [(f.rule, f.line) for f in found] == [("brief-order", second)]
+
+
+def test_the_footer_and_the_role_pack_must_come_before_the_task() -> None:
+    footer_after = "[NEW TASK: X]\nKind: docs\n" + APPROACH + "## Task\n\nGoal: x.\n\n" + FOOTER
+    assert rules(footer_after) == {"brief-order"}
+    assert rules(brief("docs", "\n## Role: implementer\n\n- rule\n")) == {"brief-order"}
+
+
+def test_the_old_order_passes_only_without_the_order_rule() -> None:
+    assert rules(legacy_brief("docs"), order=False) == set()
+    assert rules(legacy_brief("docs"), order=True) == {"brief-order"}
+    assert rules(legacy_brief("docs"), full=False, order=True) == set()  # feedback has no order rule
+
+
+def test_the_task_block_after_the_footer_is_linted_with_its_own_line_numbers() -> None:
+    text = brief("docs", "Then git commit the changes.\n")
+    line = text.split("\n").index("Then git commit the changes.") + 1
+    found = bl.lint_message(text, full=True, order=True, footer=FOOTER)
+    assert [(f.rule, f.line) for f in found] == [("git-write", line)]
+    # Old order: text after the footer heading without a `## Task` line is still the footer, as before T-021.
+    assert rules(legacy_brief("docs") + "\nThen git commit the changes.\n", order=False) == set()
+
+
+def test_the_footer_span_keeps_line_numbers_and_a_header_in_the_task_block_makes_a_brief() -> None:
+    text = brief("docs")
+    stripped = bl._strip_footer(text, FOOTER, order=True)
+    assert stripped.count("\n") == text.count("\n") and bl.FOOTER_HEADING not in stripped
+    assert stripped.endswith(TASK_BLOCK)
+    late_kind = "[QA FEEDBACK]\n" + CONTEXT + FOOTER + "\n\n## Task\n\nKind: docs\n"
+    assert bl.is_brief_message(late_kind, footer=FOOTER, order=True) is True
+    # A worker started before T-021 keeps the base cut: everything from the footer heading on is the footer.
+    assert bl._strip_footer(text, FOOTER, order=False) == text[: text.find(bl.FOOTER_HEADING)]
+    assert bl.is_brief_message(late_kind, footer=FOOTER, order=False) is False
+
+
+# ---- T-021 P1 fix round 1: one CommonMark block scanner (review .tmp/T-021/review-p1/review.md, F1-F3) ----
+HEAD = "[NEW TASK: X]\nKind: docs\n" + APPROACH
+# The reviewer's six bypasses (probes.py there), rebuilt on this file's brief; each passed before the fix.
+REVIEW_PROBES = {
+    "F2-tilde-fence-hides-the-only-task": HEAD + CONTEXT + FOOTER + "\n\n~~~markdown\n## Task\nGoal: x.\n~~~\n",
+    "F2-shorter-closer-keeps-the-fence": brief("docs", "\n````markdown\n```\nexample\n````\n## Role: reviewer\nx\n"),
+    "F3-setext-h1": brief("docs", "\nLate context\n============\ntext\n"),
+    "F3-setext-h2": brief("docs", "\nLate context\n------------\ntext\n"),
+    "F3-indented-atx": brief("docs", "\n   ## Role: reviewer\nlate context\n"),
+    "F1-spoof-heading-and-fenced-footer": HEAD
+    + "# Agent brief footer placeholder\n\n## Task\n\nGoal: x.\n\n```markdown\n"
+    + FOOTER
+    + "\n```\n",
+}
+
+
+@pytest.mark.parametrize("text", list(REVIEW_PROBES.values()), ids=list(REVIEW_PROBES))
+def test_the_review_bypasses_are_refused(text: str) -> None:
+    assert rules(text) == {"brief-order"}
+
+
+INFO = st.sampled_from(["", "markdown", "text x", " python"])
+
+
+@st.composite
+def fences(draw: st.DrawFn) -> tuple[str, list[str], str]:
+    """(opener, decoy lines that cannot close it, closer): CommonMark 4.5 with both kinds, lengths 3 to 6 and
+    indents 0 to 3; decoys are the other kind, a shorter run, a run with an info string and a 4-space indent."""
+    char = draw(st.sampled_from("`~"))
+    length = draw(st.integers(3, 6))
+    other = "~" if char == "`" else "`"
+    opener = " " * draw(st.integers(0, 3)) + char * length + draw(INFO)
+    decoys = draw(
+        st.lists(
+            st.sampled_from(
+                [
+                    other * draw(st.integers(3, 8)),
+                    char * draw(st.integers(1, length - 1)),
+                    char * length + " x",
+                    "    " + char * length,
+                ]
+            ),
+            max_size=4,
+        )
+    )
+    closer = " " * draw(st.integers(0, 3)) + char * (length + draw(st.integers(0, 2))) + " " * draw(st.integers(0, 2))
+    return opener, decoys, closer
+
+
+HIDDEN = ["## Role: hidden", "# Late", "Late\n====", "Late\n----", "  ## Task"]
+
+
+@given(fences())
+def test_property_a_fence_hides_headings_until_its_own_closer(fence: tuple[str, list[str], str]) -> None:
+    opener, decoys, closer = fence
+    block = "\n".join([opener, *decoys, *HIDDEN, closer]) + "\n"
+    assert rules(brief("docs", "\n" + block)) == set()
+    assert rules(brief("docs", "\n" + block + "\n## Role: late\n")) == {"brief-order"}
+    # Unmatched: without its closer the fence runs to the end of the text (4.5), so nothing after it is a heading.
+    assert rules(brief("docs", "\n" + "\n".join([opener, *decoys, "## Role: x"]) + "\n")) == set()
+
+
+@given(fences())
+def test_property_a_fenced_task_heading_is_not_the_task(fence: tuple[str, list[str], str]) -> None:
+    opener, decoys, closer = fence
+    fenced = "\n".join([opener, "## Task", *decoys, closer]) + "\n"
+    assert rules(HEAD + CONTEXT + FOOTER + "\n\n" + fenced + "Goal: x.\n") == {"brief-order"}
+    assert rules(HEAD + CONTEXT + FOOTER + "\n\n" + fenced + "\n" + TASK_BLOCK) == set()
+
+
+@given(fences())
+def test_property_the_footer_counts_only_outside_a_fence(fence: tuple[str, list[str], str]) -> None:
+    opener, _, closer = fence
+    inside = HEAD + CONTEXT + opener + "\n" + FOOTER + "\n" + closer + "\n\n" + TASK_BLOCK
+    assert rules(inside) == {"brief-order"}  # verbatim, so the `footer` rule passes; its position does not
+    assert rules(HEAD + CONTEXT + opener + "\n" + closer + "\n" + FOOTER + "\n\n" + TASK_BLOCK) == set()
+
+
+@given(
+    st.integers(1, 6),
+    st.integers(0, 6),
+    st.sampled_from([" ", "\t", "  "]),
+    st.sampled_from(["Role: reviewer", "Late context", "Task"]),
+    st.sampled_from(["", " #", " ##"]),
+)
+def test_property_atx_headings_after_the_task(
+    level: int, indent: int, gap: str, title: str, closing: str
+) -> None:
+    line = " " * indent + "#" * level + gap + title + closing
+    late = level <= 2 and indent <= 3  # 4 columns of indentation make no heading (4.2)
+    assert rules(brief("docs", "\n" + line + "\nx\n")) == ({"brief-order"} if late else set())
+
+
+@given(
+    st.integers(0, 3),
+    st.sampled_from("=-"),
+    st.integers(1, 6),
+    st.integers(0, 3),
+    st.sampled_from(["", " ", "\t "]),
+    st.booleans(),
+)
+def test_property_setext_headings_after_the_task(
+    text_indent: int, char: str, length: int, underline_indent: int, trailing: str, two_lines: bool
+) -> None:
+    paragraph = " " * text_indent + "Late context" + ("\nmore of it" if two_lines else "")
+    underline = " " * underline_indent + char * length + trailing
+    assert rules(brief("docs", "\n" + paragraph + "\n" + underline + "\ntext\n")) == {"brief-order"}
+    # The same underline with a blank line before it heads nothing: `-` runs of 3 or more are a thematic break.
+    assert rules(brief("docs", "\n" + paragraph + "\n\n" + underline + "\ntext\n")) == set()
+
+
+@given(
+    st.sampled_from("*-_"),
+    st.integers(3, 6),
+    st.sampled_from(["", " ", "\t", "  "]),
+    st.integers(0, 3),
+    st.booleans(),
+)
+def test_property_thematic_breaks_are_not_headings(
+    char: str, count: int, gap: str, indent: int, after_text: bool
+) -> None:
+    line = " " * indent + gap.join([char] * count)
+    if after_text and char == "-" and not gap:
+        return  # `text` then `---` is a Setext heading, covered above
+    before = "\nSome text\n" if after_text else "\n"
+    assert rules(brief("docs", before + line + "\nmore\n")) == set()
+
+
+def test_the_task_follows_the_end_of_the_verbatim_span() -> None:
+    # A footer without a heading of its own: only the span position can place it (the late-heading check cannot).
+    plain = "Footer rule one.\nFooter rule two.\n"
+    assert rules(HEAD + CONTEXT + plain + "\n" + TASK_BLOCK, footer=plain) == set()
+    assert rules(HEAD + CONTEXT + TASK_BLOCK + "\n" + plain, footer=plain) == {"brief-order"}
+    # Inside an HTML block the footer is raw HTML, not top-level text (fix round 2).
+    assert rules(HEAD + CONTEXT + "<div>\n" + plain + "\n" + TASK_BLOCK, footer=plain) == {"brief-order"}
+
+
+def test_text_between_the_footer_and_the_task_is_linted() -> None:
+    # The footer is exactly its verbatim span, so nothing after it hides from the rules.
+    text = HEAD + CONTEXT + FOOTER + "\nThen git commit the changes.\n\n" + TASK_BLOCK
+    assert rules(text) == {"git-write"}
+
+
+def test_every_fence_reader_uses_the_scanner() -> None:
+    # git-write: any fence kind hides a command; a shorter closer does not end the fence, a matching one does.
+    assert rules(brief("docs", "\n~~~\ngit commit -m x\n~~~\n")) == set()
+    assert rules(brief("docs", "\n````\n```\ngit commit -m x\n````\n")) == set()
+    assert rules(brief("docs", "\n````\n```\n````\nThen git commit the changes.\n")) == {"git-write"}
+    # Header lines and the test-set waiver count only outside fences of either kind.
+    assert bl.header_fields("~~~\nKind: code\n~~~\nKind: docs\n", order=True)["kind"] == (4, "docs")
+    waiver = "Test sets: not applicable: a docs-only change of one table\n"
+    assert rules(brief("code", waiver)) == set()
+    assert rules(brief("code", "~~~~\n" + waiver + "~~~~\n")) == {"test-sets"}
+    # The slice table of a task file is read outside fences only.
+    table = "| Slice | a |\n|---|---|\n| {} | x |\n"
+    fenced_table = "~~~\n" + table.format("S1") + "~~~\n\n" + table.format("S2")
+    assert bl._slice_ids(fenced_table, order=True) == ["S2"]
+    # A worker started before T-021 keeps the base readers: backtick fences only, every waiver line, every table.
+    assert bl.header_fields("~~~\nKind: code\n~~~\nKind: docs\n", order=False)["kind"] == (2, "code")
+    assert bl._slice_ids(fenced_table, order=False) == ["S1"]
+    legacy_waived = legacy_brief("code", "~~~~\n" + waiver + "~~~~\n")
+    assert rules(legacy_waived, order=False) == set()
+
+
+def test_the_cli_requires_a_footer_heading_outside_fences(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fenced, real = tmp_path / "fenced.md", tmp_path / "real.md"
+    fenced.write_text(brief("docs") + "```\n" + bl.FOOTER_HEADING + "\n```\n", encoding="utf-8")
+    fenced.write_text(fenced.read_text(encoding="utf-8").replace(FOOTER, "x\n"), encoding="utf-8")
+    real.write_text(brief("docs"), encoding="utf-8")
+    footer = str(REPO / ".agents" / "policy" / "AGENT_BRIEF_FOOTER.md")
+    bl.main(["--brief", "--require-footer", "--footer", footer, str(fenced)])
+    assert "footer missing" in capsys.readouterr().out  # a fenced heading is no footer heading
+    assert bl.main(["--brief", "--require-footer", "--footer", footer, str(real)]) == 0
+    # A message lint keeps the base presence check, which is a substring test.
+    assert bl.main(["--require-footer", str(fenced)]) == 0
+
+
+# ---- T-021 P1 fix round 2: containers and HTML (retest .tmp/T-021/retest1/review.md, F4 and F5) ----
+def kinds(text: str, order: bool = True) -> set[str]:
+    """Rules of a full lint, with each `brief-order` finding named by its cause."""
+    out = set()
+    for f in bl.lint_message(text, full=True, order=order, footer=FOOTER):
+        if f.rule != "brief-order":
+            out.add(f.rule)
+        elif f.message == bl._UNSUPPORTED:
+            out.add("unsupported")
+        else:
+            out.add(f.message.split(";")[0].split("`")[0].strip())  # "no", "a second", "a level-1 ...", ...
+    return out
+
+
+NO_TASK, SECOND, LATE = "no", "a second", "a level-1 or level-2 heading after"
+TOP = HEAD + CONTEXT + FOOTER + "\n\n"
+# Every construct row of the retest and its case file; before the fix each bypass passed and each example in a
+# container or HTML block was refused as a late heading.
+RETEST_ROWS = {
+    "quote-only-task": (TOP + "> ## Task\n> Goal: example\n", {NO_TASK, "unsupported"}),
+    "quote-late-heading": (brief("docs", "\n> ## Role: reviewer\n> late context\n"), {"unsupported"}),
+    "quote-fenced-heading": (brief("docs", "\n> ```\n> ## Role: reviewer\n> ```\n"), {"unsupported"}),
+    "list-only-task": (TOP + "- ## Task\n  Goal: example\n", {NO_TASK, "unsupported"}),
+    "list-late-heading": (brief("docs", "\n- ## Role: reviewer\n  late context\n"), {"unsupported"}),
+    "list-fenced-heading": (brief("docs", "\n- ```\n  ## Role: reviewer\n  ```\n"), {"unsupported"}),
+    "list-fence-then-real-heading": (
+        brief("docs", "\n- ```\n  example\n  ```\n\n## Role: reviewer\nlate context\n"),
+        {"unsupported", LATE},
+    ),
+    "list-fence-then-second-task": (
+        brief("docs", "\n- ```\n  example\n  ```\n\n## Task\nsecond task\n"),
+        {"unsupported", SECOND},
+    ),
+    "comment-only-task": (TOP + "<!--\n## Task\nGoal: example\n-->\n", {NO_TASK, "unsupported"}),
+    "div-only-task": (TOP + "<div>\n## Task\nGoal: example\n</div>\n", {NO_TASK, "unsupported"}),
+    "comment-late-example": (brief("docs", "\n<!--\n## Role: reviewer\n-->\n"), {"unsupported"}),
+    "pre-backticks-then-real-heading": (
+        brief("docs", "\n<pre>\n```\n</pre>\n\n## Role: reviewer\nlate context\n"),
+        {"unsupported", LATE},
+    ),
+    "indented-only-task": (TOP + "    ## Task\n    example\n", {NO_TASK, "unsupported"}),  # inside footer item 17
+    "indented-example-heading": (brief("docs", "\n    ## Role: reviewer\n    example\n"), set()),
+    "unclosed-fence-before-task": (TOP + "```\n## Task\nexample\n", {NO_TASK}),
+    "unclosed-fence-after-task": (brief("docs", "\n```\n## Role: reviewer\nexample\n"), set()),
+    "nested-fence-kinds": (brief("docs", "\n````\n~~~\n```\n## Role: example\n~~~\n````\n"), set()),
+    "nested-fences-then-heading": (
+        brief("docs", "\n````\n~~~\n```\n## Role: example\n~~~\n````\n## Role: real\n"),
+        {LATE},
+    ),
+    # Tag lines of the Claude wrapper are CommonMark HTML blocks (condition 7); without structure inside they pass.
+    "goal-tags": (brief("docs", "\n<goal>\nfinish it\n- one step\n</goal>\n\n<output>\nReply.\n</output>\n"), set()),
+    "fence-right-under-a-tag": (brief("docs", "\n<output>\n```text\nx\n```\n</output>\n"), {"unsupported"}),
+    # A lone tag cannot interrupt a paragraph (4.6, condition 7), so the heading after it is a real one.
+    "tag-inside-a-paragraph": (brief("docs", "\ntext\n<goal>\n## Role: real\n"), {LATE}),
+    "blank-line-after-the-tag": (brief("docs", "\n<output>\n\n```text\n## x\n```\n\n</output>\n"), set()),
+}
+
+
+@pytest.mark.parametrize(("text", "expected"), list(RETEST_ROWS.values()), ids=list(RETEST_ROWS))
+def test_the_retest_rows(text: str, expected: set[str]) -> None:
+    assert kinds(text) == expected
+
+
+LEGACY_HTML_TASK = legacy_brief("docs") + "\n<!--\n## Task\ngit commit the changes.\n-->\n"
+
+
+def test_a_markerless_send_reads_as_the_base_commit_did(cw: ModuleType) -> None:
+    # F5 C: a commented `## Task` after an old-order footer is footer text to the base reader; no layout inference.
+    assert kinds(LEGACY_HTML_TASK, order=False) == set()
+    write_registry(cw, {"status": "idle"})
+    cw.lint_gate("send", "w", LEGACY_HTML_TASK, None)
+    write_registry(cw, {"status": "idle", cw.BRIEF_ORDER_KEY: cw.BRIEF_ORDER})
+    with pytest.raises(SystemExit, match=r"\[brief-order\]"):
+        cw.lint_gate("send", "w", LEGACY_HTML_TASK, None)
+    # The marker is read before `is_brief_message`: a `Kind:` in a tilde fence is a header to the base reader (so the
+    # send is a brief without a footer), and fenced example text to the scanner (so it is feedback).
+    tilde_kind = "[QA FEEDBACK]\n~~~\nKind: code\n~~~\n"
+    cw.lint_gate("send", "w", tilde_kind, None)
+    write_registry(cw, {"status": "idle"})
+    with pytest.raises(SystemExit, match=r"\[footer\]"):
+        cw.lint_gate("send", "w", tilde_kind, None)
+
+
+def test_a_leading_byte_order_mark_is_no_text() -> None:
+    bom = chr(0xFEFF)
+    text = bom + FOOTER + "\n\n## Task\n\n[NEW TASK: X]\nKind: docs\n" + APPROACH
+    assert kinds(text) == set()  # the footer span and its heading start on line 1, after the mark
+    assert bl._task_lines(bl._scan(bom + "## Task\n")) == [0]
+
+
+def wrap(kind: str, body: list[str]) -> str:
+    """`body` inside one container or HTML block of `kind`, then a blank line."""
+    if kind == "quote":
+        lines = ["> " + line for line in body]
+    elif kind in ("bullet", "ordered"):
+        marker = "- " if kind == "bullet" else "1. "
+        # Continuation lines start at the item's content column (5.2): the marker plus the first line's indent.
+        width = len(marker) + len(body[0]) - len(body[0].lstrip(" "))
+        lines = [marker + body[0], *(" " * width + line for line in body[1:])]
+    else:
+        opener, closer = {
+            "comment": ("<!--", "-->"),
+            "pre": ("<pre>", "</pre>"),
+            "div": ("<div>", "</div>"),
+            "tag": ("<goal>", "</goal>"),
+        }[kind]
+        lines = [opener, *body, closer]
+    return "\n" + "\n".join(lines) + "\n\n"
+
+
+WRAPPERS = st.sampled_from(["quote", "bullet", "ordered", "comment", "pre", "div", "tag"])
+
+
+@st.composite
+def structures(draw: st.DrawFn) -> list[str]:
+    """Lines that hold structure: a fence (closed or not) around a heading, an ATX heading or a Setext heading."""
+    opener, decoys, closer = draw(fences())
+    choice = draw(st.sampled_from(["fence", "open-fence", "atx", "setext"]))
+    if choice == "fence":
+        return [opener, *decoys, "## Role: hidden", closer]
+    if choice == "open-fence":
+        return [opener, "## Task"]
+    return ["## Role: hidden"] if choice == "atx" else ["Late", "---"]
+
+
+@given(WRAPPERS, structures(), st.sampled_from(["## Role: real", "## Task", "Real\n===="]))
+def test_property_wrapped_structure_after_the_task_never_hides_a_real_heading(
+    kind: str, inner: list[str], real: str
+) -> None:
+    found = kinds(brief("docs", wrap(kind, inner) + real + "\nx\n"))
+    assert "unsupported" in found and (SECOND in found or LATE in found)
+
+
+@given(WRAPPERS, structures())
+def test_property_wrapped_structure_above_the_footer_is_refused_by_name_only(kind: str, inner: list[str]) -> None:
+    text = HEAD + CONTEXT + wrap(kind, inner) + FOOTER + "\n\n" + TASK_BLOCK
+    assert kinds(text) == {"unsupported"}  # the real footer and task are still found
+
+
+@given(WRAPPERS, st.lists(st.sampled_from(["plain text", "Kind: docs", "git status", "- item", "1. step"]), min_size=1, max_size=4))
+def test_property_wrapped_plain_text_passes(kind: str, inner: list[str]) -> None:
+    assert kinds(HEAD + CONTEXT + wrap(kind, inner) + FOOTER + "\n\n" + TASK_BLOCK + wrap(kind, inner)) == set()
+
+
+def write_registry(cw: ModuleType, entry: dict) -> None:
+    cw.REGISTRY.parent.mkdir(parents=True, exist_ok=True)
+    cw.REGISTRY.write_text(json.dumps({"w": entry}), encoding="utf-8")
+
+
+def test_start_holds_every_new_brief_to_the_order(cw: ModuleType) -> None:
+    cw.lint_gate("start", "w", brief("docs"), None)
+    with pytest.raises(SystemExit) as refused:
+        cw.lint_gate("start", "w", legacy_brief("docs"), None)
+    assert "[brief-order]" in str(refused.value)
+
+
+def test_a_send_follows_the_registry_marker(cw: ModuleType) -> None:
+    write_registry(cw, {"status": "idle"})  # started before T-021: no marker, old order
+    cw.lint_gate("send", "w", legacy_brief("docs"), None)
+    write_registry(cw, {"status": "idle", cw.BRIEF_ORDER_KEY: cw.BRIEF_ORDER})
+    cw.lint_gate("send", "w", brief("docs"), None)
+    with pytest.raises(SystemExit) as refused:
+        cw.lint_gate("send", "w", legacy_brief("docs"), None)
+    assert "[brief-order]" in str(refused.value)
+
+
+@pytest.mark.parametrize("value", [3, "2", True, None, 2.0])
+def test_an_unknown_marker_refuses_a_brief_send(cw: ModuleType, value: object) -> None:
+    write_registry(cw, {"status": "idle", cw.BRIEF_ORDER_KEY: value})
+    with pytest.raises(SystemExit, match="unknown brief_order marker"):
+        cw.lint_gate("send", "w", brief("docs"), None)
+    cw.lint_gate("send", "w", "[QA FEEDBACK]\nfix the null check", None)  # feedback: no layout to check
+
+
+def test_the_cli_legacy_order_flag(tmp_path: Path) -> None:
+    footer = REPO / ".agents" / "policy" / "AGENT_BRIEF_FOOTER.md"
+    old = tmp_path / "old.md"
+    old.write_text(legacy_brief("docs"), encoding="utf-8")
+    assert bl.main(["--brief", "--footer", str(footer), str(old)]) == 1
+    assert bl.main(["--brief", "--legacy-order", "--footer", str(footer), str(old)]) == 0
+    with pytest.raises(SystemExit) as refused:
+        bl.main(["--legacy-order", str(old)])  # meaningless without --brief: refused, not ignored
+    assert refused.value.code == 2

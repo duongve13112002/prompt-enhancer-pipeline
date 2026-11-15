@@ -8,4 +8,4 @@ The same brief goes to every CLI; a short wrapper adapts how it is framed, becau
 | Codex | [codex.md](codex.md) |
 | Antigravity (`agy`) | [antigravity.md](antigravity.md) |
 
-**Brief order (improvement B, waiting for task T-021):** vendors advise context first and the specific instruction last (N127, N129). `brief_lint.py` currently treats everything after the footer heading as footer, so until T-021 changes it the task header stays first; restate Goal and Done check in the last lines of the body instead.
+**Brief order (improvement B, T-021):** vendors advise context first and the specific instruction last (N127, N129). The wrapper goes at the top, then the header lines, the context, the role pack and the footer; the brief ends with one `## Task` block (Goal, Done check, Scope, Out of scope, Output). `brief_lint.py` rule `brief-order` checks that structure for every new worker; the layout is in [AGENT_TASK_TEMPLATE](../AGENT_TASK_TEMPLATE.md), Brief header.

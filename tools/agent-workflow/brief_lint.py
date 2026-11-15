@@ -1,8 +1,15 @@
 """Gate for worker briefs: Git writes (R3 audit F-10, P-10) and the PM's own repeated brief mistakes (T-MEM).
 
-Usage: python -B -I brief_lint.py [--require-footer] [--brief [--footer F]] <brief.md>...
+Usage: python -B -I brief_lint.py [--require-footer] [--brief [--footer F] [--legacy-order]] <brief.md>...
 Exit 0: clean. Exit 1: findings (one `file:line: [rule] text` per hit). `cli_worker.py start` and `send` call
 `lint_message` and refuse to launch on a finding (`--lint-waive "<reason>"` logs an override).
+
+Brief layout (T-021, "context first, task last", N127): the CLI wrapper, the header lines, the context material, the
+role pack and the footer come first; the brief ends with one task block under the exact heading `## Task` (Goal, Done
+check, Scope, Out of scope, Output). The footer is its verbatim span (the first copy of the footer file outside fenced
+code); without a `## Task` line after it (a brief in the old order) the footer runs to the end of the text, as before.
+Every rule reads the text without the footer, so the task block and any text around the footer are linted too.
+Markdown structure (fences, headings, the footer span) comes from one block scanner, `_scan`, after CommonMark.
 
 Rules that run on every message (`full=False`):
 - git-write: workers never commit, merge, stash, push or create branches (footer rule 2; the PM does). Only Git
@@ -31,6 +38,14 @@ line in any case or a `Kind:` header outside a fence):
 - root-cause (decision 568): a non-review brief whose `[NEW TASK ...]` tag names a fix carries `Root cause:` and
   `Class sweep:` header lines (at least 20 characters each), so no fix goes out before its root cause and the audit
   of every sibling site.
+- brief-order (T-021, with `order=True`): outside fenced code (backtick or tilde) there is exactly one `## Task` line,
+  the verbatim footer span ends before it, and no level-1 or level-2 heading follows it, ATX (up to 3 spaces of
+  indent) or Setext (so the role pack and the footer sit above the task, and the task block is last). Block quotes,
+  list items and HTML blocks are not parsed: a heading, Setext underline or fence delimiter inside one is refused by
+  name, anywhere in the brief (fail closed; a blank line after a tag line such as `<goal>` ends its HTML block).
+  Structure only: no wording is read. Without `order` every reader is the base one, byte for byte. `cli_worker.py` runs it for a `start`
+  and for a `send` to a worker whose registry entry carries `brief_order: 2`; a worker started before T-021 keeps the
+  old order. The command line runs it with `--brief` unless `--legacy-order` is given.
 
 Approach-note provenance (decision 582; the approach scout comes before the code):
 - a feature brief requires an `Approach note:` path; `none` is refused even when it names a file read;
@@ -94,9 +109,332 @@ _NO_CARRY = {"but", "then", "so"}
 _LIST_START = re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s|\||#)")
 
 
-def _strip_footer(text: str) -> str:
-    cut = text.find(FOOTER_HEADING)
-    return text if cut < 0 else text[:cut]
+# Protocol-bound marker of the task block that ends a brief (T-021; documented in .agents/policy/AGENT_TASK_TEMPLATE.md).
+TASK_HEADING = "## Task"
+# The exact marker line: `## Task brief` of the template body is not it, nor an indented or Setext "Task" heading
+# (those are ordinary headings to the scanner, so after the marker they are late headings).
+_TASK_LINE = re.compile(r"## Task[ \t]*")
+
+# The block scanner of the new-order readers (T-021 fix rounds 1 and 2), after CommonMark 0.31: top-level fenced code
+# (4.5), ATX (4.2) and Setext (4.3) headings told apart from thematic breaks (4.1), paragraphs (4.8), and the extent
+# of HTML blocks (4.6), block quotes (5.1) and list items (5.2). The inside of a block quote, list item or HTML block
+# is not parsed: its lines are inert text that never changes fence, paragraph or heading state, and an inert line that
+# looks like a heading, an underline or a fence delimiter is reported, so `brief-order` refuses what it cannot read
+# (fail closed). Indented code (4.4) is text that is never a block start. Patterns apply after the indentation.
+_FENCE_OPEN = re.compile(r"(`{3,})[^`]*|(~{3,}).*")  # 4.5: a backtick info string holds no backtick
+_FENCE_CLOSE = re.compile(r"(`{3,}|~{3,})[ \t]*")
+_FENCE_LIKE = re.compile(r"`{3}|~{3}")
+_ATX = re.compile(r"(#{1,6})(?:[ \t].*)?")
+_SETEXT = re.compile(r"(=+|-+)[ \t]*")
+_BREAK = re.compile(r"(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,}")
+_LIST_MARKER = re.compile(r"(?:[-+*]|(\d{1,9})[.)])(?=[ \t]|$)")  # 5.2: bullet or ordered marker, then space or end
+# 4.6 start conditions 1-5 with the end marker that closes each (searched from the given offset of the start line);
+# conditions 6 and 7 end at a blank line.
+_HTML_RAW_TAGS = ("pre", "script", "style", "textarea")
+_HTML_MARKED = (
+    (
+        re.compile(rf"<(?:{'|'.join(_HTML_RAW_TAGS)})(?:[ \t>]|$)", re.IGNORECASE),
+        re.compile(rf"</(?:{'|'.join(_HTML_RAW_TAGS)})>", re.IGNORECASE),
+        0,
+    ),
+    (re.compile(r"<!--"), re.compile(r"-->"), 2),
+    (re.compile(r"<\?"), re.compile(r"\?>"), 1),
+    (re.compile(r"<!\[CDATA\["), re.compile(r"\]\]>"), 9),
+    (re.compile(r"<![A-Za-z]"), re.compile(r">"), 2),
+)
+# Condition 6 tag names (CommonMark 0.30 plus `search` of 0.31; a superset, since a name missing here only makes the
+# line a condition-7 candidate). Protocol-bound HTML vocabulary, not natural language.
+_HTML_BLOCK_TAGS = frozenset(
+    "address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl dt "
+    "fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link "
+    "main menu menuitem nav noframes ol optgroup option p param search section source summary table tbody td tfoot th "
+    "thead title tr track ul".split()
+)
+_HTML_BLOCK_TAG = re.compile(r"</?([A-Za-z][A-Za-z0-9-]*)(?:[ \t]|/?>|$)")
+_HTML_ATTRIBUTE = r"[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:[^ \t\"'=<>`]+|'[^']*'|\"[^\"]*\"))?"
+_HTML_COMPLETE_TAG = re.compile(
+    rf"(?:<[A-Za-z][A-Za-z0-9-]*(?:{_HTML_ATTRIBUTE})*[ \t]*/?>|</[A-Za-z][A-Za-z0-9-]*[ \t]*>)[ \t]*"
+)
+# Protocol-bound (CommonMark 2.2, 4.1-4.5, 5.2): a tab stop is 4 columns; 4 columns of indentation end block syntax,
+# and a list item whose text starts 5 or more columns after its marker begins with indented code.
+_TAB_STOP = 4
+_CODE_INDENT = 4
+_BOM = chr(0xFEFF)  # protocol-bound: the Unicode byte order mark
+_UNSUPPORTED = (
+    "unsupported Markdown structure in a new-order brief: a heading, Setext underline or fence delimiter inside a "
+    "block quote, list item or HTML block, which this lint does not parse; put it at the top level (a blank line "
+    "ends an HTML block such as a `<goal>` tag line)"
+)
+
+
+class _Scan(NamedTuple):
+    """The text split on LF (`lines`, as given; `bare`, without CR and the first without a leading BOM); per line
+    whether it is a top-level fence line or fenced content (`code`) or a line of a block quote, list item or HTML
+    block (`inert`); the top-level headings as (index of the first line, level); and the inert lines that look like
+    a heading, underline or fence delimiter (`unsupported`)."""
+
+    lines: list[str]
+    bare: list[str]
+    code: list[bool]
+    inert: list[bool]
+    headings: list[tuple[int, int]]
+    unsupported: list[int]
+
+
+def _indent(line: str, column: int = 0) -> tuple[int, str]:
+    """(column after the leading spaces and tabs of `line`, which starts at `column`; the rest of the line)."""
+    for index, char in enumerate(line):
+        if char == " ":
+            column += 1
+        elif char == "\t":
+            column += _TAB_STOP - column % _TAB_STOP
+        else:
+            return column, line[index:]
+    return column, ""
+
+
+def _list_item(column: int, rest: str) -> tuple[int, bool, str] | None:
+    """(content column, whether it may interrupt a paragraph, the text after the marker) of the list item that
+    `rest`, at `column`, opens (5.2), or None. It may interrupt a paragraph when its text is not blank and an ordered
+    one starts at 1."""
+    marker = _LIST_MARKER.match(rest)
+    if marker is None:
+        return None
+    end = column + len(marker[0])
+    after, content = _indent(rest[len(marker[0]) :], end)
+    interrupts = bool(content) and marker[1] in (None, "1")
+    if not content or after - end > _CODE_INDENT:  # blank start, or text that begins with indented code
+        return end + 1, interrupts, rest[len(marker[0]) :]
+    return after, interrupts, rest[len(marker[0]) :]
+
+
+def _html_start(rest: str, paragraph_open: bool) -> tuple[re.Pattern[str] | None, int] | None:
+    """(end marker or None for "ends at a blank line", offset to search the start line from) of the HTML block that
+    `rest` opens (4.6), or None. Condition 7, a lone complete tag such as `<goal>`, cannot interrupt a paragraph."""
+    for start, end, offset in _HTML_MARKED:
+        if start.match(rest):
+            return end, offset
+    tag = _HTML_BLOCK_TAG.match(rest)
+    name = tag[1].lower() if tag else ""
+    if name in _HTML_BLOCK_TAGS or (
+        not paragraph_open and name not in _HTML_RAW_TAGS and _HTML_COMPLETE_TAG.fullmatch(rest)
+    ):
+        return None, 0
+    return None
+
+
+def _looks_structural(content: str) -> bool:
+    """Whether a line inside a container or HTML block, with its indentation and any container markers taken off,
+    looks like an ATX heading, a Setext underline or a fence delimiter. An over-approximation: it only refuses."""
+    while True:
+        content = content.lstrip(" \t")
+        if _ATX.fullmatch(content) or _SETEXT.fullmatch(content) or _FENCE_LIKE.match(content):
+            return True
+        marker = _LIST_MARKER.match(content)
+        if content.startswith(">"):
+            content = content[1:]
+        elif marker:
+            content = content[marker.end() :]
+        else:
+            return False
+
+
+def _scan(text: str) -> _Scan:
+    lines = text.split("\n")
+    bare = [line.removesuffix("\r") for line in lines]
+    bare[0] = bare[0].removeprefix(_BOM)  # a byte order mark is no text (str.split always gives one item)
+    code: list[bool] = []
+    inert: list[bool] = []
+    headings: list[tuple[int, int]] = []
+    unsupported: list[int] = []
+    fence: tuple[str, int] | None = None  # delimiter character and length of the open top-level fence
+    paragraph: int | None = None  # first line of the open top-level paragraph
+    html: re.Pattern[str] | None | bool = False  # end marker of the open HTML block; None: a blank line; False: none
+    container: tuple[bool, int] | None = None  # open outer container: (a block quote, list content column)
+    for index, line in enumerate(bare):
+        column, rest = _indent(line)
+        if fence is not None:
+            code.append(True)
+            inert.append(False)
+            close = _FENCE_CLOSE.fullmatch(rest) if column < _CODE_INDENT else None
+            if close and close[1][0] == fence[0] and len(close[1]) >= fence[1]:
+                fence = None
+            continue
+        if html is not False:
+            if html is None and not rest:
+                html = False  # the blank line ends the block and is not part of it
+            else:
+                code.append(False)
+                inert.append(True)
+                if _looks_structural(line):
+                    unsupported.append(index)
+                if html is not None and html.search(line):
+                    html = False
+                continue
+        if container is not None:
+            quote, offset = container
+            content: str | None = None
+            if quote:
+                content = rest[1:] if column < _CODE_INDENT and rest.startswith(">") else None
+            elif not rest or column >= offset:
+                content = line
+            elif column < _CODE_INDENT and not _BREAK.fullmatch(rest):
+                sibling = _list_item(column, rest)  # a marker left of the content column: the next item
+                if sibling is not None:
+                    container, content = (False, sibling[0]), sibling[2]
+            # No lazy continuation (5.1, 5.2): such a line starts a top-level paragraph here, which can only add a
+            # Setext heading under it, never hide one.
+            if content is not None:
+                code.append(False)
+                inert.append(True)
+                if _looks_structural(content):
+                    unsupported.append(index)
+                continue
+            container = None
+        code.append(False)
+        inert.append(False)
+        if not rest:
+            paragraph = None
+            continue
+        if column >= _CODE_INDENT:
+            # Not a heading, fence or underline (4.2-4.5): text that continues a paragraph or is indented code.
+            continue
+        opened = _FENCE_OPEN.fullmatch(rest)
+        atx = _ATX.fullmatch(rest)
+        if opened:
+            delimiter = opened[1] or opened[2]
+            fence = (delimiter[0], len(delimiter))
+            code[-1] = True
+            paragraph = None
+            continue
+        if atx:
+            headings.append((index, len(atx[1])))
+            paragraph = None
+            continue
+        if paragraph is not None and _SETEXT.fullmatch(rest):
+            headings.append((paragraph, 1 if rest[0] == "=" else 2))  # the underline takes precedence over a break
+            paragraph = None
+            continue
+        if _BREAK.fullmatch(rest):  # also before a list item (4.1)
+            paragraph = None
+            continue
+        block = _html_start(rest, paragraph is not None)
+        item = _list_item(column, rest)
+        structural = False
+        if block is not None:
+            end, offset = block
+            html = end if end is None or not end.search(rest, offset) else False
+        elif rest.startswith(">"):
+            container = (True, 0)
+            structural = _looks_structural(rest[1:])
+        elif item is not None and (paragraph is None or item[1]):
+            container = (False, item[0])
+            structural = _looks_structural(item[2])
+        else:
+            if paragraph is None:
+                paragraph = index
+            continue
+        inert[-1] = True
+        paragraph = None
+        if structural:
+            unsupported.append(index)
+    return _Scan(lines, bare, code, inert, headings, unsupported)
+
+
+def _task_lines(scan: _Scan) -> list[int]:
+    """Indexes of the `## Task` marker headings, in order."""
+    return [i for i, level in scan.headings if level == 2 and _TASK_LINE.fullmatch(scan.bare[i])]
+
+
+def _footer_span(scan: _Scan, footer: str | None) -> tuple[int, int] | None:
+    """Lines [start, end) of the first verbatim copy of the footer (lines compared as `_clean` compares them) that
+    starts at the top level (outside fenced code, block quotes, list items and HTML blocks), or None when the footer
+    is unknown or not there."""
+    want = _clean(footer).split("\n") if footer and footer.strip() else []
+    if not want:
+        return None
+    have = [line.rstrip() for line in scan.bare]
+    for start in range(len(have) - len(want) + 1):
+        top = not scan.code[start] and not scan.inert[start]
+        if have[start] == want[0] and top and have[start : start + len(want)] == want:
+            return start, start + len(want)
+    return None
+
+
+def _footer_heading(scan: _Scan) -> int | None:
+    """Index of the first top-level level-1 heading that opens with the footer heading, or None."""
+    return next(
+        (
+            i
+            for i, level in scan.headings
+            if level == 1 and _indent(scan.bare[i])[1].startswith(FOOTER_HEADING)
+        ),
+        None,
+    )
+
+
+def _strip_lines(scan: _Scan, footer: str | None) -> tuple[int, int] | None:
+    """Lines [start, end) the rules treat as the footer. New order: exactly the verbatim footer span, when a `## Task`
+    marker follows it, so all text around it is linted. Old order (no marker after it): from the footer to the end,
+    as before T-021. Footer text unknown or not verbatim: from the first footer heading outside code to the next
+    marker, else to the end (the `footer` rule of a full lint reports the missing verbatim copy)."""
+    tasks = _task_lines(scan)
+    span = _footer_span(scan, footer)
+    if span is not None:
+        return span if any(t >= span[1] for t in tasks) else (span[0], len(scan.lines))
+    heading = _footer_heading(scan)
+    if heading is None:
+        return None
+    return heading, next((t for t in tasks if t > heading), len(scan.lines))
+
+
+def _strip_footer(text: str, footer: str | None, *, order: bool) -> str:
+    """The text without the footer. `order` (a new-order brief): the lines of `_strip_lines` become empty but stay, so
+    line numbers are unchanged; `footer` is the text of .agents/policy/AGENT_BRIEF_FOOTER.md, or None when it could not
+    be read. Not `order` (a worker started before T-021): the base cut at the first footer heading, byte for byte, so
+    no new-order inference (a `## Task` line, a span) reaches a legacy send."""
+    if not order:
+        cut = text.find(FOOTER_HEADING)
+        return text if cut < 0 else text[:cut]
+    scan = _scan(text)
+    cut = _strip_lines(scan, footer)
+    if cut is None:
+        return text
+    start, end = cut
+    return "\n".join(scan.lines[:start] + [""] * (end - start) + scan.lines[end:])
+
+
+def _order_findings(text: str, footer: str | None) -> list[Finding]:
+    """Rule `brief-order`: one top-level `## Task` marker, the verbatim top-level footer ending above it, no level-1
+    or level-2 heading (ATX or Setext) below it, and no heading, underline or fence delimiter inside a block quote,
+    list item or HTML block anywhere (unparsed, so refused). Headings in fenced code do not count."""
+    scan = _scan(text)
+    tasks = _task_lines(scan)
+    layout = (
+        "context first, task last: wrapper, header lines, context, role pack, footer, then one `## Task` block "
+        "with Goal, Done check, Scope, Out of scope and Output (T-021, N127)"
+    )
+    findings = [Finding("brief-order", n + 1, _UNSUPPORTED) for n in scan.unsupported]
+    if not tasks:
+        message = f"no `{TASK_HEADING}` heading line outside fenced code; {layout}"
+        return [Finding("brief-order", 1, message), *findings]
+    findings += [
+        Finding("brief-order", n + 1, f"a second `{TASK_HEADING}` heading; a brief has one task block; {layout}")
+        for n in tasks[1:]
+    ]
+    span = _footer_span(scan, footer)
+    if span is None or span[1] > tasks[0]:
+        message = (
+            "the verbatim footer (.agents/policy/AGENT_BRIEF_FOOTER.md) does not stand at the top level before "
+            f"`{TASK_HEADING}`; {layout}"
+        )
+        findings.append(Finding("brief-order", tasks[0] + 1, message))
+    findings += [
+        Finding("brief-order", n + 1, f"a level-1 or level-2 heading after `{TASK_HEADING}`; {layout}")
+        for n, level in scan.headings
+        if n > tasks[0] and level <= 2 and n not in tasks
+    ]
+    return findings
 
 
 def _mask(text: str) -> str:
@@ -112,18 +450,37 @@ def _mask(text: str) -> str:
     return _QUOTED.sub(lambda m: " " * len(m.group()), text)
 
 
-def _blocks(text: str) -> list[list[tuple[int, str]]]:
-    """Paragraph blocks of (line number, stripped line); wrapped lines of one paragraph stay together."""
+def _legacy_code(lines: list[str]) -> list[bool]:
+    """The base fence reading, kept byte for byte for workers started before T-021: a line whose stripped text opens
+    with three backticks toggles a fence and is itself fenced."""
+    flags: list[bool] = []
+    in_fence = False
+    for line in lines:
+        toggle = line.strip().startswith("```")
+        in_fence ^= toggle
+        flags.append(toggle or in_fence)
+    return flags
+
+
+def _code_lines(text: str, *, order: bool, splitlines: bool) -> list[tuple[str, bool]]:
+    """(line, fenced) pairs: the scanner's lines (without CR and a leading BOM) and top-level fences for a new-order
+    brief; else the base reading on the base split of the calling reader (`str.splitlines` or LF)."""
+    if order:
+        scan = _scan(text)
+        return list(zip(scan.bare, scan.code, strict=True))
+    lines = text.splitlines() if splitlines else text.split("\n")
+    return list(zip(lines, _legacy_code(lines), strict=True))
+
+
+def _blocks(text: str, *, order: bool) -> list[list[tuple[int, str]]]:
+    """Paragraph blocks of (line number, stripped line); wrapped lines of one paragraph stay together. Fenced code
+    (`_code_lines`) and blockquote lines are skipped."""
     blocks: list[list[tuple[int, str]]] = []
     current: list[tuple[int, str]] = []
-    in_fence = False
-    for number, line in enumerate(text.splitlines(), start=1):
+    rows = _code_lines(text, order=order, splitlines=True)
+    for number, (line, in_code) in enumerate(rows, start=1):
         stripped = line.strip()
-        if stripped.startswith("```"):
-            in_fence = not in_fence
-            skip = True
-        else:
-            skip = in_fence or stripped.startswith(">")
+        skip = in_code or stripped.startswith(">")
         if skip or not stripped or _LIST_START.match(line):
             if current:
                 blocks.append(current)
@@ -169,10 +526,11 @@ def _lint_sentence(sentence: str) -> int | None:
     return None
 
 
-def lint_brief(text: str) -> list[tuple[int, str]]:
-    """Return (1-based line number, offending sentence) for every worker Git-write request."""
+def lint_brief(text: str, *, footer: str | None, order: bool) -> list[tuple[int, str]]:
+    """Return (1-based line number, offending sentence) for every worker Git-write request outside the footer;
+    `footer` and `order` as for `_strip_footer`."""
     findings: list[tuple[int, str]] = []
-    for block in _blocks(_strip_footer(text)):
+    for block in _blocks(_strip_footer(text, footer, order=order), order=order):
         joined = _mask(" ".join(line for _, line in block))
         starts: list[int] = []
         offset = 0
@@ -321,7 +679,6 @@ _GEMINI_ABS = re.compile(
     r"-(?:PromptPath|Workspace|TaskPath)\s+[\"']?(?:[A-Za-z]:[\\/]|/)", re.IGNORECASE
 )
 _INLINE_PY = re.compile(r"python[\w.]*\s+(?:-\s*<<|-c\s+[\"'][^\"'\n]*$)", re.IGNORECASE)
-_FENCE = re.compile(r"^\s*```")
 _BASE_ASSIGN_EMPTY = re.compile(r"[`*]{0,2}\s*=\s*(?:\"\"|'')?\s*$")
 # "empty"/"blank" right after the name ("X empty", "X is blank", "X set it to empty"); a later sentence about
 # something else being empty ("X unset and the output directory empty") is not about the variable.
@@ -344,17 +701,12 @@ def _clean(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.replace("\r\n", "\n").split("\n")).strip()
 
 
-def header_fields(text: str) -> dict[str, tuple[int, str]]:
+def header_fields(text: str, *, order: bool) -> dict[str, tuple[int, str]]:
     """First `Kind:`, `R-IDs:`, `Task file:`, `Root cause:`, `Class sweep:` and `Approach note:` header line outside
-    fenced code:
-    key -> (line, value)."""
+    fenced code (`_code_lines`; a list-item header line counts, as the pattern allows): key -> (line, value)."""
     found: dict[str, tuple[int, str]] = {}
-    in_fence = False
-    for number, line in enumerate(text.split("\n"), start=1):
-        if _FENCE.match(line):
-            in_fence = not in_fence
-            continue
-        match = None if in_fence else _HEADER.match(line)
+    for number, (line, in_code) in enumerate(_code_lines(text, order=order, splitlines=False), start=1):
+        match = None if in_code else _HEADER.match(line)
         if match:
             found.setdefault(match[1].lower(), (number, match[2].strip("` *")))
     return found
@@ -371,14 +723,15 @@ def _fold(text: str) -> str:
 _TAG_LINE = re.compile(r"^(?:[\s#>*_`+|-]|<!--)*\[\s*new\s+task", re.IGNORECASE)
 
 
-def is_brief_message(text: str) -> bool:
+def is_brief_message(text: str, *, footer: str | None, order: bool) -> bool:
     """Whether a worker message is a task brief and gets the full lint. Allowlist invariant: a message is a brief iff,
     after folding, some line opens with a `[NEW TASK` tag (any case, any line, a fence does not hide it) or a `Kind:`
     header stands outside a fenced block. Feedback (`[QA FEEDBACK]`, `[RETEST]`, `[EVALUATE]`) without a `Kind:`
-    header is not one and keeps the always-rules. Fail closed: a doubtful message is linted, and a waiver is logged."""
-    folded = _fold(_strip_footer(text))
+    header is not one and keeps the always-rules. Fail closed: a doubtful message is linted, and a waiver is logged.
+    `footer` and `order` as for `_strip_footer`, so the footer is the one the rules skip for that worker's layout."""
+    folded = _fold(_strip_footer(text, footer, order=order))
     return any(_TAG_LINE.match(line) for line in folded.split("\n")) or "kind" in header_fields(
-        folded
+        folded, order=order
     )
 
 
@@ -408,9 +761,13 @@ def read_task_file(root: Path, relative: str) -> tuple[str | None, str | None]:
     return _read(target), None
 
 
-def task_file_findings(text: str, root: Path) -> tuple[str | None, list[Finding]]:
-    """(text of the brief's `Task file:`, findings): an outside path is a finding (rule `task-file`), not a read."""
-    row = header_fields(_strip_footer(text.replace("\r\n", "\n"))).get("task file")
+def task_file_findings(
+    text: str, root: Path, *, footer: str | None, order: bool
+) -> tuple[str | None, list[Finding]]:
+    """(text of the brief's `Task file:`, findings): an outside path is a finding (rule `task-file`), not a read.
+    `footer` and `order` as for `_strip_footer`."""
+    body = _strip_footer(text.replace("\r\n", "\n"), footer, order=order)
+    row = header_fields(body, order=order).get("task file")
     if not row:
         return None, []
     content, problem = read_task_file(root, row[1])
@@ -473,13 +830,14 @@ def _line_findings(body: str) -> list[Finding]:
     return findings
 
 
-def _slice_ids(task_text: str) -> list[str]:
-    """First-column ids of the first Markdown table whose first header cell starts with `Slice`."""
+def _slice_ids(task_text: str, *, order: bool) -> list[str]:
+    """First-column ids of the first Markdown table whose first header cell starts with `Slice`; for a new-order
+    brief outside top-level fenced code (the base reading, kept for older workers, ignores fences)."""
     ids: list[str] = []
     in_table = False
-    for line in task_text.replace("\r\n", "\n").split("\n"):
+    for line, in_code in _code_lines(task_text.replace("\r\n", "\n"), order=order, splitlines=False):
         stripped = line.strip()
-        if not stripped.startswith("|"):
+        if (order and in_code) or not stripped.startswith("|"):
             if in_table:
                 break
             continue
@@ -498,24 +856,32 @@ def lint_message(
     text: str,
     *,
     full: bool,
+    order: bool,
     footer: str | None = None,
     task_file_text: str | None = None,
     class_sets_path: Path | None = None,
 ) -> list[Finding]:
     """All findings of one worker message; `full` adds the rules of a complete brief (see the module doc).
 
+    `order` holds the message to the T-021 layout: the readers use the block scanner and a full lint adds rule
+    `brief-order`. Without it (a worker started before T-021) every reader is the base one, byte for byte. It has no
+    default, so every caller states the worker's layout;
     `footer` is the text of .agents/policy/AGENT_BRIEF_FOOTER.md (None = unreadable, itself a finding of a full lint);
+    every rule skips the footer (`_strip_footer`), and `brief-order` places the task block after its verbatim span;
     `task_file_text` is the text of the brief's `Task file:` (None = no slice check);
     `class_sets_path` is the class-test-set file (None = `brief_lint_config.json` next to this module)."""
     text = text.replace("\r\n", "\n")
-    body = _strip_footer(text)
+    body = _strip_footer(text, footer, order=order)
     findings = [
-        Finding("git-write", n, f"worker Git write requested: {s}") for n, s in lint_brief(text)
+        Finding("git-write", n, f"worker Git write requested: {s}")
+        for n, s in lint_brief(text, footer=footer, order=order)
     ]
     findings += _base_url_findings(body)
     findings += _line_findings(body)
     if full:
-        findings += _brief_findings(text, body, footer, task_file_text, class_sets_path)
+        findings += _brief_findings(text, body, footer, task_file_text, class_sets_path, order=order)
+        if order:
+            findings += _order_findings(text, footer)
     return sorted(findings, key=lambda f: (f.line, f.rule))
 
 
@@ -525,6 +891,8 @@ def _brief_findings(
     footer: str | None,
     task_file_text: str | None,
     class_sets_path: Path | None = None,
+    *,
+    order: bool,
 ) -> list[Finding]:
     findings: list[Finding] = []
     if footer is None or not footer.strip():
@@ -533,7 +901,7 @@ def _brief_findings(
     elif _clean(footer) not in _clean(text):
         message = "the brief does not carry .agents/policy/AGENT_BRIEF_FOOTER.md verbatim"
         findings.append(Finding("footer", 1, message))
-    header = header_fields(body)
+    header = header_fields(body, order=order)
     kind_row = header.get("kind")
     kind = kind_row[1].lower() if kind_row else ""
     if kind not in KINDS:
@@ -550,7 +918,12 @@ def _brief_findings(
         except ClassSetsConfigError as error:
             findings.append(Finding("test-sets", 1, f"the class test sets cannot be loaded: {error}"))
         else:
-            waived = any(_SETS_WAIVER.match(line) for line in body.split("\n"))
+            # New order: a waiver line quoted in fenced code waives nothing (the base reading takes every line).
+            waived = any(
+                _SETS_WAIVER.match(line)
+                for line, in_code in _code_lines(body, order=order, splitlines=False)
+                if not (order and in_code)
+            )
             try:
                 missing = [] if waived else missing_class_sets(body, class_sets)
             except Exception as error:  # noqa: BLE001 - a failure while matching must block as well
@@ -611,7 +984,7 @@ def _brief_findings(
     if task_file_text is not None:
         absent = [
             ident
-            for ident in _slice_ids(task_file_text)
+            for ident in _slice_ids(task_file_text, order=order)
             if not re.search(rf"(?<![\w.-]){re.escape(ident)}(?![\w-])", body)
         ]
         if absent:
@@ -648,24 +1021,43 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(__file__).resolve().parents[2] / ".agents" / "policy" / "AGENT_BRIEF_FOOTER.md",
         help="footer file compared with --brief (default: .agents/policy/AGENT_BRIEF_FOOTER.md of this checkout)",
     )
+    parser.add_argument(
+        "--legacy-order",
+        action="store_true",
+        help="with --brief: lint a brief in the order used before T-021 (footer last) as the base lint did, "
+        "without rule brief-order",
+    )
     args = parser.parse_args(argv)
+    if args.legacy_order and not args.brief:
+        parser.error("--legacy-order only applies to --brief (the order rule is part of the complete-brief lint)")
+    # Like cli_worker: only a complete new-order brief gets the scanner readers; a message lint keeps the base ones.
+    order = args.brief and not args.legacy_order
     failed = False
+    footer = _read(args.footer)  # also bounds the skipped footer span of a new-order brief
     for path in args.briefs:
         text = path.read_text(encoding="utf-8-sig")
         task_text, extra = (
-            task_file_findings(text, args.footer.parents[2]) if args.brief else (None, [])
+            task_file_findings(text, args.footer.parents[2], footer=footer, order=order)
+            if args.brief
+            else (None, [])
         )
         findings = lint_message(
             text,
             full=args.brief,
-            footer=_read(args.footer) if args.brief else None,
+            order=order,
+            footer=footer,
             task_file_text=task_text,
         )
         findings = sorted([*findings, *extra], key=lambda f: (f.line, f.rule))
         for finding in findings:
             print(f"{path}:{finding.line}: [{finding.rule}] {finding.message}")
             failed = True
-        if args.require_footer and FOOTER_HEADING not in text:
+        heading = (
+            _footer_heading(_scan(text.replace("\r\n", "\n"))) is not None
+            if order
+            else FOOTER_HEADING in text
+        )
+        if args.require_footer and not heading:
             print(f"{path}: footer missing")
             failed = True
     return 1 if failed else 0

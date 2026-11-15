@@ -3,7 +3,8 @@ Kind: scout
 Task file: .agents/policy/USER_STANDING_RULES.md
 
 <!-- PM: copy to .tmp/pm-state/briefs/audit-<DATE>.msg.md, replace <DATE> (YYYY-MM-DD, from Get-Date) and <SINCE>,
-     run audit_extract.py first, append .agents/policy/AGENT_BRIEF_FOOTER.md (build_briefs.ps1), then start with
+     run audit_extract.py first, replace the FOOTER placeholder line with .agents/policy/AGENT_BRIEF_FOOTER.md (the task block
+     stays last, brief order of T-021), then start with
      --profile scout --model claude-haiku-5-5 --effort high --cache-ttl 5m. Delete this comment block. -->
 
 # Periodic audit, report only (standing rule S22)
@@ -33,7 +34,11 @@ You change nothing. The PM verifies every "not met" you report, so give evidence
 - For each user message in the digest that states a new rule, correction or decision, check that it is in
   `.agents/policy/USER_STANDING_RULES.md` or `tasks/DECISIONS_INDEX.md`. Missing = a gap.
 
-## Output
+<FOOTER>
+
+## Task
+
+### Output
 
 Write ONE file, `.tmp/audit/audit-<DATE>.md`, in English (quote the user's words verbatim and unchanged):
 
@@ -62,7 +67,7 @@ Step 0: <3 lines: what you read, what you could not read, what you will not judg
 One row per rule S01 to the last; never skip a rule. A "not met" row names the exact artifact that contradicts the
 rule and what the user said. Do not guess: `cannot tell` is a valid verdict.
 
-## Hard limits
+### Hard limits
 
 - Write only the one output file. No edits elsewhere, no Git writes, no network, no installs, no GPU, no model calls.
 - Do not start processes that stay running. Do not open `.secrets/`, `.venv/`, `models/` or raw transcripts.

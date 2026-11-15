@@ -20,6 +20,7 @@ Read the Rules digest before every task (AGENTS.md section 9). Each line is a pr
 
 ## Recent entries
 
+- 2026-11-15, the PM added a baseline entry and repinned its hash, but a test listing the entries stayed at two, so CI went red. **Prevention:** before committing a pinned data file, grep the tests for its content, and run that file's tests. **Evidence:** CI run 43729022948.
 - 2026-11-15, the PM passed header file paths to its brief helper's `-Header`, which takes the header text. The T-007 combine, T-012, T-007 recheck and runner retest 2 briefs therefore carried a path string, not the dispatch. The Codex combine worker then worked only from the task file's old feature header, re-reported Step 0, and the turn was wasted.
   - **Root cause:** a text parameter accepted a path silently, and lint passed because the task file supplied every field.
   - **Prevention:** the helper reads a header given as a file path and refuses a path-like value naming no file. The PM reads the first lines of each brief it builds.

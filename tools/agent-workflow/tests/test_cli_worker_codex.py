@@ -237,6 +237,7 @@ def test_an_unknown_role_is_refused_before_anything_is_registered(world: World) 
 
 def test_start_command_shape_prompt_on_stdin_and_inline_permissions(world: World) -> None:
     assert world.start() == 0
+    assert world.entry()[cw.BRIEF_ORDER_KEY] == cw.BRIEF_ORDER  # T-021 marker, as for a Claude worker
     (call,) = world.execs()
     argv = call["argv"]
     assert argv[:4] == ["exec", "-C", str(world.cwd), "--json"]
