@@ -42,6 +42,7 @@ def run(tmp_path: Path, **spec: Any) -> dict[str, Any]:
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",  # the driver pins its output to UTF-8; the locale code page would garble `D:\Dự án`
         timeout=120,
         check=False,
     )

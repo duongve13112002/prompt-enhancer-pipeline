@@ -19,7 +19,7 @@ import sys
 import tomllib
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, NoReturn
 
 HERE = Path(__file__).resolve().parent
@@ -231,11 +231,12 @@ def validate_effort(owner: str, value: object) -> str:
 def _relative_dir(owner: str, field: str, value: object) -> str:
     text = _text(owner, field, value, spaces=True)
     parts = re.split(r"[\\/]", text)  # either separator, whatever the platform
+    # Both path flavours, so a drive form (`C:/x`, `C:x`) is refused as absolute on POSIX too (as ci_window does).
     if (
         text.startswith(("/", "\\"))
-        or Path(text).is_absolute()
+        or PurePosixPath(text).is_absolute()
+        or PureWindowsPath(text).anchor
         or ".." in parts
-        or Path(text).drive
     ):
         refuse(f"{owner}, field {field!r}: expected a relative path without '..': {text!r}")
     return text

@@ -322,9 +322,12 @@ def test_the_agy_work_container_is_kept_without_results_while_its_workspaces_are
     tmp = pt.PROJECT / ".tmp"
     work = tmp_dir(pt, "agy-work")
     workspace = tmp_dir(pt, "review-1", parent="agy-work")
-    target = tmp / spelling if os.path.normcase("A") == "a" else work
+    folds = os.path.normcase("A") == "a"
+    target = tmp / spelling if folds else work
     assert pt.archive_remove([str(target)]) == 1
-    assert pt.purge_children(str(tmp), [spelling]) == 1
+    # fnmatch folds case through os.path.normcase: on a POSIX host `AGY-Work` matches no child, so nothing is refused
+    # and nothing is removed; the container is kept either way (asserted below).
+    assert pt.purge_children(str(tmp), [spelling]) == (1 if folds or spelling == "agy-work" else 0)
     assert work.exists() and workspace.exists()
     assert pt.purge_children(str(work), ["review-*"]) == 0
     assert not workspace.exists() and work.exists()
@@ -566,7 +569,12 @@ def test_remove_link_reports_success_only_when_the_entry_is_really_gone(
     pt: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     stuck = pt.PROJECT / ".tmp" / "stuck"
-    stuck.mkdir()
+    if os.name == "nt":
+        stuck.mkdir()  # stands in for a junction: the Windows branch removes it with rmdir
+    else:
+        # POSIX removes a link with unlink only and never rmdirs a real directory, so the entry is a directory link
+        (pt.PROJECT / ".tmp" / "stuck-target").mkdir()
+        stuck.symlink_to(pt.PROJECT / ".tmp" / "stuck-target", target_is_directory=True)
 
     def refuse(_path: str) -> None:
         raise PermissionError("held open")
@@ -575,7 +583,8 @@ def test_remove_link_reports_success_only_when_the_entry_is_really_gone(
     monkeypatch.setattr(pt.os, "rmdir", refuse)
     assert pt._remove_link(str(stuck)) is False and stuck.exists()
     monkeypatch.undo()
-    assert pt._remove_link(str(stuck)) is True and not stuck.exists()
+    assert pt._remove_link(str(stuck)) is True and not os.path.lexists(stuck)
+    assert os.name == "nt" or (pt.PROJECT / ".tmp" / "stuck-target").is_dir()  # the link's target is kept
 
 
 @pytest.mark.parametrize(

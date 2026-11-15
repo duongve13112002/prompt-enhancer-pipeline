@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -264,7 +265,9 @@ def test_oversized_stdin_and_unexpected_check_exception_deny(
         "Stop-Process -Name python",
         'python -c "a\nb"',
         "pytest test_x.py",
-        "Set-Content src/file.txt bad",
+        # A write in the host's native shell, the dialect codex_guard checks: PowerShell on Windows, bash elsewhere,
+        # where `Set-Content` is no command and writes nothing.
+        "Set-Content src/file.txt bad" if sys.platform == "win32" else "printf bad > src/file.txt",
     ],
 )
 def test_shell_shared_guards_refuse(admitted: tuple, command: str) -> None:

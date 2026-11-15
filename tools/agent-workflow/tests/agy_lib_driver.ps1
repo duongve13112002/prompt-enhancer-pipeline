@@ -3,6 +3,8 @@ param([Parameter(Mandatory = $true)][string]$InputJson)
 # Never starts agy, reads a real scheduled task (case 'sched' replaces the scheduler with labelled doubles) or
 # touches anything outside the paths in the input.
 $ErrorActionPreference = 'Stop'
+# The JSON line is UTF-8 whatever the console code page (cp437 or cp1252 on a CI runner), as setup_project.py does.
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
 . (Join-Path $PSScriptRoot '..\..\..\scripts\agy-runner\agy-lib.ps1')
 $in = [IO.File]::ReadAllText($InputJson) | ConvertFrom-Json
 $result = @{ ok = $true; value = $null; error = $null }

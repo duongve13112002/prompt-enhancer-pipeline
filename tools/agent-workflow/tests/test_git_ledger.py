@@ -15,11 +15,13 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import shlex
 import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -350,6 +352,10 @@ EFFECTIVE_CASES = [
     ("Bash", "chmod -R 777 <STATE>", "B"),
     ("Bash", "curl -O --output-dir <STATE> http://127.0.0.1/x", "B"),
     ("Bash", "cmd /c rd /s /q <STATE>", "B"),
+    # S42 F4: the same removal spelled relative to the work tree. cmd reads only a `/`-led word as a switch
+    # (`_is_option`), so this operand is a path on every host and the row tests the state-directory rule on POSIX
+    # too, where the absolute `<STATE>` above is a switch.
+    ("Bash", "cmd /c rd /s /q <STATE_REL>", "B"),
     # near misses: ordinary copies into the worker's own `.tmp/`, a parent of the ledger in this fixture
     ("Bash", "cp -r .tmp/forged/git-ledger .tmp/copy", "A"),
     ("Bash", "cp .tmp/forged/git-ledger/ledger.jsonl .tmp/", "A"),
@@ -362,9 +368,16 @@ EFFECTIVE_CASES = [
 ]
 
 
-@pytest.mark.parametrize(("tool", "command", "expect"), EFFECTIVE_CASES)
-def test_no_effective_destination_reaches_the_ledger(guard_repo: Path, monkeypatch: pytest.MonkeyPatch, tool: str,
-                                                     command: str, expect: str) -> None:
+def _rd_operand_is_a_switch(text: str) -> bool:
+    """cmd reads a `/`-led word as a switch (`rd /s`), so a `cmd /c rd /s /q` row whose expanded operand is `/`-led
+    (the absolute state path on a POSIX host) leaves `rd` with no literal path: it blocks in both modes (fail
+    closed). S42 F5: read on the expanded row, never the template, because `<STATE_REL>` is not `/`-led on any host."""
+    return text.startswith("cmd /c rd /s /q /")
+
+
+def _check_effective_row(guard_repo: Path, monkeypatch: pytest.MonkeyPatch, tool: str, command: str, expect: str,
+                         spell: Callable[[str], str]) -> None:
+    """One EFFECTIVE_CASES row in both modes; `spell` turns the state path (`as_posix`) into the row's spelling."""
     monkeypatch.delenv("AGENT_WORKFLOW_STATE_DIR", raising=False)
     ledger = gl.ledger_dir(guard_repo)
     made = [ledger, guard_repo / ".tmp" / "forged" / "git-ledger", guard_repo / ".tmp" / "forged" / "other"]
@@ -373,16 +386,52 @@ def test_no_effective_destination_reaches_the_ledger(guard_repo: Path, monkeypat
     try:
         for folder in made:
             folder.mkdir(parents=True, exist_ok=True)
-        text = command.replace("<STATE>", ledger.parent.as_posix()).replace("<LEDGER>", ledger.as_posix())
+        state = spell(ledger.parent.as_posix())
+        state_rel = Path(os.path.relpath(ledger.parent, guard_repo)).as_posix()
+        assert not state_rel.startswith(("/", "..")), state_rel  # the fixture keeps the state inside the work tree
+        text = (command.replace("<STATE_REL>", state_rel).replace("<STATE>", state)
+                .replace("<LEDGER>", ledger.as_posix()))
         for mode in ("worker", "pm"):
             ctx = tg.Context({"tool_name": tool, "tool_input": {"command": text}, "cwd": str(guard_repo)},
                              tg.gc.load(), __import__("argparse").Namespace(config=None, git_mode=mode), guard_repo)
             blocks = tg.check_write(ctx)
-            want = expect if mode == "worker" else "A"
+            want = expect if mode == "worker" else ("B" if _rd_operand_is_a_switch(text) else "A")
             assert ("B" if blocks else "A") == want, (mode, text, blocks)
     finally:
         for top in created:
             shutil.rmtree(top, ignore_errors=True)
+
+
+@pytest.mark.parametrize(("tool", "command", "expect"), EFFECTIVE_CASES)
+def test_no_effective_destination_reaches_the_ledger(guard_repo: Path, monkeypatch: pytest.MonkeyPatch, tool: str,
+                                                     command: str, expect: str) -> None:
+    _check_effective_row(guard_repo, monkeypatch, tool, command, expect, lambda state: state)
+
+
+def _posix_spelling(state: str) -> str:
+    """The state path `/`-led, as a POSIX host spells it: there the path itself; on Windows the Git Bash form of the
+    same directory (`C:/x` is `/c/x`), which cmd reads as a switch exactly as it reads `/tmp/x`."""
+    return state if state.startswith("/") else f"/{state[0].lower()}{state[2:]}"
+
+
+@pytest.mark.parametrize(
+    ("tool", "command", "expect"), [row for row in EFFECTIVE_CASES if row[1].startswith("cmd /c rd ")]
+)
+def test_the_rd_rows_hold_on_a_simulated_posix_host(guard_repo: Path, monkeypatch: pytest.MonkeyPatch, tool: str,
+                                                    command: str, expect: str) -> None:
+    """S42 F5: the `cmd /c rd` rows under a simulated POSIX host flag (labelled double: `st.WINDOWS = False` and a
+    `/`-led state spelling). The `<STATE>` row is a switch and blocks in both modes; the `<STATE_REL>` row stays a
+    path, so pm mode allows it and worker mode refuses the state directory, on every host."""
+    monkeypatch.setattr(tg.st, "WINDOWS", False)
+    _check_effective_row(guard_repo, monkeypatch, tool, command, expect, _posix_spelling)
+
+
+@pytest.mark.parametrize("mode", ["worker", "pm"])
+def test_a_slash_led_rd_operand_is_a_cmd_switch_on_every_host(guard_repo: Path, mode: str) -> None:
+    """S42: the cmd reading of `/x` does not depend on the host, so `rd /s /q /x` names no path and blocks."""
+    ctx = tg.Context({"tool_name": "Bash", "tool_input": {"command": "cmd /c rd /s /q /x"}, "cwd": str(guard_repo)},
+                     tg.gc.load(), __import__("argparse").Namespace(config=None, git_mode=mode), guard_repo)
+    assert any("`rd` has no literal path" in b for b in tg.check_write(ctx))
 
 
 # Round 6 (R15, class M): one allowed orchestrator command makes two commits A -> B -> C while a worker turn runs;

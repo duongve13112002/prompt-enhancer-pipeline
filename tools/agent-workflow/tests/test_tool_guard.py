@@ -537,7 +537,11 @@ def test_git_guard_pm_never_rewrites(guard_repo: Path, case: str, command: str, 
         ("git status; git push origin --delete feat", "B"),
         ("git -C .tmp\\worktrees\\wt1 commit -m x", "B"),
         ("Set-Location .tmp/worktrees/wt1; git commit -m x", "B"),
-        ("git -C .tmp\\worktrees\\wt1 add -A; git -C .tmp\\worktrees\\wt1 diff --cached", "A"),
+        # git is a native program: PowerShell hands it `.tmp\worktrees\wt1` unchanged, and Git on a POSIX host opens
+        # a directory with that literal name, which is no worker worktree, so the guard blocks there.
+        ("git -C .tmp\\worktrees\\wt1 add -A; git -C .tmp\\worktrees\\wt1 diff --cached",
+         "A" if os.name == "nt" else "B"),
+        ("git -C .tmp/worktrees/wt1 add -A; git -C .tmp/worktrees/wt1 diff --cached", "A"),
     ],
 )
 def test_git_guard_pm_never_rewrites_powershell(guard_repo: Path, command: str, expect: str) -> None:
@@ -1834,7 +1838,10 @@ FR1_CASES = [
     # F14 dynamic targets resolved from literal bindings, `$PWD`, globs in an allowed directory, mkdir of it
     ("F14-1", "worker", "PowerShell", "$name='a'; Set-Content \".tmp/scratch/$name.txt\" x", "A"),
     ("F14-2", "worker", "Bash", 'echo x > "$PWD/.tmp/scratch/x"', "A"),
-    ("F14-3", "worker", "PowerShell", '$p=".tmp\\scratch\\x"; Remove-Item -Recurse -Force $p', "A"),
+    # On a POSIX host a cmdlet path with `\` is checked under both readings (separator, name character); the literal
+    # one names `.tmp\scratch\x` in the root, outside the allowlist, so it blocks there (S42 Q1, fail closed).
+    ("F14-3", "worker", "PowerShell", '$p=".tmp\\scratch\\x"; Remove-Item -Recurse -Force $p',
+     "A" if os.name == "nt" else "B"),
     ("F14-4", "worker", "Bash", "rm .tmp/*.log", "A"),
     ("F14-5", "worker", "PowerShell", "Remove-Item .tmp\\*.log", "A"),
     ("F14-6", "worker", "Bash", "rm -rf .tmp/scratch/*", "A"),

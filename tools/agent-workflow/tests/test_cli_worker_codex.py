@@ -2449,3 +2449,29 @@ def test_the_fake_codex_double_is_labelled_and_never_real() -> None:
         [sys.executable, "-B", str(FAKE)], capture_output=True, text=True, check=False
     )
     assert done.returncode != 0  # without a plan it cannot do anything
+
+
+# S42 (R-025): one configured value is judged the same on Windows and POSIX. Generated Windows and POSIX spellings.
+_PIECE = st.sampled_from(["a", "b.c", "x y", "abs.json", "pm-state"])
+
+
+@given(
+    drive=st.sampled_from(["C:", "c:", "Z:"]),
+    sep=st.sampled_from(["", "/", "\\"]),
+    parts=st.lists(_PIECE, min_size=1, max_size=3),
+    inner=st.sampled_from(["/", "\\"]),
+)
+def test_property_a_drive_spelling_is_refused_as_absolute_on_every_host(
+    drive: str, sep: str, parts: list[str], inner: str
+) -> None:
+    with pytest.raises(SystemExit, match="relative path"):
+        cb._relative_dir("o", "f", drive + sep + inner.join(parts))
+
+
+@given(
+    parts=st.lists(_PIECE, min_size=1, max_size=4),
+    seps=st.lists(st.sampled_from(["/", "\\"]), min_size=3, max_size=3),
+)
+def test_property_a_plain_relative_spelling_is_kept_on_every_host(parts: list[str], seps: list[str]) -> None:
+    text = parts[0] + "".join(s + p for s, p in zip(seps, parts[1:]))
+    assert cb._relative_dir("o", "f", text) == text

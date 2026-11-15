@@ -11,7 +11,7 @@ import argparse
 import contextlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import guard_config as gc
@@ -202,7 +202,10 @@ def test_case_and_separator_mixes(nested_repo: Path, case: str, tool: str, comma
 
 
 def test_mixed_separators_exact_case(nested_repo: Path) -> None:
-    assert verdict(nested_repo, "Set-Content .cache\\tmp/sub\\f x", "PowerShell") == "A"
+    # A POSIX host checks a cmdlet path under both readings of `\` (separator, name character); the literal reading
+    # `.cache\tmp` is no allowlisted directory, so the write blocks there (S42 Q1, fail closed).
+    assert verdict(nested_repo, "Set-Content .cache\\tmp/sub\\f x", "PowerShell") == ("A" if os.name == "nt" else "B")
+    assert verdict(nested_repo, "Set-Content .cache/tmp/sub/f x", "PowerShell") == "A"
     assert verdict(nested_repo, "Set-Content .cache\\tmpx\\f x", "PowerShell") == "B"
     assert verdict(nested_repo, "Set-Content .cache\\f x", "PowerShell") == "B"
 
@@ -365,3 +368,252 @@ def test_check_allows_iff_strictly_inside_an_entry(
     )
     expect = is_inside(entries, parts) or (verb in {"mkdir", "md"} and is_entry(entries, parts))
     assert (reason is None) == expect, (entries, verb, rel, reason)
+
+
+# S42 (Q1, PM decision pending user review): on a POSIX host a PowerShell cmdlet path holding `\` is checked under
+# both readings, so a write is refused when either is. Generated Windows and POSIX spellings.
+_PS_WORD = s.lists(s.sampled_from(["a", ".tmp", "..", ".", "x y", "\\", "/"]), min_size=1, max_size=8).map("".join)
+
+
+@given(word=_PS_WORD, shell=s.sampled_from(["ps", "bash", "cmd"]), provider=s.booleans(), windows=s.booleans())
+def test_property_a_posix_cmdlet_path_keeps_its_literal_reading_and_adds_the_windows_one(
+    word: str, shell: str, provider: bool, windows: bool
+) -> None:
+    got = st.ps_path_readings(word, shell, provider, windows)
+    assert got[0] == word  # the host's own reading is never dropped
+    two = not windows and shell == "ps" and provider and "\\" in word
+    assert len(got) == (2 if two else 1), got
+    if two and not word.startswith(("\\", "/")):
+        # the added reading names what Windows path rules name (a rooted or UNC form has its own anchor rules)
+        assert PurePosixPath(got[1]).parts == PureWindowsPath(word).parts, got
+
+
+_PIECES = s.lists(s.sampled_from(["a", ".tmp", "..", "x y", "scratch"]), min_size=2, max_size=5)
+
+
+@given(pieces=_PIECES, seps=s.lists(s.sampled_from(["/", "\\"]), min_size=4, max_size=4), at=s.integers(0, 3))
+def test_property_a_posix_cmdlet_path_with_a_backslash_has_both_readings(
+    pieces: list[str], seps: list[str], at: int
+) -> None:
+    seps[min(at, len(pieces) - 2)] = "\\"  # at least one backslash between two pieces
+    word = pieces[0] + "".join(sep + p for sep, p in zip(seps, pieces[1:]))
+    literal, windows_reading = st.ps_path_readings(word, "ps", True, False)
+    assert literal == word and "\\" not in windows_reading
+    assert PurePosixPath(windows_reading).parts == PureWindowsPath(word).parts
+
+
+@given(pieces=_PIECES, shell=s.sampled_from(["ps", "bash", "cmd"]), provider=s.booleans())
+def test_property_a_word_without_a_backslash_has_one_reading(pieces: list[str], shell: str, provider: bool) -> None:
+    word = "/".join(pieces)
+    assert st.ps_path_readings(word, shell, provider, False) == [word]
+
+
+class ReadingRecorder(st.PathPolicy):
+    """Labelled test double: records the spelling each guard entry point hands to `_one_reading` and resolves
+    nothing, so the test sees which readings reach the decision whatever the host's path flavour."""
+
+    seen: list[str]
+
+    def _one_reading(self, text: str, shell: str, bases: list[Path]) -> list[Path] | str:
+        self.seen.append(text)
+        return []
+
+
+@pytest.mark.parametrize("windows", [False, True], ids=["posix-flag", "windows-flag"])
+def test_every_guard_entry_point_hands_both_readings_of_a_posix_cmdlet_path_to_the_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, windows: bool
+) -> None:
+    """S42 F2: `check` (cmdlet targets), `_resolved` (links, sources) and `check_protected` (probes of unmodelled
+    commands, which in PowerShell may be cmdlets) pass the provider flag on, so on a POSIX host flag the `/` reading
+    reaches the decision next to the literal one; a native word and a Windows host flag keep one reading."""
+    monkeypatch.setattr(st, "WINDOWS", windows)
+    policy = ReadingRecorder(tmp_path, [".tmp"], 30)
+    word = ".tmp\\a\\..\\..\\x"
+    both = [word] if windows else [word, ".tmp/a/../../x"]
+    cmdlet = st.Target(word, "Set-Content", "ps", provider=True)
+    native = st.Target(word, "`tool` argument", "ps")
+    for call, target, expect in [
+        (lambda t: policy.check(t, [tmp_path]), cmdlet, both),
+        (lambda t: policy.check(t, [tmp_path]), native, [word]),
+        (lambda t: policy.through_link(t, [tmp_path], [("x", False)]), cmdlet, both),
+        (lambda t: policy.through_link(t, [tmp_path], [("x", False)]), native, [word]),
+        (lambda t: policy.check_protected(t, [tmp_path]), native, both),
+        (lambda t: policy.check(t, [tmp_path]), st.Target(word, "redirection", "bash", provider=True), [word]),
+    ]:
+        policy.seen = []
+        call(target)
+        assert policy.seen == expect, (target, policy.seen)
+
+
+@pytest.mark.parametrize("windows", [False, True], ids=["posix-flag", "windows-flag"])
+def test_a_powershell_working_directory_has_both_readings_on_a_posix_host(
+    monkeypatch: pytest.MonkeyPatch, windows: bool
+) -> None:
+    """S42 F1: `Set-Location .tmp\\ok\\..\\..\\..\\etc` was read only literally on POSIX (one odd name under `.tmp`),
+    so a later relative write passed the guard while a pwsh that splits on `\\` writes outside the root. Every
+    reading is now a base. The host flag and its path flavour are simulated (labelled double): `Path` and `fs_real`
+    follow posixpath or ntpath, so the test decides the same on every host."""
+    import ntpath
+    import posixpath
+
+    flavour, pure, cwd = (
+        (ntpath, PureWindowsPath, PureWindowsPath("C:/w/root")) if windows
+        else (posixpath, PurePosixPath, PurePosixPath("/w/root"))
+    )
+    monkeypatch.setattr(st, "WINDOWS", windows)
+    monkeypatch.setattr(st, "Path", pure)
+    monkeypatch.setattr(st, "fs_real", lambda p: flavour.normpath(str(p)))
+    escape = ".tmp\\ok\\..\\..\\..\\etc"
+    bases = st.cwd_candidates(cwd, [(escape, "ps")])
+    assert bases is not None and pure(flavour.normpath(str(cwd.parent / "etc"))) in bases, bases
+    literal = pure(flavour.normpath(str(cwd / escape)))
+    assert literal in bases  # the host's own reading is kept
+    # A native `cd` (Bash, cmd) and a word without `\` keep one reading.
+    assert st.cwd_candidates(cwd, [(escape, "bash")]) == [cwd, literal]
+    assert st.cwd_candidates(cwd, [(".tmp/ok", "ps")]) == [cwd, pure(flavour.normpath(str(cwd / ".tmp/ok")))]
+    if not windows:  # a rooted `\` spelling is absolute under the separator reading
+        assert pure("/srv/x") in (st.cwd_candidates(cwd, [("\\srv\\x", "ps")]) or [])
+
+
+def _flavour(monkeypatch: pytest.MonkeyPatch, windows: bool) -> tuple[Any, Any, Any]:
+    """Labelled double: the host flag and its path flavour (`Path` and `fs_real` follow posixpath or ntpath, no I/O),
+    so `cwd_candidates` decides the same on every host. Returns (path module, pure path class, start directory)."""
+    import ntpath
+    import posixpath
+
+    flavour, pure = (ntpath, PureWindowsPath) if windows else (posixpath, PurePosixPath)
+    monkeypatch.setattr(st, "WINDOWS", windows)
+    monkeypatch.setattr(st, "Path", pure)
+    monkeypatch.setattr(st, "fs_real", lambda p: flavour.normpath(str(p)))
+    return flavour, pure, pure("C:/w/root" if windows else "/w/root")
+
+
+def _unbounded_bases(cwd: Any, changes: list[tuple[str, str]], flavour: Any, pure: Any, windows: bool) -> set[Any]:
+    """Reference model for relative changes: every base joined with every reading, normalised, as a set."""
+    bases = {cwd}
+    for change, shell in changes:
+        readings = st.ps_path_readings(change, shell, True, windows)
+        bases |= {pure(flavour.normpath(str(b / r))) for b in bases for r in readings}
+    return bases
+
+
+_CD_WORD = s.lists(s.sampled_from(["a", "b", ".."]), min_size=1, max_size=3).flatmap(
+    lambda parts: s.lists(s.sampled_from(["\\", "/"]), min_size=len(parts) - 1, max_size=len(parts) - 1).map(
+        lambda seps: parts[0] + "".join(sep + p for sep, p in zip(seps, parts[1:]))
+    )
+)
+
+
+@pytest.mark.parametrize("windows", [False, True], ids=["posix-flag", "windows-flag"])
+def test_property_working_directory_bases_are_exact_below_the_bound_and_refused_above(
+    monkeypatch: pytest.MonkeyPatch, windows: bool
+) -> None:
+    """S42 F6: below MAX_CWD_BASES the bases are exactly the reference set, without duplicates, start directory
+    first; above it the result is None (callers refuse), never a partial list."""
+    flavour, pure, cwd = _flavour(monkeypatch, windows)
+
+    @given(changes=s.lists(s.tuples(_CD_WORD, s.sampled_from(["ps", "bash"])), max_size=8))
+    def check(changes: list[tuple[str, str]]) -> None:
+        got = st.cwd_candidates(cwd, changes)
+        want = _unbounded_bases(cwd, changes, flavour, pure, windows)
+        if len(want) > st.MAX_CWD_BASES:
+            assert got is None, len(want)
+        else:
+            assert got is not None and got[0] == cwd and len(got) == len(set(got)) and set(got) == want
+
+    check()
+
+
+@pytest.mark.parametrize(
+    ("windows", "word", "below", "above"),
+    [
+        (True, "a\\b", 6, 7),  # Windows: one reading, the list doubles: 2^6 = 64 is at the bound, 2^7 over it
+        (False, "a/b", 6, 7),  # POSIX, no `\`: one reading, as on Windows
+        (False, "a\\b", 3, 4),  # POSIX PowerShell with `\`: two readings, the list triples: 27, then 81
+    ],
+    ids=["windows-flag", "posix-flag-slash", "posix-flag-backslash"],
+)
+def test_the_working_directory_bound_is_reached_exactly(
+    monkeypatch: pytest.MonkeyPatch, windows: bool, word: str, below: int, above: int
+) -> None:
+    _, _, cwd = _flavour(monkeypatch, windows)
+    # distinct names per `cd`, so no base repeats and the count is the plain power
+    within = st.cwd_candidates(cwd, [(word.replace("a", f"a{i}"), "ps") for i in range(below)])
+    assert within is not None and len(within) <= st.MAX_CWD_BASES
+    assert st.cwd_candidates(cwd, [(word.replace("a", f"a{i}"), "ps") for i in range(above)]) is None
+
+
+@pytest.mark.parametrize("windows", [False, True], ids=["posix-flag", "windows-flag"])
+def test_many_working_directory_changes_are_refused_within_a_fixed_time(
+    monkeypatch: pytest.MonkeyPatch, windows: bool
+) -> None:
+    """S42 F6: 40 `Set-Location a\\b` (3^40 bases on POSIX before the bound) stop at the bound at once."""
+    import time
+
+    _, _, cwd = _flavour(monkeypatch, windows)
+    started = time.monotonic()
+    assert st.cwd_candidates(cwd, [(f"a{i}\\b{i}", "ps") for i in range(40)]) is None
+    assert time.monotonic() - started < 2.0
+
+
+def test_a_command_past_the_working_directory_bound_blocks_and_says_why(nested_repo: Path) -> None:
+    """S42 F6 end to end on the real host: the hook refuses within a fixed time and names the bound."""
+    import time
+
+    command = "; ".join(f"Set-Location .tmp\\d{i}" for i in range(12)) + "; Set-Content .tmp/x v"
+    args = argparse.Namespace(config=None, git_mode="pm", worktree=None)
+    event = {
+        "tool_name": "PowerShell", "tool_input": {"command": command}, "session_id": "t-f6", "cwd": str(nested_repo)
+    }
+    started = time.monotonic()
+    blocks, _ = tg.evaluate(tg.Context(event, config(NESTED), args, nested_repo))
+    assert time.monotonic() - started < 10.0
+    assert any(f"more than {st.MAX_CWD_BASES} candidate working directories" in b for b in blocks), blocks
+    # git judged against unplaceable bases says so too, rather than calling its `-C` directory a run-time one
+    event["tool_input"] = {"command": command.replace("Set-Content .tmp/x v", "git -C .tmp status")}
+    blocks, _ = tg.evaluate(tg.Context(event, config(NESTED), args, nested_repo))
+    assert any(f"`git -C .tmp` follows {st.CWD_UNPLACED}" in b for b in blocks), blocks
+
+
+class CountingGitPolicy(st.PathPolicy):
+    """Labelled test double: `git` answers "not tracked" at once and counts its calls, so the budget of
+    `git ls-files` checks is tested without spending 22 ms per real call."""
+
+    calls = 0
+
+    def _git(self, tree: Path, *args: str) -> tuple[int, bytes]:
+        self.calls += 1
+        return 0, b""
+
+    def _worktree_paths(self, tree: Path) -> list[Path] | None:
+        return []
+
+
+@pytest.mark.parametrize("extra", [0, 1])
+def test_the_tracked_file_checks_of_one_command_are_bounded(tmp_path: Path, extra: int) -> None:
+    """S42 F6: every allowed candidate costs one `git ls-files`; at MAX_TRACKED_CHECKS candidates the write is judged,
+    one more fails closed with the reason and no further git call."""
+    policy = CountingGitPolicy(tmp_path, [".tmp"], 30)
+    bases = [tmp_path / ".tmp" / f"d{i}" for i in range(st.MAX_TRACKED_CHECKS + extra)]
+    reason = policy.check(st.Target("x", "Set-Content", "ps", provider=True), bases)
+    if extra:
+        assert reason is not None and f"more than {st.MAX_TRACKED_CHECKS} tracked-file checks" in reason, reason
+    else:
+        assert reason is None
+    assert policy.calls == st.MAX_TRACKED_CHECKS
+
+
+def test_a_nested_powershell_cd_keeps_its_shell() -> None:
+    """S42 F1: the shell is recorded per directory change, so `pwsh -Command` inside Bash reads its `Set-Location` as
+    PowerShell does, and Bash's own `cd` stays native."""
+    walked = st.walk("cd 'a\\b'; pwsh -NoProfile -Command 'Set-Location c\\d; Set-Content x v'", "Bash", [])
+    assert st.write_targets(walked).cwd_changes == [("a\\b", "bash"), ("c\\d", "ps")]
+
+
+def test_the_f1_escape_through_set_location_is_blocked(nested_repo: Path) -> None:
+    """S42 F1 end to end. Windows reads `\\` as a separator in both readings, so it blocked before; on a POSIX host
+    the separator reading of the working directory is now a base too, so the write outside the root blocks there."""
+    command = "Set-Location .tmp\\ok\\..\\..\\..\\etc; Set-Content .tmp/x v"
+    assert verdict(nested_repo, command, "PowerShell") == "B"
+    # A plain working directory change still allows a write inside the allowlist from every base.
+    assert verdict(nested_repo, "Set-Location .tmp/scratch; Set-Content .tmp/x v", "PowerShell") == "A"

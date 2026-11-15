@@ -149,6 +149,7 @@ def run(
         input=event if isinstance(event, str) else json.dumps(event),
         capture_output=True,
         text=True,
+        encoding="utf-8",  # as Claude Code sends it; the locale code page (cp1252 on CI) cannot encode a BOM
         timeout=60,
         check=False,
     )

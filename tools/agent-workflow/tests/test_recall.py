@@ -124,7 +124,12 @@ def link_dir(link: Path, target: Path) -> None:
 
 
 def unlink_dir(link: Path) -> None:
-    os.rmdir(link)  # removes a junction or directory symlink without touching its target
+    """Remove the link only, never its target: Windows removes a junction or directory symlink with rmdir, POSIX
+    removes a directory symlink with unlink (rmdir raises NotADirectoryError there)."""
+    if os.name == "nt":
+        os.rmdir(link)
+    else:
+        os.unlink(link)
 
 
 def test_link_leaving_the_root_is_skipped(recall, tree, tmp_path_factory) -> None:

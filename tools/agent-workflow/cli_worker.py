@@ -861,17 +861,36 @@ def entry_process_state(entry: dict[str, Any], role: str) -> tuple[int | None, s
     return pid, process_state(pid, as_time(recorded), legacy)
 
 
+WINDOWS_NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW (protocol-bound, winbase.h; footer rule 7)
+
+
 def kill_tree(pid: int, created: float | None) -> bool:
     """Kill the process tree of a worker process this launcher started (by PID, never by name), but only while the
     process with that PID still has the creation time recorded for it. Anything else is not ours and is left alone.
-    Returns whether a kill was issued. The check and the kill are not atomic; the window is microseconds."""
+    Returns whether the kill took effect; on False `stop_worker` falls back to the Popen handle. The check and the
+    kill are not atomic; the window is microseconds.
+    Windows: `taskkill` must exit 0 and the process must no longer be ours (S42 F3: its exit code was ignored, so a
+    failed kill was reported as done). A process still exiting at that instant reports False; the fallback is then
+    a second, harmless terminate.
+    POSIX: the worker leads its own process group (`start_new_session`); when `killpg` delivers nothing (the PID
+    leads no group, or it is gone) no kill is reported."""
     if created is None or process_state(pid, created) != ALIVE:
         return False
     if sys.platform == "win32":
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
+        try:
+            done = subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(pid)],
+                capture_output=True,
+                creationflags=WINDOWS_NO_WINDOW,
+            )
+        except OSError:
+            return False  # no `taskkill` to run: nothing was killed
+        return done.returncode == 0 and process_state(pid, created) != ALIVE
     else:
-        with contextlib.suppress(OSError):
+        try:
             os.killpg(pid, signal.SIGKILL)
+        except OSError:
+            return False
     return True
 
 

@@ -31,6 +31,11 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
       - A referenced artifact is reused.
     - The dev pairing, EmbeddingGemma 2 on llama.cpp, has no primary confirmation. Qwen3-VL-Embedding-2B on vLLM has an official example. This goes to you with E5.
   - **T-021 (tooling): phase P1 (brief order) accepted 22:2x after fix round 2.** One shared block scanner reads every brief; quote, list and HTML containers are tracked. Codex retest 2 PASS (F4, F5 closed; 4368 legacy comparisons match the base; 102 CRLF/BOM variants match) and Gemini PASS. Applied to main: focused 674 passed. Known conservative limit: lazy continuation followed by `---` is refused as a Setext heading. **PM decision pending user review:** an HTML block is refused only when it holds a heading, underline or fence, so the wrapper's `<goal>` tag lines still pass; no new Markdown library; the new-order lint refuses HTML blocks and headings or fences inside containers instead of parsing them. P2 (report lint) and P3 (scope guard) each follow after their own review. **PM answers, pending user review:**
+    - **P2 (report lint) BLOCKED on the user, 2026-11-16 04:05:** fix round 4, the last extra round of decision 121, still FAILS the Codex retest 4 (`.tmp/worktrees/T-021-p2/.tmp/T-021/retest4-p2/review.md`), while Gemini passes it.
+      - The two P2 findings are R4F1, where code or HTML inside an image description in a heading skips report discovery, and R4F2, where paragraph rebuilding and heading scans are quadratic and a watchdog fires near 400 KB.
+      - Each round closed its own findings and the next retest found a new construct; rounds 3 and 4 also found new defects (R3F1 backtracking, R4F2 quadratic).
+      - The patch stays unintegrated in its worktree. Nothing is reverted.
+      - **Question for the user:** a narrow round 5, a narrower lint contract, or a CommonMark parser dependency in `.venv`.
     - `--scope <glob>` is a registry field (P3).
     - `.agents/policy/cli/README.md` and `claude.md` join the scope; the PM edits `PM_POLICY.md:65` itself.
     - A registry marker keeps old workers on the old order.
@@ -48,6 +53,15 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
     - The Codex retest 3 PASSED; `test_agy_lib.py`: 149 passed.
     - Its P3s are in the S42 queue.
     - Before you run `setup.ps1`, see question 6.
+  - **S42 CI reds: accepted and integrated 2026-11-16 04:30.** Fix rounds 1 and 2 close the CI-red tool tests on both readings, under POSIX and Windows. Reviews: Sonnet review 3 PASS, Gemini fix 2 PASS.
+    - Main tool suite after the patch: `5394 passed, 11 skipped, 531 deselected in 909.97s`.
+    - Codex hook files, run with a scratch `AGENT_WORKFLOW_STATE_DIR`: `530 passed, 1 skipped`.
+    - **Residuals:**
+      - A command inside both bounds can outlast the hook timeout (24.9 s in worker mode, 30.9 s in PM mode with 14 pushes), because there is no whole-evaluate wall-clock budget.
+      - Hooks fail open on timeout, with no `onFailure: block` (question for the user).
+      - A budget-per-target mutant survives.
+      - The bound 512 was calibrated on one machine.
+    - **PM decision pending user review:** both readings on POSIX; the bounds 64 and 512.
   - **S42 PM fix:** `AGENT_BRIEF_FOOTER.md` item 11 now says "Reply in English: your reader is the PM, not the user", because workers had taken the PM for the user under AGENTS.md section 1. 191 related tests passed. Another family still has to review it.
   - **S42 queue:**
     - `brief_lint` false positive: task-file text such as "every commit reachable" is flagged as a git write;
@@ -77,7 +91,7 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
   - **T-009 `engine` key decision:** accepted by the user (decision 119); the full text was moved verbatim to [status-history](archive/status-history-2026-11-14.md).
   - **Closed S42 fixes (stdin briefs, contract-drift docs):** in [status-history](archive/status-history-2026-11-14.md). The Gemini implementation smoke waits on question 6.
   - **Pipeline first (decision 100; the user asked on 2026-11-15 why tooling took so much time):** after T-024 lands, new tooling work waits behind the pipeline queue. Only defects that block pipeline work are fixed at once (S42).
-  - **Pipeline queue:** T-010 (K2 naming and observation, K3 cards, `kb audit`) in three phases; Codex builds P1 after two pre-mortems (Gemini, Claude Sonnet); the task file's PM decisions before P1 are pending user review. E12 live smoke after P3.
+  - **Pipeline queue:** T-010 (K2 naming and observation, K3 cards, `kb audit`) in three phases; Codex builds P1 after two pre-mortems (Gemini, Claude Sonnet); the task file's PM decisions before P1 are pending user review. P1 Step 0 approved 2026-11-16 01:01 (Codex `t010-p1-codex-dev` building). **PM decisions pending user review** (answers to its Step 0 Q1-Q5, in `.tmp/T-010/p1-approve.md` and the task file): model-facing `info_assessment.v0` and `folder_naming.v0` without pipeline ids, with a positional `assigned_descriptions`; schema `kb_overrides.v0` for the four documented keys; assessment off plus a mismatched description line is refused; failed K1 decode statuses skipped, null passes; single-behaviour settings are audited as constrained exceptions. E12 live smoke after P3.
   - **Tooling in parallel (decision 105):** T-026 is accepted, and T-021 runs beside the pipeline queue. The old T-026 timeline was moved verbatim to [status-history](archive/status-history-2026-11-14.md).
 
 ## PM proposals in force, awaiting the user's explicit confirmation

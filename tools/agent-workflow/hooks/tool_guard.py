@@ -369,7 +369,7 @@ class Context:
         return self._opaque
 
     def bases(self) -> list[Path] | None:
-        return st.cwd_candidates(self.cwd, self.writes().cwd_changes, st.shell_of(self.tool))
+        return st.cwd_candidates(self.cwd, self.writes().cwd_changes)
 
 
 Result = tuple[list[str], list[str]]  # (block reasons, warnings)
@@ -424,7 +424,7 @@ def check_write(ctx: Context) -> list[str]:
     for target in writes.targets:
         if bases is None:
             reasons.append(
-                f"{target.verb} target `{target.word}` follows a `cd` to a run-time directory"
+                f"{target.verb} target `{target.word}` follows {st.CWD_UNPLACED}"
             )
             continue
         reason = policy.check(target, bases)
@@ -453,7 +453,7 @@ def _probe_reasons(writes: st.Writes, policy: st.PathPolicy, bases: list[Path] |
         if bases is None:
             if not st._is_absolute(probe.word):
                 reasons.append(
-                    f"`{name}` follows a `cd` to a run-time directory, so the guard cannot place its argument "
+                    f"`{name}` follows {st.CWD_UNPLACED}, so the guard cannot place its argument "
                     f"`{probe.word[:60]}`"
                 )
                 break
@@ -743,10 +743,12 @@ def _git_invocation(cmd: st.Cmd, ctx: Context, resolved: bool) -> GitInvocation:
     rest = args[k:]
     # git(1) `-C`: "each subsequent non-absolute -C <path> is interpreted relative to the preceding -C <path>".
     dirs = ctx.bases()
+    placed = dirs is not None
     for c_dir in c_dirs:
         dirs = _resolve_all(c_dir, dirs) if dirs is not None else None
         if dirs is None:
-            refusal = refusal or f"`git -C {c_dir}` is a run-time directory"
+            where = "is a run-time directory" if placed else f"follows {st.CWD_UNPLACED}"
+            refusal = refusal or f"`git -C {c_dir}` {where}"
         elif not all(_inside(p, ctx.root) for p in dirs):
             refusal = refusal or f"`git -C {c_dir}` leaves the project root"
     if sub is not None and (not sub or any(ch in sub for ch in "$`%(){}@")):
@@ -1026,7 +1028,10 @@ def _write_form(ctx: Context, inv: GitInvocation) -> str | None:
     if inv.not_plain:
         return f"`git {sub}` writes only in its plain form, but {inv.not_plain}"
     if inv.dirs is None:
-        return f"`git {sub}`: its repository is computed at run time, so it is not provably the main working tree"
+        return (
+            f"`git {sub}`: its repository is computed at run time or follows {st.CWD_UNPLACED}, so it is not "
+            "provably the main working tree"
+        )
     kinds = {_tree_kind(ctx, d) for d in inv.dirs}
     if None in kinds:
         return (
@@ -1376,7 +1381,10 @@ def _push_reasons(ctx: Context) -> list[str]:
             for c_dir in c_dirs:
                 dirs = _resolve_all(c_dir, dirs) if dirs is not None else None
             if dirs is None:
-                reasons.append("the push runs in a directory chosen at run time, so its repository is not provable")
+                reasons.append(
+                    f"the push runs in a directory chosen at run time (or after {st.CWD_UNPLACED}), so its "
+                    "repository is not provable"
+                )
                 continue
             # Class H (review R11): `git push <push_remote> <push_branch>` sends the tip of that branch, while the
             # marker names the checked HEAD. They are one revision only when HEAD is that branch; a detached HEAD or

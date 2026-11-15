@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import time
+import types
 from pathlib import Path
 from typing import Any, cast
 from unittest import mock
@@ -63,7 +64,9 @@ class Sleeper:
     """A real process standing in for a recorded one; stopped by the test through its own Popen handle."""
 
     def __enter__(self) -> Sleeper:
-        self.proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+        # As the launcher starts a worker: on POSIX it leads its own process group, which kill_tree signals.
+        session = {"start_new_session": True} if os.name != "nt" else {}
+        self.proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"], **session)
         self.pid = self.proc.pid
         self.created = cw.process_start(self.pid)
         assert self.created is not None
@@ -112,6 +115,74 @@ def test_the_same_pid_and_creation_time_is_ours_within_the_tolerance() -> None:
         assert cw.live_processes(entry) == [f"launcher_pid {child.pid}"]
         assert cw.kill_tree(child.pid, child.created) is True
         child.proc.wait(timeout=20)
+
+
+@pytest.mark.parametrize("error", [ProcessLookupError, PermissionError])
+def test_a_posix_group_kill_that_delivers_nothing_is_not_reported_as_a_kill(
+    monkeypatch: pytest.MonkeyPatch, error: type[OSError]
+) -> None:
+    """S42: `killpg` of a PID that leads no group (or is gone) kills nothing, so kill_tree returns False and
+    stop_worker falls back to the Popen handle. Labelled doubles: the POSIX platform, the identity check and killpg."""
+    sent: list[int] = []
+
+    def refuse(pid: int, _sig: int) -> None:
+        sent.append(pid)
+        raise error(pid)
+
+    monkeypatch.setattr(cw, "sys", types.SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(cw, "signal", types.SimpleNamespace(SIGKILL=9))  # Windows has no SIGKILL
+    monkeypatch.setattr(cw, "process_state", lambda pid, created: cw.ALIVE)
+    monkeypatch.setattr(cw.os, "killpg", refuse, raising=False)
+    assert cw.kill_tree(4242, 1.0) is False and sent == [4242]
+    monkeypatch.setattr(cw.os, "killpg", lambda pid, sig: sent.append(pid), raising=False)
+    assert cw.kill_tree(4243, 1.0) is True and sent == [4242, 4243]
+
+
+@pytest.mark.parametrize(
+    ("outcome", "after", "killed"),
+    [
+        (0, cw.GONE, True),  # taskkill succeeded and the process is gone
+        (128, cw.ALIVE, False),  # taskkill failed (128: no such process): nothing was killed
+        (1, cw.GONE, False),  # taskkill failed although the process went away on its own: no kill is claimed
+        (0, cw.ALIVE, False),  # taskkill said yes but the process is still ours: let the Popen handle stop it
+        (OSError, cw.ALIVE, False),  # no taskkill to run
+    ],
+)
+def test_a_windows_kill_is_reported_only_when_taskkill_succeeded_and_the_process_is_gone(
+    monkeypatch: pytest.MonkeyPatch, outcome: int | type[OSError], after: str, killed: bool
+) -> None:
+    """S42 F3: kill_tree ignored taskkill's exit code and returned True, so stop_worker skipped proc.kill(). Labelled
+    doubles: the Windows platform, taskkill (subprocess.run) and the identity check (ALIVE before, `after` after)."""
+    calls: list[dict[str, Any]] = []
+    states = iter([cw.ALIVE, after])
+
+    def run(args: list[str], **kwargs: Any) -> types.SimpleNamespace:
+        calls.append({"args": args, **kwargs})
+        if not isinstance(outcome, int):
+            raise outcome("taskkill")
+        return types.SimpleNamespace(returncode=outcome)
+
+    monkeypatch.setattr(cw, "sys", types.SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(cw.subprocess, "run", run)
+    monkeypatch.setattr(cw, "process_state", lambda pid, created: next(states))
+    assert cw.kill_tree(4242, 1.0) is killed
+    assert calls[0]["args"] == ["taskkill", "/T", "/F", "/PID", "4242"]
+    # No console window on the user's screen (footer rule 7); 0x08000000 is CREATE_NO_WINDOW (protocol-bound).
+    assert calls[0]["creationflags"] & 0x08000000
+
+
+def test_stop_worker_falls_back_to_the_popen_handle_after_a_failed_windows_kill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S42 F3 end to end in stop_worker: a failed taskkill leaves the child running, so proc.kill() must run.
+    Labelled doubles: the Windows platform, taskkill, the identity check and the Popen handle."""
+    monkeypatch.setattr(cw, "sys", types.SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(cw.subprocess, "run", lambda args, **kwargs: types.SimpleNamespace(returncode=128))
+    monkeypatch.setattr(cw, "process_state", lambda pid, created: cw.ALIVE)
+    proc = mock.Mock(pid=4242)
+    proc.poll.return_value = None
+    cw.stop_worker(proc, 1.0)
+    proc.kill.assert_called_once_with()
 
 
 @given(delta=st.floats(min_value=-10.0, max_value=10.0, allow_nan=False))

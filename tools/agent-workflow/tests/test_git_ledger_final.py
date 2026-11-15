@@ -104,17 +104,25 @@ def test_f10_an_unreadable_ref_fails_the_reading_and_a_dangling_symref_is_kept(r
 @pytest.mark.parametrize("name", ["ORIG_HEAD", "FETCH_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "BISECT_EXPECTED_REV"])
 def test_f11_a_root_ref_written_during_the_turn_is_flagged(repo: SimpleNamespace, where: str, name: str) -> None:
     before = snap(repo.worker)
-    (repo.gitdir / where / name).write_text(f"{repo.oid}\n", encoding="ascii")
+    (repo.gitdir / where / name).write_text(f"{fresh_oid(repo)}\n", encoding="ascii")
     after = snap(repo.worker)
-    assert before["state"] != after["state"]
+    key = f"root {where}{name}"
+    assert before["state"].get(key) != after["state"].get(key)
     changes = judged(repo, before, after)
     assert any(name in c for c in changes), changes
 
 
+def fresh_oid(repo: SimpleNamespace) -> str:
+    """An object id no ref or root ref holds yet: `git worktree add` may leave `worktrees/w/ORIG_HEAD` at HEAD
+    (seen on the Ubuntu CI runner's Git), so writing HEAD's oid there changes nothing. `commit-tree` moves no ref."""
+    return git(repo.main, "commit-tree", "-m", "f11", f"{repo.oid}^{{tree}}").strip()
+
+
 def test_f11_the_workers_own_root_ref_is_not_excused_by_a_forged_entry(repo: SimpleNamespace) -> None:
     before = snap(repo.worker)
-    (repo.gitdir / "worktrees" / "w" / "ORIG_HEAD").write_text(f"{repo.oid}\n", encoding="ascii")
-    (repo.gitdir / "ORIG_HEAD").write_text(f"{repo.oid}\n", encoding="ascii")
+    oid = fresh_oid(repo)
+    (repo.gitdir / "worktrees" / "w" / "ORIG_HEAD").write_text(f"{oid}\n", encoding="ascii")
+    (repo.gitdir / "ORIG_HEAD").write_text(f"{oid}\n", encoding="ascii")
     after = snap(repo.worker)
     steps = [s for s in gl.transitions(before["state"], after["state"]) if "ORIG_HEAD" in s[0]]
     assert len(steps) == 2

@@ -451,7 +451,8 @@ def test_a_pattern_the_regex_compiler_rejects_blocks_with_and_without_a_waiver(
 
 
 def test_a_deeply_nested_class_set_file_is_refused(tmp_path: Path) -> None:
-    path = write_sets(tmp_path, "[" * 5000 + "0" + "]" * 5000)
+    # 100000 levels: past the C recursion guard of the JSON decoder on every platform (5000 parse on Linux CPython).
+    path = write_sets(tmp_path, "[" * 100000 + "0" + "]" * 100000)
     with pytest.raises(bl.ClassSetsConfigError, match="cannot read"):
         bl.load_class_sets(path)
     assert "cannot be loaded" in sets_message(brief("code", SETS), path)
@@ -1375,3 +1376,21 @@ def test_the_cli_legacy_order_flag(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as refused:
         bl.main(["--legacy-order", str(old)])  # meaningless without --brief: refused, not ignored
     assert refused.value.code == 2
+
+
+# S42 (R-025): a brief is shared text, so a `..` walk leaves the checkout with either separator on every host.
+@given(
+    ups=st.integers(min_value=1, max_value=3),
+    seps=st.lists(st.sampled_from(["/", "\\"]), min_size=4, max_size=4),
+    inside=st.sampled_from(["", "tasks/", "tasks\\"]),
+)
+def test_property_a_parent_walk_with_either_separator_is_refused(
+    tmp_path_factory: pytest.TempPathFactory, ups: int, seps: list[str], inside: str
+) -> None:
+    root = tmp_path_factory.getbasetemp() / "s42-task-file" / "root"
+    (root / "tasks").mkdir(parents=True, exist_ok=True)
+    walk = inside + "".join(".." + seps[i] for i in range(ups + (1 if inside else 0))) + "T.md"
+    content, problem = bl.read_task_file(root, walk)
+    assert content is None and problem is not None and "outside the checkout" in problem, walk
+    kept, none = bl.read_task_file(root, inside + "T.md")  # a path inside is no finding (absent file: no text)
+    assert none is None, kept

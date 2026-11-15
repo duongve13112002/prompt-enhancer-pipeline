@@ -747,10 +747,11 @@ def is_fix_brief(text: str) -> bool:
 
 def read_task_file(root: Path, relative: str) -> tuple[str | None, str | None]:
     """(text of the `Task file:` or None, problem or None). The path is resolved first and must stay inside `root`:
-    an absolute path or a `..` walk to another checkout is refused, never read."""
+    an absolute path or a `..` walk to another checkout is refused, never read. A brief is shared text, so `\\`
+    separates on every host: on POSIX `..\\x.md` walks up as it does on Windows instead of naming one file."""
     try:
         base = root.resolve()
-        target = (base / relative).resolve()
+        target = (base / relative.replace("\\", "/")).resolve()
     except (OSError, ValueError, RuntimeError):
         return None, f"`Task file:` path {relative!r} cannot be resolved"
     if not target.is_relative_to(base):

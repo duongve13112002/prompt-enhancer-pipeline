@@ -541,7 +541,9 @@ LINK_COPIES = "copies"
 class Writes(NamedTuple):
     targets: list[Target]
     problems: list[str]  # writes whose targets cannot be determined (fail closed)
-    cwd_changes: list[str]  # `cd` arguments (relative targets resolve against every one)
+    # `cd` arguments with the shell of their command (relative targets resolve against every one); the shell is kept
+    # per change because a nested `pwsh -c` inside Bash reads its `Set-Location` as PowerShell does (S42 F1).
+    cwd_changes: list[tuple[str, str]]
     # T-024 final (F06): (command name, word) for every argument word that is not one of the command's own modelled
     # targets, and the value inside `--opt=V`, `-oV`, `of=V`, `/opt:V`: a program the guard does not model may write
     # below any path it is given. The caller decides which programs only read.
@@ -1934,7 +1936,7 @@ def write_targets(walked: Walk) -> Writes:
             continue
         if cmd.name in CD_COMMANDS:
             pos = [a for a in cmd.args if not _is_option(str(a), cmd.shell)]
-            writes.cwd_changes.append(str(pos[0]) if pos else "~")
+            writes.cwd_changes.append((str(pos[0]) if pos else "~", cmd.shell))
             continue
         before = len(writes.targets) + len(writes.problems)
         resolved = resolved_cmds(cmd, walked)
@@ -2142,6 +2144,10 @@ MKDIR_VERBS = {"mkdir", "md"}
 MAX_GLOB_MATCHES = 200
 # Bounded work per hook call (F27): entries a copy's source tree is scanned for links; more count as a link.
 MAX_LINK_SCAN = 5000
+# Safety-bound (S42 F6): `git ls-files` checks per path policy (one per allowed candidate path). Candidates multiply
+# as targets x variable values (MAX_EXPANSIONS) x readings x bases (MAX_CWD_BASES): measured on the Windows dev
+# machine at about 22 ms each, 1024 checks took 22 s, so 512 stays well inside the 30 s hook timeout. More fail closed.
+MAX_TRACKED_CHECKS = 512
 NAME_SURROGATE = 0x20000000  # Windows reparse tag bit of symbolic links and junctions (IsReparseTagNameSurrogate)
 
 
@@ -2156,6 +2162,16 @@ def fs_real(path: str | Path) -> str:
     # Folded before realpath too: ntpath reads a `name:stream` component as a drive-relative path and drops the
     # directories before it (`realpath('C:\\x\\d:s')` is `d:s`).
     return _win_fold(os.path.realpath(_win_fold(str(path))))
+
+
+def ps_path_readings(text: str, shell: str, provider: bool, windows: bool) -> list[str]:
+    """The spellings a guard checks for one path word. On a POSIX host a PowerShell cmdlet (provider) path holding
+    `\\` has two readings: pwsh's FileSystem provider may take `\\` as a separator (not verified here, no network;
+    S42 PM decision pending user review) or keep it in the name. Both are returned so the write is refused when
+    either reading is refused, never allowed on a guess. Native-program words and Windows hosts keep one reading."""
+    if windows or shell != "ps" or not provider or "\\" not in text:
+        return [text]
+    return [text, text.replace("\\", "/")]
 
 
 def _win_fold(text: str) -> str:
@@ -2232,6 +2248,7 @@ class PathPolicy:
         self.allowed_text = ", ".join(f"`{d}/`" for d in allowed_dirs)
         self.git_timeout = git_timeout
         self._worktrees: dict[Path, list[Path] | None] = {}
+        self._tracked_checks = 0  # spent of MAX_TRACKED_CHECKS
 
     @staticmethod
     def _text(target: Target) -> str:
@@ -2239,9 +2256,12 @@ class PathPolicy:
             return re.sub(r"(?i)^(?:Microsoft\.PowerShell\.Core\\)?FileSystem::", "", target.word)
         return target.word
 
-    def _resolved(self, target: Target, bases: list[Path], literal: bool = False) -> list[Path]:
+    def _resolved(
+        self, target: Target, bases: list[Path], literal: bool = False, any_program: bool = False
+    ) -> list[Path]:
         """The literal candidate paths of a word, [] when it names no place the guard can resolve. `literal`: read a
-        word with `$`, `%` or `` ` `` as plain text too (`pm-state::$INDEX_ALLOCATION` names the directory)."""
+        word with `$`, `%` or `` ` `` as plain text too (`pm-state::$INDEX_ALLOCATION` names the directory).
+        `any_program`: the word's program is unknown, so in PowerShell it may be a cmdlet and gets both readings."""
         text = self._text(target)
         dynamic = "$`%" + ("{}" if target.shell == "bash" else "")
         if not text or text.lower() in SINKS or text.startswith("@"):
@@ -2255,7 +2275,7 @@ class PathPolicy:
             return []  # a provider path of a cmdlet (`Env:X`, `Function:f`), no file
         # Review CX4: any other `name:rest` is a file `name` with the NTFS stream `rest` (only a cmdlet resolves
         # PowerShell drives; a native program opens the text); fs_real folds the stream onto `name`.
-        paths = self._candidates(text, target.shell, bases)
+        paths = self._candidates(text, target.shell, bases, target.provider or any_program)
         if isinstance(paths, str) and literal and re.match(r"^[A-Za-z]:(?![\\/])", text):
             # `D:x` is `x` in the current directory of drive D: the cwd when the cwd is on D.
             return [b / text[2:] for b in bases if os.path.splitdrive(str(b))[0].lower() == text[:2].lower()]
@@ -2263,8 +2283,9 @@ class PathPolicy:
 
     def check_protected(self, target: Target, bases: list[Path]) -> str | None:
         """F06: an argument of a program the guard does not model, judged by the protected rule only: it may not
-        resolve into, onto or above a protected directory (the program may write below any path it is given)."""
-        for path in self._resolved(target, bases, literal=True):
+        resolve into, onto or above a protected directory (the program may write below any path it is given). S42:
+        an unmodelled command in PowerShell may be a cmdlet, so on POSIX its words get both readings."""
+        for path in self._resolved(target, bases, literal=True, any_program=True):
             reason = self._protected_reason(path, target)
             if reason:
                 return f"{target.verb} `{target.word}`: {reason}"
@@ -2327,7 +2348,7 @@ class PathPolicy:
         dynamic = "$`%" + ("{}" if target.shell == "bash" else "")
         if any(ch in text for ch in dynamic) or text.startswith("@"):
             return f"{target.verb} target `{text}` is built at run time (variable, substitution or expansion)"
-        paths = self._candidates(text, target.shell, bases)
+        paths = self._candidates(text, target.shell, bases, target.provider)
         if isinstance(paths, str):
             return f"{target.verb} target `{text}`: {paths}"
         for path in paths:
@@ -2338,7 +2359,17 @@ class PathPolicy:
                 return f"{target.verb} target `{text}`: {reason}"
         return None
 
-    def _candidates(self, text: str, shell: str, bases: list[Path]) -> list[Path] | str:
+    def _candidates(self, text: str, shell: str, bases: list[Path], provider: bool = False) -> list[Path] | str:
+        """Every place the word may name; a caller refuses the write when any one of them is refused."""
+        found: list[Path] = []
+        for reading in ps_path_readings(text, shell, provider, WINDOWS):
+            paths = self._one_reading(reading, shell, bases)
+            if isinstance(paths, str):
+                return paths
+            found.extend(p for p in paths if p not in found)
+        return found
+
+    def _one_reading(self, text: str, shell: str, bases: list[Path]) -> list[Path] | str:
         if text == "~" or text.startswith(("~/", "~\\")):
             return [Path.home() / text[2:]] if len(text) > 1 else [Path.home()]
         if text.startswith("~"):
@@ -2502,6 +2533,12 @@ class PathPolicy:
         return proc.returncode, proc.stdout
 
     def _tracked(self, tree: Path, path: Path) -> str | None:
+        if self._tracked_checks >= MAX_TRACKED_CHECKS:
+            return (
+                f"the command needs more than {MAX_TRACKED_CHECKS} tracked-file checks (one per candidate path, "
+                "for every working directory and variable value); split it into smaller commands"
+            )
+        self._tracked_checks += 1
         rel = Path(os.path.relpath(path, tree)).as_posix()
         magic = "literal,icase" if WINDOWS else "literal"
         code, out = self._git(tree, "ls-files", "-z", "--", f":({magic}){rel}")
@@ -2531,18 +2568,34 @@ def _basename(path: str) -> str:
     return parts[-1] if parts else "x"
 
 
-def cwd_candidates(cwd: Path, changes: list[str], shell: str) -> list[Path] | None:
-    """Every working directory a relative target may resolve against; None when a `cd` is dynamic.
-    The parser does not keep `&&`/`;`/subshell scoping, so each `cd` adds a candidate instead of replacing one."""
-    bases = [cwd]
-    for change in changes:
+# Safety-bound (S42 F6): candidate working directories of one command. Each `cd` keeps every earlier base (no
+# scoping), so the list doubles per `cd`, and triples on POSIX where a PowerShell `cd x\y` has two readings; every
+# write target is then checked against every base. Past the bound the working directory counts as unplaceable,
+# which every caller refuses, so the hook stays far inside its timeout instead of building 3^k paths.
+MAX_CWD_BASES = 64
+CWD_UNPLACED = f"a `cd` to a run-time directory, or more than {MAX_CWD_BASES} candidate working directories"
+
+
+def cwd_candidates(cwd: Path, changes: list[tuple[str, str]]) -> list[Path] | None:
+    """Every working directory a relative target may resolve against; None when a `cd` is dynamic or the candidates
+    pass MAX_CWD_BASES (CWD_UNPLACED; callers refuse). The parser does not keep `&&`/`;`/subshell scoping, so each
+    `cd` adds a candidate instead of replacing one."""
+    bases = dict.fromkeys([cwd])  # an ordered set: O(1) dedupe, first-seen order kept
+    for change, shell in changes:
         if any(ch in change for ch in "$`%") or change in ("-", "+"):
             return None
-        if change == "~" or change.startswith(("~/", "~\\")):
-            new = [Path.home() / change[2:]]
-        elif Path(change).is_absolute():
-            new = [Path(change)]
-        else:
-            new = [b / change for b in bases]
-        bases += [Path(fs_real(n)) for n in new]
-    return bases
+        new: list[Path] = []
+        # S42 F1: PowerShell's `cd`/`Set-Location`/`Push-Location` are provider cmdlets, so on a POSIX host the
+        # directory has both readings of a cmdlet target; every one is a base, so a write is refused when either is.
+        for reading in ps_path_readings(change, shell, True, WINDOWS):
+            if reading == "~" or reading.startswith(("~/", "~\\")):
+                new.append(Path.home() / reading[2:])
+            elif Path(reading).is_absolute():
+                new.append(Path(reading))
+            else:
+                new += [b / reading for b in bases]
+        for n in new:
+            bases.setdefault(Path(fs_real(n)))
+        if len(bases) > MAX_CWD_BASES:
+            return None  # fail closed, never a partial list
+    return list(bases)

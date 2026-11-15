@@ -923,7 +923,9 @@ def hook(
     env.update(env_extra or {})
     return subprocess.run(
         [sys.executable, "-B", "-I", str(HOOK), "--root", str(root), *args],
-        input=stdin, capture_output=True, text=True, timeout=120, check=False, env=env,
+        # UTF-8 as Claude Code sends it: without `encoding` the test itself encodes with the locale code page
+        # (cp1252 on the CI runner), which cannot encode a BOM.
+        input=stdin, capture_output=True, text=True, encoding="utf-8", timeout=120, check=False, env=env,
     )  # fmt: skip
 
 
