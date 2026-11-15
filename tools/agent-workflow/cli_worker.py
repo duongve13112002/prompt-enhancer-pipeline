@@ -1309,8 +1309,15 @@ def model_usage_summary(result_event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_command(worker: dict[str, Any], message: str, resume: bool) -> list[str]:
-    """The `claude -p` command line of one worker turn (the message is the last argument)."""
+def write_prompt(path: Path, message: str) -> None:
+    """The turn's message as the child's stdin file: UTF-8 bytes as given (text mode would turn `\\n` into `\\r\\n`
+    on Windows), unlimited by the command line."""
+    path.write_bytes(message.encode("utf-8"))
+
+
+def build_command(worker: dict[str, Any], resume: bool) -> list[str]:
+    """The `claude -p` command line of one worker turn. The message goes on stdin, never argv: a Windows command line
+    holds at most 32767 characters, so a long brief on argv fails to launch (WinError 206)."""
     cmd = [
         "claude",
         "-p",
@@ -1347,7 +1354,7 @@ def build_command(worker: dict[str, Any], message: str, resume: bool) -> list[st
         # Claude Code advisor tool (decision 266 pilot): the main model consults this model when it decides to.
         cmd += ["--advisor", worker["advisor"]]
     cmd += ["--resume", worker["session_id"]] if resume else ["--session-id", worker["session_id"]]
-    return [*cmd, message]
+    return cmd
 
 
 def context_of(usage: dict[str, Any]) -> int | None:
@@ -2123,9 +2130,7 @@ def run_codex_turn(
     log = job_dir / f"{log_number:03d}.jsonl"
     result_file = job_dir / f"{log_number:03d}.result.md"
     prompt_file = job_dir / f"{log_number:03d}.prompt.md"
-    prompt_file.write_text(
-        message, encoding="utf-8"
-    )  # stdin, never argv: byte-stable and unlimited by the command line
+    write_prompt(prompt_file, message)
     try:
         policy_file = backend.hook_module().prepare(worker)
         cmd = backend.build_command(worker, resume, result_file)
@@ -2262,7 +2267,9 @@ def run_turn(
     turn = worker.get("turns", 0) + 1
     log = job_dir / f"{log_number:03d}.jsonl"
     result_file = job_dir / f"{log_number:03d}.result.md"
-    cmd = build_command(worker, message, resume)
+    prompt_file = job_dir / f"{log_number:03d}.prompt.md"
+    write_prompt(prompt_file, message)
+    cmd = build_command(worker, resume)
     git_timeout = guard_config()["git_timeout_seconds"]
     audit = open_git_audit(name, worker, log, git_timeout)
     started = time.monotonic()
@@ -2276,6 +2283,7 @@ def run_turn(
             child_env(worker.get("cache_ttl", "1h"), worker.get("autocompact_window")),
             log,
             timeout_minutes,
+            stdin_file=prompt_file,
             leftovers=survivors,
             stop_seconds=git_timeout,
         )

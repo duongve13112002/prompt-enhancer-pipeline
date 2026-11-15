@@ -223,7 +223,7 @@ def test_run_turn_records_the_result_and_clears_the_launcher_fields(
     reg: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cw.save({"w": worker(status="busy", launcher_pid=1, current_log="003.jsonl")})
-    monkeypatch.setattr(cw, "build_command", lambda w, m, r: [sys.executable, "-c", FAKE_CLAUDE])
+    monkeypatch.setattr(cw, "build_command", lambda w, r: [sys.executable, "-c", FAKE_CLAUDE])
     assert cw.run_turn("w", cw.load()["w"], "hi", False, 5, log_number=3) == 0
     stored = cw.load()["w"]
     assert stored["status"] == "idle" and stored["context_tokens"] == 125 and stored["turns"] == 1
@@ -235,7 +235,7 @@ def test_a_launcher_that_cannot_start_the_worker_leaves_it_in_error_not_busy(
     reg: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cw.save({"w": worker(status="busy", launcher_pid=os.getpid(), current_log="001.jsonl")})
-    monkeypatch.setattr(cw, "build_command", lambda w, m, r: ["definitely-not-a-program-xyz"])
+    monkeypatch.setattr(cw, "build_command", lambda w, r: ["definitely-not-a-program-xyz"])
     with pytest.raises(OSError):
         cw.run_turn("w", cw.load()["w"], "hi", False, 5, log_number=1)
     stored = cw.load()["w"]
@@ -254,7 +254,7 @@ def test_an_interrupted_launcher_kills_the_worker_and_records_the_error(
             raise KeyboardInterrupt
 
     cw.save({"w": worker(status="busy", launcher_pid=os.getpid())})
-    monkeypatch.setattr(cw, "build_command", lambda w, m, r: ["x"])
+    monkeypatch.setattr(cw, "build_command", lambda w, r: ["x"])
     monkeypatch.setattr(cw.subprocess, "Popen", lambda *a, **k: FakeProc())
     monkeypatch.setattr(cw, "own_start", lambda pid: 1234.5)
     monkeypatch.setattr(cw, "kill_tree", lambda pid, created: killed.append((pid, created)) or True)
@@ -433,7 +433,7 @@ def test_run_turn_survives_a_malformed_stream_and_records_only_valid_fields(
         "print(json.dumps({'type': 'result', 'result': 'ok', 'total_cost_usd': 0.25}))\n"
     )
     cw.save({"w": worker(status="busy", launcher_pid=os.getpid())})
-    monkeypatch.setattr(cw, "build_command", lambda w, m, r: [sys.executable, "-c", script])
+    monkeypatch.setattr(cw, "build_command", lambda w, r: [sys.executable, "-c", script])
     assert cw.run_turn("w", cw.load()["w"], "hi", False, 5, log_number=1) == 0
     stored = cw.load()["w"]
     assert stored["context_tokens"] == 7 and stored["last_cost_usd"] == 0.25
@@ -453,7 +453,7 @@ def test_run_turn_records_the_worker_pid_while_it_runs_and_clears_it_after(
             return 0
 
     cw.save({"w": worker(status="busy", launcher_pid=os.getpid())})
-    monkeypatch.setattr(cw, "build_command", lambda w, m, r: ["x"])
+    monkeypatch.setattr(cw, "build_command", lambda w, r: ["x"])
     monkeypatch.setattr(cw.subprocess, "Popen", lambda *a, **k: FakeProc())
     assert cw.run_turn("w", cw.load()["w"], "hi", False, 5, log_number=1) == 0
     assert seen == [777777] and "worker_pid" not in cw.load()["w"]
@@ -463,7 +463,7 @@ def test_a_failed_turn_clears_the_worker_pid_too(
     reg: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cw.save({"w": worker(status="busy", launcher_pid=os.getpid(), worker_pid=5)})
-    monkeypatch.setattr(cw, "build_command", lambda w, m, r: ["definitely-not-a-program-xyz"])
+    monkeypatch.setattr(cw, "build_command", lambda w, r: ["definitely-not-a-program-xyz"])
     with pytest.raises(OSError):
         cw.run_turn("w", cw.load()["w"], "hi", False, 5, log_number=1)
     assert set(cw.load()["w"]).isdisjoint({"launcher_pid", "worker_pid"})
@@ -482,7 +482,7 @@ def test_run_turn_does_not_write_into_an_entry_that_was_replaced_meanwhile(
             return 0
 
     cw.save({"w": worker(status="busy", launcher_pid=os.getpid())})
-    monkeypatch.setattr(cw, "build_command", lambda w, m, r: ["x"])
+    monkeypatch.setattr(cw, "build_command", lambda w, r: ["x"])
     monkeypatch.setattr(cw.subprocess, "Popen", lambda *a, **k: FakeProc())
     assert cw.run_turn("w", cw.load()["w"], "hi", False, 5, log_number=1) == 0
     entry = cw.load()["w"]
@@ -502,7 +502,7 @@ def test_the_error_path_does_not_touch_an_entry_of_another_session(
             raise KeyboardInterrupt
 
     cw.save({"w": worker(status="busy", launcher_pid=os.getpid())})
-    monkeypatch.setattr(cw, "build_command", lambda w, m, r: ["x"])
+    monkeypatch.setattr(cw, "build_command", lambda w, r: ["x"])
     monkeypatch.setattr(cw.subprocess, "Popen", lambda *a, **k: FakeProc())
     monkeypatch.setattr(cw, "own_start", lambda pid: 1234.5)
     monkeypatch.setattr(cw, "kill_tree", lambda pid, created: True)

@@ -55,7 +55,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def run(repo: Path, monkeypatch: pytest.MonkeyPatch, *git_args: list[str], name: str = "w") -> tuple[int, dict]:
     entry = {"model": "haiku", "effort": "low", "session_id": "sid", "cwd": str(repo), "status": "busy", "turns": 0}
     cw.save({**cw.load(), name: {**cw.load().get(name, {}), **entry}})  # a later turn keeps the earlier flag
-    monkeypatch.setattr(cw, "build_command", lambda w, m, r: [sys.executable, "-c", fake_turn(*git_args)])
+    monkeypatch.setattr(cw, "build_command", lambda w, r: [sys.executable, "-c", fake_turn(*git_args)])
     rc = cw.run_turn(name, cw.load()[name], "hi", False, 5, log_number=1)
     return rc, cw.load()[name]
 

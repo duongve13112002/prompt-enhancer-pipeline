@@ -210,6 +210,33 @@ def run(repo: Path, monkeypatch: pytest.MonkeyPatch, code: str = "", timeout_min
     return rc, cw.load()["w"]
 
 
+def test_a_message_longer_than_a_windows_command_line_reaches_the_worker_on_stdin(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A 56 KB brief on argv failed to launch with WinError 206 (limit 32767 characters): the message goes on stdin,
+    byte for byte, and never onto the command line."""
+    message = "brief line ạ\n" * 5000  # about 70 000 characters, non-ASCII included
+    seen = tmp_path / "seen.txt"
+    body = (
+        "import json, sys\n"
+        f"open({str(seen)!r}, 'wb').write(sys.stdin.buffer.read())\n"
+        "print(json.dumps({'type': 'result', 'result': 'done'}))\n"
+    )
+    builder_args: list[tuple[Any, ...]] = []
+
+    def command(*args: Any) -> list[str]:
+        builder_args.append(args)
+        return [sys.executable, "-c", body]
+
+    real = cw.build_command({**WORKER_ENTRY, "hooks": {}}, resume=False)
+    cw.save({"w": entry(repo)})
+    monkeypatch.setattr(cw, "build_command", command)
+    assert cw.run_turn("w", cw.load()["w"], message, False, 5, log_number=1) == 0
+    assert seen.read_bytes() == message.encode("utf-8")
+    assert builder_args and all(message not in str(arg) for arg in builder_args[0])
+    assert sum(len(arg) for arg in real) < 32767 // 2  # the real command line stays far below the Windows limit
+
+
 # ---------------------------------------------------------------- F14: the first snapshot is settled
 
 
@@ -416,7 +443,7 @@ def test_notebook_edit_is_not_offered_to_a_worker(monkeypatch: pytest.MonkeyPatc
     """CX6: no primary source shows the Edit/Write denies govern NotebookEdit, so a worker never gets it."""
     monkeypatch.setattr(cw, "venv_python", lambda: "py")
     for hooks in ({}, {"tool_guard": True, "process_guard": True}):
-        cmd = cw.build_command({**WORKER_ENTRY, "hooks": hooks}, "m", resume=False)
+        cmd = cw.build_command({**WORKER_ENTRY, "hooks": hooks}, resume=False)
         offered = cmd[cmd.index("--tools") + 1].split(",")
         denied = cmd[cmd.index("--disallowedTools") + 1].split(",")
         settings = json.loads(cmd[cmd.index("--settings") + 1])

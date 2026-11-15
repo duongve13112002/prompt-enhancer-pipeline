@@ -191,7 +191,7 @@ def test_build_command_passes_the_worker_cwd(monkeypatch: pytest.MonkeyPatch) ->
         "cwd": "D:/p/.tmp/worktrees/m1",
         "hooks": {"tool_guard": True, "git_guard": "merge"},
     }
-    cmd = cw.build_command(worker, "m", resume=False)
+    cmd = cw.build_command(worker, resume=False)
     settings = json.loads(cmd[cmd.index("--settings") + 1])
     assert tg.parse_args(commands(settings, "PreToolUse")[0][1][3:]).git_mode == "worker"
     assert cmd[cmd.index("--settings") + 1].count("worker-merge") == 0

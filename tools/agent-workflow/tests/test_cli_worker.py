@@ -27,23 +27,23 @@ WORKER = {"model": "haiku", "effort": "low", "session_id": "sid-1", "hooks": {}}
 
 
 def test_default_command_has_no_mcp_flags() -> None:
-    cmd = cw.build_command(WORKER, "hello", resume=False)
+    cmd = cw.build_command(WORKER, resume=False)
     assert "--strict-mcp-config" not in cmd and "--mcp-config" not in cmd
-    assert cmd[-1] == "hello" and cmd[cmd.index("--session-id") + 1] == "sid-1"
+    assert cmd[cmd.index("--session-id") + 1] == "sid-1"
 
 
 def test_minimal_mcp_uses_strict_empty_config() -> None:
-    cmd = cw.build_command({**WORKER, "mcp": "minimal"}, "hello", resume=True)
+    cmd = cw.build_command({**WORKER, "mcp": "minimal"}, resume=True)
     assert "--strict-mcp-config" in cmd
     assert json.loads(cmd[cmd.index("--mcp-config") + 1]) == {"mcpServers": {}}
     assert cmd[cmd.index("--resume") + 1] == "sid-1" and "--session-id" not in cmd
 
 
 def test_advisor_flag_only_when_configured() -> None:
-    assert "--advisor" not in cw.build_command(WORKER, "m", resume=False)
-    assert "--advisor" not in cw.build_command({**WORKER, "advisor": None}, "m", resume=False)
-    cmd = cw.build_command({**WORKER, "advisor": "opus"}, "m", resume=True)
-    assert cmd[cmd.index("--advisor") + 1] == "opus" and cmd[-1] == "m"
+    assert "--advisor" not in cw.build_command(WORKER, resume=False)
+    assert "--advisor" not in cw.build_command({**WORKER, "advisor": None}, resume=False)
+    cmd = cw.build_command({**WORKER, "advisor": "opus"}, resume=True)
+    assert cmd[cmd.index("--advisor") + 1] == "opus"
 
 
 def test_model_usage_summary_splits_advisor_cost() -> None:
@@ -163,14 +163,13 @@ def test_nudge_hook_receives_the_window(monkeypatch: pytest.MonkeyPatch) -> None
             "hooks": {"ctx_nudge": "170000", "loop_window": 5},
             "autocompact_window": 230000,
         },
-        "m",
         resume=True,
     )
     args = json.loads(cmd[cmd.index("--settings") + 1])["hooks"]["PostToolUse"][0]["hooks"][0][
         "args"
     ]
     assert args[args.index("--autocompact-window") + 1] == "230000"
-    legacy = cw.build_command({**WORKER, "hooks": {"ctx_nudge": "170000"}}, "m", resume=True)
+    legacy = cw.build_command({**WORKER, "hooks": {"ctx_nudge": "170000"}}, resume=True)
     assert (
         "--autocompact-window"
         not in json.loads(legacy[legacy.index("--settings") + 1])["hooks"]["PostToolUse"][0][

@@ -338,7 +338,7 @@ def test_run_turn_records_the_worker_creation_time_and_stops_only_that_identity(
             raise AssertionError("the identity is recorded: the verified tree kill must be used")
 
     cw.save({"w": worker()})
-    monkeypatch.setattr(cw, "build_command", lambda w, m, r: ["x"])
+    monkeypatch.setattr(cw, "build_command", lambda w, r: ["x"])
     monkeypatch.setattr(cw.subprocess, "Popen", lambda *a, **k: FakeProc())
 
     def fake_kill(pid: int, created: float | None) -> bool:
