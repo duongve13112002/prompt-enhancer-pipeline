@@ -1,9 +1,9 @@
 # User standing rules (injected whole at every PM session start)
 
-Only rules the user stated, one per line: `Sxx | rule | source | check`. `remembered only` = no mechanical gate yet. Decisions: `tasks/DECISIONS_INDEX.md`. Rules already in AGENTS.md are not repeated. S01 to S33 came from the user's earlier project ("seed rules" or a date before 2026-11-11); S05 and S08 to S12 are unused here; IDs are never reused.
+Only rules the user stated, one per line: `Sxx | rule | source | check`. `remembered only` = no mechanical gate yet. Rules already in AGENTS.md are not repeated. "Seed rules" came from the user's earlier project; IDs are never reused.
 
-S01 | Never assume; unclear means ask. Ask only what is the user's: new product meaning, overriding a decision, spend beyond budget | seed rules 2026-10-22 | remembered only
-S02 | Do every decidable next step yourself; the user must not chase | seed rules 2026-10-11 "đừng để tui giục" | remembered only
+S01 | Never assume: test on a real run before building on it (decision 99); unclear means ask. Ask only what is the user's: new product meaning, overriding a decision, spend beyond budget | seed rules 2026-10-22 | remembered only
+S02 | Do every decidable next step yourself; the user must not chase; while away work every unblocked task until none is left (decision 95) | seed rules 2026-10-11 "đừng để tui giục" | remembered only
 S03 | Never re-ask a settled point: search DECISIONS_INDEX, the archive and `recall.py search` first | seed rules | `question_guard.py` (warns)
 S04 | Outcome-deciding defaults (route, verifier, deadline, fail-closed) go to the user with an example BEFORE an expensive run; smoke one job and read its record | seed rules 2026-10-18 | `run_approval_gate.py check`
 S06 | Questions to the user: recommendation and example per question, end with "Việc bạn cần làm:" | seed rules 2026-10-11 | `question_guard.py` (warns)

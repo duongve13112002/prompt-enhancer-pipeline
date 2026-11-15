@@ -5,7 +5,7 @@ Release 0.2, 2026-11-14. **The single rule source** for Claude Code (through `@A
 ## Gates
 
 > [!IMPORTANT]
-> **Code starts on the user's explicit command** `BẮT ĐẦU IMPLEMENTATION <task>`, for every code task of the plan (T-005 onward and the tooling tasks T-020 to T-026). Read-only and documentation tasks of the plan (T-002 to T-004) start when the user approves their Step 0 plan with any message. Inside a started task the PM approves each worker's Step 0, and sends the user any plan that touches product meaning, permissions or spend.
+> **Code starts on the user's explicit command** `BẮT ĐẦU IMPLEMENTATION <task>`, or for a plan code task once its dependencies are accepted (decisions 96, 98). Read-only and documentation tasks start when the user approves their Step 0. Inside a started task the PM approves each worker's Step 0, and sends the user any plan that touches product meaning, permissions or spend.
 > **Before a runtime edit** complete `Configuration impact` of the [task template](.agents/policy/AGENT_TASK_TEMPLATE.md); **before completion** give its row-by-row `Configuration audit` with tests. A missing row, ignored setting, hidden default or unclassified literal fails the task.
 
 ## 1. Language

@@ -32,7 +32,7 @@ Order: T-024, T-025 and T-026 come before the first parallel code wave (they mak
 
 | ID | Task | Kind | R-IDs | Needs user go |
 | --- | --- | --- | --- | --- |
-| T-020 | Rebind the test-set rules in `brief_lint.py` to this repository's suites, with tests; starts after T-024 is accepted, as does T-021 (decision 80) | code | R-021 | yes |
+| T-020 | Rebind the test-set rules in `brief_lint.py` to this repository's suites, with tests; started 2026-11-15 alongside T-024 (decision 97); T-021 starts after T-024 is accepted (decision 80) | code | R-021 | yes |
 | T-021 | Brief order (context first, task last) in `brief_lint.py`; scope-guard hook that blocks edits outside a brief's Scope; report lint that requires the done-check output and evidence pointers | code | R-021 | yes |
 | T-022 | CI: GitHub Actions on the latest Ubuntu and Windows; the workflow started by manual dispatch on a pushed commit (decision 77); the visibility-window script with the always-run return to private; a session-start check that the repository is private. Starts by re-reading the sources of [N134](../docs/note/N134-github-visibility-and-actions.md) ([docs/ci.md](../docs/ci.md)) | code | R-025 | yes |
 | T-023 | Baseline of rule violations and tokens per accepted task, then the comparison after T-020 and T-021 | run | R-021 | no |
