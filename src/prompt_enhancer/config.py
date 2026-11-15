@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path, PureWindowsPath
+import re
 
 from jsonschema import Draft202012Validator, exceptions
 import yaml
@@ -39,8 +40,13 @@ COMMAND_READS = {
     'kb gc': ('storage.kb_store', 'storage.lock', 'storage.table_format', 'sync.gc.retention', 'sync.snapshots.keep'),
     'kb audit': ('storage.kb_store', 'storage.lock'),
     'kb show': ('storage.kb_store', 'storage.lock'),
-    'profile register': ('profiles.root', 'vlm.roles.manifest_drafter'),
-    'profile check': ('profiles.root',),
+    # P (T-012): register sends `creativity` to the drafter as policy data; check also reads the keys the
+    # manifest's conflicts cite, which are known only after the manifest is read (profiles.py), and
+    # `storage.lock` bounds the wait for the bundle lock that check (fix round 1, F1) and register's
+    # publication (fix round 2) hold.
+    'profile register': ('profiles.root', 'profiles.exclude', 'creativity', 'vlm.roles.manifest_drafter',
+                         'storage.lock'),
+    'profile check': ('profiles.root', 'profiles.exclude', 'storage.lock'),
     'enhance once': ('profiles', 'rag', 'vision', 'candidates', 'embedding', 'planner', 'resolution',
                      'clarification', 'creativity', 'edit', 'assembly', 'writer', 'validation', 'runtime',
                      'storage.data_root', 'storage.table_format',
@@ -154,6 +160,162 @@ class _StrictSafeLoader(yaml.SafeLoader):
         return super().flatten_mapping(node)
 
 
+class _MetaLoader(_StrictSafeLoader):
+    """The one loader for admin-written profile `meta` ([META] and the manifest field; T-012 F3).
+
+    A subset of the YAML 1.2 core schema. Typed: `true` and `false`; decimal integers and floats without a
+    leading zero; null (refused by its callers). Everything else stays the string as written: `yes`, `no`, `on`,
+    `off`, `True`, dates, `007`, `0x1F`, `1_000`, `12:30`. The class owns its resolver table, so SafeLoader's
+    YAML 1.1 table and the global one stay unchanged; duplicate and non-string keys are still refused.
+    """
+
+    yaml_implicit_resolvers = {}  # own table: `add_implicit_resolver` appends here, not to SafeLoader's
+
+
+# Protocol-bound YAML 1.2 core syntax (spec 1.2.2, section 10.3.2), narrowed as the docstring says.
+_MetaLoader.add_implicit_resolver('tag:yaml.org,2002:bool', re.compile(r'^(?:true|false)$'), list('tf'))
+_MetaLoader.add_implicit_resolver('tag:yaml.org,2002:int', re.compile(r'^[-+]?(?:0|[1-9][0-9]*)$'),
+                                  list('-+0123456789'))
+_MetaLoader.add_implicit_resolver(
+    'tag:yaml.org,2002:float',
+    re.compile(r'^(?:[-+]?(?:\.[0-9]+|(?:0|[1-9][0-9]*)(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?'
+               r'|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$'),
+    list('-+0123456789.'))
+_MetaLoader.add_implicit_resolver('tag:yaml.org,2002:null', re.compile(r'^(?:~|null|Null|NULL|)$'),
+                                  ['~', 'n', 'N', ''])
+
+
+# Protocol-bound: line breaks for YAML 1.1 (PyYAML: installed yaml/scanner.py scan_line_break folds a raw NEL
+# into LF) but ordinary text for YAML 1.2, so their meaning depends on the reader (T-012 fix round 2).
+_AMBIGUOUS_BREAKS = '\x85\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}'  # NEL, LS, PS
+_AMBIGUOUS_BREAK = re.compile('[' + _AMBIGUOUS_BREAKS + ']')
+_ESCAPES = dict(zip(_AMBIGUOUS_BREAKS, ('\\N', '\\L', '\\P')))  # the double-quoted YAML escapes
+# What PyYAML raises besides YAMLError on an input it cannot represent: `int('1x')` under `!!int`, `chr()` of an
+# escape above U+10FFFF (ValueError, OverflowError), and composition deeper than the interpreter's stack.
+_YAML_FAILURES = (yaml.YAMLError, ValueError, OverflowError, RecursionError)
+
+
+def _yaml_text(loader):
+    """Refuse a raw NEL, LS or PS anywhere in the text; the escapes `\\N`, `\\L` and `\\P` stay accepted.
+
+    A bytes or str input is decoded whole when the loader is built (installed yaml/reader.py, `__init__` and
+    `determine_encoding`), so `loader.buffer` is the full text plus a final NUL.
+    """
+    match = _AMBIGUOUS_BREAK.search(loader.buffer)
+    if match:
+        index = match.start()
+        line, column = loader.buffer.count('\n', 0, index) + 1, index - loader.buffer.rfind('\n', 0, index)
+        raise yaml.YAMLError(f'raw U+{ord(match.group()):04X} at line {line} column {column}: YAML 1.1 reads it as '
+                             f'a line break and YAML 1.2 as text; write the escape {_ESCAPES[match.group()]} inside '
+                             'double quotes')
+
+
+def _acyclic(node):
+    """Refuse a recursive alias (a collection inside itself has no JSON value); iterative, so depth is no limit."""
+    if not isinstance(node, yaml.CollectionNode):
+        return
+    def children(item):
+        return iter([part for pair in item.value for part in pair] if isinstance(item, yaml.MappingNode)
+                    else item.value)
+    active, done, stack = {id(node)}, set(), [(node, children(node))]
+    while stack:
+        current, pending = stack[-1]
+        for child in pending:
+            if not isinstance(child, yaml.CollectionNode) or id(child) in done:
+                continue
+            if id(child) in active:
+                raise yaml.constructor.ConstructorError(None, None, 'recursive alias: a collection contains itself',
+                                                        child.start_mark)
+            active.add(id(child))
+            stack.append((child, children(child)))
+            break
+        else:
+            stack.pop()
+            active.discard(id(current))
+            done.add(id(current))
+
+
+def _yaml_failure(error, path):
+    if isinstance(error, yaml.YAMLError):
+        detail = str(error)
+    elif isinstance(error, RecursionError):
+        detail = 'nested too deeply to read'
+    else:
+        detail = f'cannot construct a value (an escape or a tagged literal is out of range): {error}'
+    return ConfigurationError(f'{path}: file: {detail}')
+
+
+def _load_yaml(raw, loader_class, path):
+    """Load one YAML document with `loader_class`, refusing input it would not read faithfully (fix round 2).
+
+    The admin-owned P files ([META], golden cases) read through here; the manifest through `_parse_manifest`.
+    """
+    try:
+        loader = loader_class(raw)
+        try:
+            _yaml_text(loader)
+            node = loader.get_single_node()
+            _acyclic(node)
+            return None if node is None else loader.construct_document(node)
+        finally:
+            loader.dispose()
+    except _YAML_FAILURES as error:
+        raise _yaml_failure(error, path) from error
+
+
+def _parse_manifest(raw, path):
+    """Parse manifest bytes: the schema-typed fields as before, `meta` under the META scalar contract.
+
+    The top-level `meta` value node is constructed only by `_MetaLoader` and every other node only by
+    `_StrictSafeLoader`, so no other field changes meaning and a META string such as `<<` stays a string.
+    The `meta` pair is split off by its position, never by node identity: an alias elsewhere may share the
+    node, and that field keeps its value under its own reading (fix round 2, RT1).
+    """
+    def split(loader):
+        node = loader.get_single_node()
+        if not isinstance(node, yaml.MappingNode):
+            return node, [], None, []
+        _acyclic(node)
+        pairs = node.value
+        found = [index for index, (key, _) in enumerate(pairs) if isinstance(key, yaml.ScalarNode)
+                 and key.value == 'meta' and key.tag == 'tag:yaml.org,2002:str']
+        if len(found) != 1:
+            return node, found, None, []
+        index = found[0]
+        node.value = pairs[:index] + pairs[index + 1:]
+        return node, found, pairs[index][1], [key.value for key, _ in pairs[:index] if isinstance(key, yaml.ScalarNode)]
+
+    try:
+        strict, typed = _StrictSafeLoader(raw), _MetaLoader(raw)
+        try:
+            _yaml_text(strict)
+            node, found, _, before = split(strict)
+            if len(found) <= 1:
+                result = None if node is None else strict.construct_document(node)
+                _, _, meta_node, _ = split(typed)
+                meta = None if meta_node is None else typed.construct_document(meta_node)
+        finally:
+            strict.dispose()
+            typed.dispose()
+    except _YAML_FAILURES as error:
+        raise _yaml_failure(error, path) from error
+    if len(found) > 1:
+        raise ConfigurationError(f'{path}: meta: duplicate key')
+    metas = found
+    if not isinstance(result, dict):
+        raise ConfigurationError(f'{path}: root: expected a mapping')
+    if 'meta' in result:
+        raise ConfigurationError(f'{path}: meta: expected a top-level meta mapping, not a merged one')
+    if metas:
+        if isinstance(meta, dict) and any(isinstance(v, float) and not math.isfinite(v) for v in meta.values()):
+            raise ConfigurationError(f'{path}: meta: expected finite numbers')
+        # Keep `meta` where the admin wrote it, so a rewrite by `confirm_profile` does not move it.
+        head = [key for key in result if key in before]
+        result = {**{key: result[key] for key in head}, 'meta': meta,
+                  **{key: value for key, value in result.items() if key not in head}}
+    return result
+
+
 def _read_yaml(path):
     try:
         result = yaml.load(path.read_bytes(), Loader=_StrictSafeLoader)
@@ -172,7 +334,8 @@ def _cached_schema(path, mtime_ns, size):
     return result
 
 
-def _schema(root, schema_id):
+def _schema_path(root, schema_id):
+    """The validated, contained file of one schema id (shared with P, which hashes the file's bytes)."""
     try:
         _validate_segments(schema_id, root, 'schema_id', allow_navigation=False)
     except ConfigurationError as error:
@@ -180,9 +343,13 @@ def _schema(root, schema_id):
     if not isinstance(schema_id, str) or not schema_id or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789_.' for c in schema_id):
         raise ConfigurationError(f'invalid schema id {schema_id!r}')
     try:
-        path = _inside(root / 'contracts' / 'schemas' / (schema_id + '.schema.json'), root)
+        return _inside(root / 'contracts' / 'schemas' / (schema_id + '.schema.json'), root)
     except ConfigurationError as error:
         raise ConfigurationError(str(error).partition(': path: ')[2] or str(error)) from error
+
+
+def _schema(root, schema_id):
+    path = _schema_path(root, schema_id)
     try:
         stat = path.stat()
         return _cached_schema(path, stat.st_mtime_ns, stat.st_size)
@@ -668,7 +835,11 @@ def load_profile(path, *, project_root=None):
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
     path = _inside(path, root)
     manifest_path = _inside(path / 'manifest.yaml', root)
-    manifest = _read_yaml(manifest_path)
+    try:
+        raw = manifest_path.read_bytes()
+    except OSError as error:
+        raise ConfigurationError(f'{manifest_path}: file: {error}') from error
+    manifest = _parse_manifest(raw, manifest_path)
     if type(manifest.get('schema_version')) is not int or manifest['schema_version'] != 1:
         raise ConfigurationError(f'{manifest_path}: schema_version: expected 1')
     try:

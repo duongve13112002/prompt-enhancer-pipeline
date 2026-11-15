@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import shutil
 
 import jsonschema
 import pytest
@@ -45,18 +46,31 @@ def test_real_full_configuration_schema():
     assert not errors, [item for error in errors for item in leaves(error) if 'is not one of' not in item[1]][:20]
 
 
-def test_real_loader_examples():
+def test_real_loader_examples(tmp_path):
     base = ROOT / 'configs/enhancer.example.yaml'
     dev = ROOT / 'configs/enhancer.dev.example.yaml'
     overlay = ROOT / 'configs/overlays/deploy-vllm.example.yaml'
-    # The examples keep storage.lock at deploy_required, so a store command refuses them; profile check reads no storage.
-    for args in ((base,), (dev,), (base, overlay), (overlay,)):
-        with pytest.raises(ConfigurationError, match='storage.lock.timeout_s: unresolved sentinel deploy_required'):
-            load_config(args[0], 'kb status', overlay=args[1] if len(args) > 1 else None)
-    full = load_config(base, 'profile check')
-    smoke = load_config(dev, 'profile check')
-    deployed = load_config(base, 'profile check', overlay=overlay)
-    direct_overlay = load_config(overlay, 'profile check')
+    # The examples keep storage.lock at deploy_required, so a store command and `profile check` (which bounds its
+    # check-lock wait by storage.lock since T-012 fix round 1) refuse them.
+    for command in ('kb status', 'profile check'):
+        for args in ((base,), (dev,), (base, overlay), (overlay,)):
+            with pytest.raises(ConfigurationError, match='storage.lock.timeout_s: unresolved sentinel deploy_required'):
+                load_config(args[0], command, overlay=args[1] if len(args) > 1 else None)
+    # The whole example lineage still loads once the deploy-time lock wait is set (test-only values, scratch copy).
+    project = tmp_path / 'project'
+    shutil.copytree(ROOT / 'configs', project / 'configs')
+    shutil.copytree(ROOT / 'contracts/schemas', project / 'contracts/schemas')
+    line = 'lock: {timeout_s: deploy_required, poll_s: deploy_required}'
+    for name in ('enhancer.example.yaml', 'overlays/deploy-vllm.example.yaml'):  # both set the deploy-time wait
+        copied = project / 'configs' / name
+        text = copied.read_text(encoding='utf-8')
+        assert text.count(line) == 1
+        copied.write_text(text.replace(line, 'lock: {timeout_s: 5, poll_s: 0.05}'), encoding='utf-8')
+    paths = [project / path.relative_to(ROOT) for path in (base, dev, overlay)]
+    full = load_config(paths[0], 'profile check', project_root=project)
+    smoke = load_config(paths[1], 'profile check', project_root=project)
+    deployed = load_config(paths[0], 'profile check', overlay=paths[2], project_root=project)
+    direct_overlay = load_config(paths[2], 'profile check', project_root=project)
     assert full['storage']['kb_store'] == 'data/kb'
     assert smoke['vision']['max_image_side'] == 1024
     assert deployed['vlm']['backends']['main']['unsupported_param_policy'] == 'warn'

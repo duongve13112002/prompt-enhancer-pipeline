@@ -175,6 +175,7 @@ def test_loaded_profile_composes_role_client(tmp_path, project_root, monkeypatch
     thread.start()
     try:
         profile = yaml.safe_load((ROOT / 'configs' / 'enhancer.example.yaml').read_bytes())
+        profile['storage']['lock'] = {'timeout_s': 5, 'poll_s': 0.05}  # test-only: `profile register` reads it (T-012)
         backend = profile['vlm']['backends']['main']
         backend['engine'] = {'name': 'llama_cpp', 'version': 'test-version'}
         backend.update(base_urls=[f'http://127.0.0.1:{server.server_port}'],
@@ -357,6 +358,7 @@ def test_cloud_budget_is_shared_by_roles_from_same_run(tmp_path, project_root, p
     thread.start()
     try:
         profile = yaml.safe_load((ROOT / 'configs' / 'enhancer.example.yaml').read_bytes())
+        profile['storage']['lock'] = {'timeout_s': 5, 'poll_s': 0.05}  # test-only: `profile register` reads it (T-012)
         local = profile['vlm']['backends']['main']
         local['engine'] = {'name': 'llama_cpp', 'version': 'test-version'}
         local.update(base_urls=[f'http://127.0.0.1:{server.server_port}'],

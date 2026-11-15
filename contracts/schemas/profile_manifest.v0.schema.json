@@ -181,6 +181,12 @@
           "conflicts_with": {
             "type": "string"
           },
+          "config_keys": {
+            "description": "Dotted configuration keys the rule conflicts with; empty when it conflicts with a fixed pipeline rule. config_wins requires at least one.",
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          },
           "decision": {
             "enum": [
               "undecided",

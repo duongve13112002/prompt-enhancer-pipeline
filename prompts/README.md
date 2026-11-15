@@ -1,6 +1,6 @@
 # Prompt contracts
 
-These are contracts for the runtime prompts, not final prompt text: no prompt is written yet. Runtime prompts are English (AGENTS.md section 1) and versioned by `prompt_id`; a changed prompt is a new id, and every artifact built with the old id loses its key ([execution](../docs/execution.md), R-017).
+These are contracts for the runtime prompts; a prompt marked `written` has its text in `prompts/<prompt_id>.txt`, the others have none yet. Runtime prompts are English (AGENTS.md section 1) and versioned by `prompt_id`; a changed prompt is a new id, and every artifact built with the old id loses its key ([execution](../docs/execution.md), R-017).
 
 Rules for every prompt:
 
@@ -37,9 +37,13 @@ Role `card_builder`. Placeholders: `{concept_name}`, `{observations}`, `{curated
 
 Role `alias_generator`. Placeholders: `{concept_name}`, `{description}`, `{card_summary}`. Delimited data: all three. Asks for names in other languages and scripts and common spellings. Output schema: `alias_set.v0`. A change invalidates the aliases and the candidate experiments E1 and E4.
 
-## `manifest_drafter_v0` (P), status: not written
+## `manifest_drafter_v0` (P), status: written
 
-Role `manifest_drafter`. Placeholder: `{system_prompt_text}` as delimited data, read once at registration. Drafts the manifest and the conflict list; the admin confirms. Output schema: `profile_manifest.v0`. A change affects only later drafts; a confirmed manifest stays as the admin signed it.
+Role `manifest_drafter`. Text: [manifest_drafter_v0.txt](manifest_drafter_v0.txt), the system message, loaded as `prompts/<prompt_id>.txt`. The user message is one JSON object rendered by code, so the admin's text is a single JSON string and cannot leave its delimiter (R-026): `profile_id`, `system_prompt_text`, `structure` (template format, `[META]` values and `{{name}}` placeholders found structurally) and `pipeline_policy.configuration` (the resolved `creativity` block keyed by dotted path). Read once at registration. Drafts the manifest and the conflict list; the admin confirms. Output schema: `profile_manifest.v0`. The fixed rules the prompt lists come from R-001 (intent survives unchanged), the missing-evidence rule (P-profiles method step 3; S5 `identity_grounding`; R-010) and R-026 (knowledge and image text are data). A change affects only later drafts; a confirmed manifest stays as the admin signed it.
+
+## `runtime_addendum_v0` (P, read by S4), status: written
+
+Not a role prompt: the header text of the runtime addendum, [runtime_addendum_v0.txt](runtime_addendum_v0.txt). Code appends one JSON line listing each conflict decided `config_wins` with its id, its `profile_rule` and the resolved values of its `config_keys`. Versioned by this id plus the sha256 of the rendered text; `profile check` records the hash, and a different rendering at request time needs a new check. A change invalidates every activation that has a `config_wins` conflict.
 
 ## `scenario_generator_v0` (G), status: not written
 

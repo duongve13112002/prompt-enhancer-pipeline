@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "golden_case.v0",
+  "title": "Profile golden test case",
+  "$comment": "Draft v0. One file golden/<id>.yaml per id in the manifest's golden_tests (docs/stages/P-profiles.md). The v0 pass rule is weak on purpose: the envelope is valid against response_envelope.v0 and its status is in expect.status. Content checks per conflict come with the S5 validators and the verifier (T-015), and this rule may be tightened then.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "covers", "request", "expect"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {"type": "string", "minLength": 1},
+    "covers": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["task", "prompt", "source_image"],
+      "properties": {
+        "task": {"enum": ["generate", "edit"]},
+        "prompt": {"type": "string", "minLength": 1},
+        "source_image": {"type": "string", "minLength": 1, "description": "a file name under golden/, or none"}
+      }
+    },
+    "expect": {
+      "type": "object", "additionalProperties": false, "required": ["status"],
+      "properties": {
+        "status": {"type": "array", "minItems": 1, "uniqueItems": true,
+                   "items": {"enum": ["success", "repaired", "degraded", "needs_clarification", "failed"]}}
+      }
+    }
+  }
+}

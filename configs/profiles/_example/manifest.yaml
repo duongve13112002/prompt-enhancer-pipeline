@@ -31,21 +31,25 @@ conflicts:                              # found by `profile check`; each needs t
   - id: c1
     profile_rule: "Populate underspecified scenes"
     conflicts_with: "creativity limits (creativity.allowed_additions, creativity.max_new_entities)"
+    config_keys: [creativity.allowed_additions, creativity.max_new_entities]
     decision: undecided
     decided_by_admin: false
   - id: c2
     profile_rule: "Built environments need text everywhere"
     conflicts_with: "a user's request for no text"
+    config_keys: [creativity.max_added_text_blocks]
     decision: undecided
     decided_by_admin: false
   - id: c3
     profile_rule: "Banned hedge phrasings / pick one and commit"
     conflicts_with: "leaving out identity facts that have no evidence"
+    config_keys: []                     # a fixed pipeline rule, not a configuration key
     decision: undecided
     decided_by_admin: false
   - id: c4
     profile_rule: "Quoted strings become text elements"
     conflicts_with: "quoted names in structured input"
+    config_keys: []                     # a fixed pipeline rule, not a configuration key
     decision: undecided
     decided_by_admin: false
 golden_tests: []                        # test case ids that must pass before activation
