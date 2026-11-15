@@ -194,8 +194,9 @@ The tool therefore matches the fingerprint itself, in one scan run.
 
 | Fingerprint (commit:file:rule:line) | Reason | Decision |
 | --- | --- | --- |
-| `1adb1eda51b4…:tools/agent-workflow/tests/test_recall.py:generic-api-key:169` | Test data: the input `"api_key = abcd1234efgh5678"` of `test_redact_removes_each_secret_class`, which checks that `recall.redact` removes it | PM decision pending user review (decision 94), 2026-11-15 |
+| `1adb1eda51b4…:tools/agent-workflow/tests/test_recall.py:generic-api-key:169` | Test data: the fake API-key assignment that `test_redact_removes_each_secret_class` feeds to `recall.redact` to check that it is removed | PM decision pending user review (decision 94), 2026-11-15 |
 | `1adb1eda51b4…:tools/agent-workflow/tests/test_recall.py:private-key:180` | Test data: a stub key block in `test_redact_private_spans_and_key_blocks_keep_line_numbers`, which checks that `recall.redact` removes key blocks | PM decision pending user review (decision 94), 2026-11-15 |
+| `e9b2781a19ff…:docs/ci.md:generic-api-key:197` | Documentation, not a secret: this table's first row quoted the same fake test value in commit `e9b2781`; the row now describes it instead, so later commits do not carry it | PM decision pending user review (decision 94), 2026-11-15 |
 
 **Real run with the baseline** (2026-11-15, read-only, commit `6b33f75`):
 - `findings`: 2 findings, both in the baseline; none outside it, none stale.

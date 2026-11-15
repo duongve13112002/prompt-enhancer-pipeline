@@ -5,7 +5,7 @@
     "StartLine": 169,
     "Commit": "1adb1eda51b41666aa4d5e17ba9ad127c8adccca",
     "Fingerprint": "1adb1eda51b41666aa4d5e17ba9ad127c8adccca:tools/agent-workflow/tests/test_recall.py:generic-api-key:169",
-    "Reason": "Test data, not a secret: the literal input \"api_key = abcd1234efgh5678\" of test_redact_removes_each_secret_class, which checks that recall.redact removes it.",
+    "Reason": "Test data, not a secret: the fake API-key assignment that test_redact_removes_each_secret_class feeds to recall.redact to check that it is removed.",
     "Decision": "PM decision pending user review (decision 94), T-022 round 4, 2026-11-15"
   },
   {
@@ -16,5 +16,14 @@
     "Fingerprint": "1adb1eda51b41666aa4d5e17ba9ad127c8adccca:tools/agent-workflow/tests/test_recall.py:private-key:180",
     "Reason": "Test data, not a secret: a stub key block (BEGIN RSA PRIVATE KEY, MIIx, yy) in test_redact_private_spans_and_key_blocks_keep_line_numbers, which checks that recall.redact removes key blocks.",
     "Decision": "PM decision pending user review (decision 94), T-022 round 4, 2026-11-15"
+  },
+  {
+    "RuleID": "generic-api-key",
+    "File": "docs/ci.md",
+    "StartLine": 197,
+    "Commit": "e9b2781a19fffcc6a7c53c3fab298d572e4ff5d3",
+    "Fingerprint": "e9b2781a19fffcc6a7c53c3fab298d572e4ff5d3:docs/ci.md:generic-api-key:197",
+    "Reason": "Documentation, not a secret: the baseline table in docs/ci.md quoted the fake test value of the first entry in commit e9b2781; later commits describe it instead of quoting it.",
+    "Decision": "PM decision pending user review (decision 94), first CI window, 2026-11-15"
   }
 ]

@@ -48,7 +48,7 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
     - The Sonnet re-review passed, and so did its check of fix round 2.
     - Codex combined T-007 with T-009. The test profile is now built from `enhancer.example.yaml` plus a shared `tests/conftest.py` helper.
     - Main pipeline suite: `1824 passed, 31 skipped`. A Pillow deprecation warning remains: saving `I` mode PNGs, at `model_image.py:80`, is a T-009 follow-up.
-  - **T-022 (CI): accepted 2026-11-15 21:50 after fix round 4;** the row, with its P3 follow-ups (hard-linked ledger, hold only the leaf, `docs/ci.md:66` text), is in [status-history](archive/status-history-2026-11-14.md).
+  - **T-022 (CI): accepted 2026-11-15 21:50 after fix round 4;** the row, with its P3 follow-ups (hard-linked ledger, hold only the leaf, `docs/ci.md:66` text), is in [status-history](archive/status-history-2026-11-14.md). The first window (22:15) refused before any change: `docs/ci.md:197` of `e9b2781` quoted the fake test key. **PM decision pending user review:** that line is baselined and the text now describes the value instead.
   - **T-026 (quota): accepted and pushed (`925e930`);** details are in [status-history](archive/status-history-2026-11-14.md).
   - **S42 Antigravity runner: accepted and pushed.**
     - Round 2 closed RF1 and RF2.
