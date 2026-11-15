@@ -3,6 +3,7 @@
 Kind: feature
 R-IDs: R-015, R-004
 Task file: tasks/active/T-005-profile-loader.md
+Approach note: .tmp/T-005/research.md (the scout's research and hazard note, in the worktree)
 
 Started 2026-11-15 (decisions 87 and 95); Codex implements, Claude reviews (decision 91); while the user is away a product-meaning question gets the PM's conservative, reversible choice, logged as a PM decision pending user review, unless it changes a requirement (decision 94).
 
