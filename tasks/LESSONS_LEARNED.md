@@ -78,4 +78,5 @@ Read the Rules digest before every task (AGENTS.md section 9). Each line is a pr
     - tracked text writes `<project>` or a relative path, never the absolute checkout path;
     - the scan should also flag the checkout's own absolute path in tracked text (S42 fix queued).
   - **Evidence:** `.tmp/cli-jobs/t022-opus-dev/002.result.md`; `git grep` for the checkout's absolute path.
+  - **Recurred** at the T-007 push (`b4eb856`): 11 paths in the T-007 task file and 1 in T-009's. Two workers had called these failures "already fixed in main". Added rules: grep the staged diff for the absolute root before each commit, and check a worker's "known or fixed" claim in main.
 - 2026-11-14, the T-002 worker spent its single authorized `nvidia-smi` call on `--help`, leaving the GPU facts unknown. Root cause: the brief authorized "one call" without naming it. Prevention: a brief that grants a limited command names the exact command line. Evidence: `.tmp/T-002/fix-01.md`.

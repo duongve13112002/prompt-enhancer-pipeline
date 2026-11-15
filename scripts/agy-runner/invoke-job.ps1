@@ -6,7 +6,7 @@ Run from the operator's normal (non-elevated) account after setup.ps1.
 .DESCRIPTION
 The workspace must already exist under .tmp/agy-work/<Workspace> and hold only the files the job
 needs: a copy of the relevant sources and tests, never .secrets/. The prompt is copied into
-.tmp/agy-jobs, then the AgyRunner task starts. The result is .tmp/agy-work/_results/<JobId>.json
+.tmp/agy-jobs, then this project's runner task (AgyRunner-<leaf>-<hash8>, agy-lib.ps1) starts. The result is .tmp/agy-work/_results/<JobId>.json
 (agy's JSON reply), with .stderr.txt, and .error.txt when the wrapper refused the job.
 
 Only one job runs at a time. A second start while one is running is ignored by the task, so the
@@ -24,7 +24,7 @@ param(
     [ValidateRange(1, 110)][int]$TimeoutMinutes = 30,
     [ValidatePattern('^$|^[0-9a-f-]{36}$')][string]$Conversation = '',
     [string]$ProjectRoot = '',
-    [string]$TaskName = 'AgyRunner',
+    [string]$TaskName = '',
     [string]$ExpectFile = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -32,15 +32,21 @@ $ErrorActionPreference = 'Stop'
 Assert-AgyExpectFile -ExpectFile $ExpectFile
 # $PSScriptRoot is empty inside param defaults on Windows PowerShell 5.1, so resolve here.
 if (-not $ProjectRoot) { $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path }
+if (-not $TaskName) { $TaskName = Get-AgyRunnerTaskName -ProjectRoot $ProjectRoot }
+Assert-AgyTaskNameAllowed -TaskName $TaskName
+Assert-AgyRunnerBinding -ProjectRoot $ProjectRoot -TaskName $TaskName
 $jobs = Join-Path $ProjectRoot '.tmp\agy-jobs'
 $results = Join-Path $ProjectRoot '.tmp\agy-work\_results'
 $ws = Join-Path $ProjectRoot ".tmp\agy-work\$Workspace"
-if (-not (Test-Path -LiteralPath $ws -PathType Container)) { throw "Create the workspace first: $ws" }
-if (Test-Path -LiteralPath (Join-Path $ws '.secrets')) { throw 'The workspace must not contain .secrets.' }
+# Fail-closed reads (Test-AgyPathExists): an unreadable path stops the job instead of looking absent.
+if (-not (Test-AgyPathExists -Path $ws -PathType Container)) { throw "Create the workspace first: $ws" }
+if (Test-AgyPathExists -Path (Join-Path $ws '.secrets')) { throw 'The workspace must not contain .secrets.' }
 Assert-AgyIdle -ProjectRoot $ProjectRoot -TaskName $TaskName
 
+# A leftover result that cannot be removed would be read as this job's result, so a failed removal stops here.
 foreach ($suffix in '.json', '.stderr.txt', '.error.txt', '.done') {
-    Remove-Item -LiteralPath (Join-Path $results "$JobId$suffix") -Force -ErrorAction SilentlyContinue
+    $old = Join-Path $results "$JobId$suffix"
+    if (Test-AgyPathExists -Path $old) { Remove-Item -LiteralPath $old -Force -ErrorAction Stop }
 }
 $promptName = "prompt-$JobId.md"
 Copy-Item -LiteralPath $PromptPath -Destination (Join-Path $jobs $promptName) -Force
@@ -51,18 +57,19 @@ Copy-Item -LiteralPath $PromptPath -Destination (Join-Path $jobs $promptName) -F
 
 $submitted = Get-Date
 schtasks /run /tn $TaskName | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "schtasks /run failed with exit code $LASTEXITCODE for $TaskName." }
 $done = Join-Path $results "$JobId.done"
 $deadline = (Get-Date).AddMinutes($TimeoutMinutes + 2)
-while (-not (Test-Path -LiteralPath $done) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 5 }
-if (-not (Test-Path -LiteralPath $done)) { throw "No result for $JobId within $($TimeoutMinutes + 2) minutes." }
+while (-not (Test-AgyPathExists -Path $done) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 5 }
+if (-not (Test-AgyPathExists -Path $done)) { throw "No result for $JobId within $($TimeoutMinutes + 2) minutes." }
 
 $code = (Get-Content -LiteralPath $done -Raw).Trim()
 $errorFile = Join-Path $results "$JobId.error.txt"
-if (Test-Path -LiteralPath $errorFile) { throw "Job refused: $(Get-Content -LiteralPath $errorFile -Raw)" }
+if (Test-AgyPathExists -Path $errorFile) { throw "Job refused: $(Get-Content -LiteralPath $errorFile -Raw)" }
 $reply = Get-Content -LiteralPath (Join-Path $results "$JobId.json") -Raw | ConvertFrom-Json
 $stderrFile = Join-Path $results "$JobId.stderr.txt"
 $stderrText = ''
-if (Test-Path -LiteralPath $stderrFile) { $stderrText = [string](Get-Content -LiteralPath $stderrFile -Raw) }
+if (Test-AgyPathExists -Path $stderrFile) { $stderrText = [string](Get-Content -LiteralPath $stderrFile -Raw) }
 # The wrapper writes exit code 0 and agy status SUCCESS even after an auto-denied action or an idle wait
 # on a background task, so the work is judged here (failure class F3, scripts/agy-runner/README.md).
 $reasons = @(Get-AgyIncompleteReason -Reply $reply -StderrText $stderrText -WorkspacePath $ws -ExpectFile $ExpectFile -NotBefore $submitted)

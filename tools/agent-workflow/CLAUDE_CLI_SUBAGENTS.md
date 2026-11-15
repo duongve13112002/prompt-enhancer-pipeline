@@ -97,7 +97,7 @@ python -B tools/agent-workflow/usage_breakdown.py <PM-transcript.jsonl> --date Y
 
 ## 5. Gemini jobs through `agy`
 
-Normative rules: PM_POLICY "Gemini through Antigravity" and `.agents/ORCHESTRATION.md` section 13: every Claude worker rule binds an agy job too (decision 581). One `AgyRunner` job at a time (it writes files and runs commands); read-only jobs overlap, each counts as a running agent.
+Normative rules: PM_POLICY "Gemini through Antigravity" and `.agents/ORCHESTRATION.md` section 13: every Claude worker rule binds an agy job too (decision 581). One runner job at a time across every project on the machine (this project's task is `AgyRunner-<leaf>-<hash8>`, `scripts/agy-runner/README.md`; it writes files and runs commands); read-only jobs overlap, each counts as a running agent.
 
 ```text
 powershell -File tools/agent-workflow/gemini-ws.ps1 -Worktree <wt> -Base <sha> -Head <sha> -TaskFile <repo path> -Workspace <name>

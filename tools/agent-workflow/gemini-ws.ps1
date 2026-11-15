@@ -36,14 +36,17 @@ param(
     [string[]]$ExtraNotes = @(),
     [switch]$Sanitize,
     [string]$Python = '',
-    [string]$TaskName = 'AgyRunner',
-    # For a gemini-review.ps1 job: it overlaps a runner job, so a busy AgyRunner is no reason to refuse.
+    # Empty: this project's derived runner task name (Get-AgyRunnerTaskName).
+    [string]$TaskName = '',
+    # For a gemini-review.ps1 job: it overlaps a runner job, so a busy runner task is no reason to refuse.
     [switch]$ReadOnlyJob
 )
 $ErrorActionPreference = 'Stop'
 # Project root = two levels above this script (tools/agent-workflow/).
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path -replace '\\', '/'
 . (Join-Path $root 'scripts/agy-runner/agy-lib.ps1')
+if (-not $TaskName) { $TaskName = Get-AgyRunnerTaskName -ProjectRoot $root }
+Assert-AgyTaskNameAllowed -TaskName $TaskName
 if (-not $ReadOnlyJob) { Assert-AgyIdle -ProjectRoot $root -TaskName $TaskName }
 # Windows reserved device names, any case, with or without an extension (protocol-bound: "Naming Files, Paths, and
 # Namespaces", https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file, "Do not use the following reserved

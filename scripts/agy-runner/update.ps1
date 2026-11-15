@@ -18,27 +18,39 @@ param(
     [string]$AgySource = (Join-Path $env:LOCALAPPDATA 'agy\bin\agy.exe'),
     [string]$ToolDir = (Join-Path $env:SystemDrive 'Tools\agy'),
     [string]$UserName = 'agy-runner',
-    [string]$TaskName = 'AgyRunner'
+    [string]$TaskName = ''
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'agy-lib.ps1')
+if (-not $TaskName) { $TaskName = Get-AgyRunnerTaskName -ProjectRoot (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path }
+Assert-AgyTaskNameAllowed -TaskName $TaskName
 
+# Strict: the hash or a throw. The final check compares these, so a failed read must never pass as a value.
 function Get-Sha256([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return '(missing)' }
-    # An earlier run could leave a file unreadable; the copy and /reset below repair it.
-    try { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash } catch { return '(unreadable)' }
+    if (-not (Test-AgyPathExists -Path $Path -PathType Leaf)) { throw "Missing file: $Path." }
+    (Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop).Hash
+}
+# Display only, before the repair: an earlier run could leave a file unreadable; the copy and /reset below repair
+# it, so its failure is shown with its error instead of stopping the update.
+function Get-Sha256Before([string]$Path) {
+    try { Get-Sha256 $Path } catch { "(not read: $($_.Exception.Message))" }
 }
 
-if (-not (Test-Path -LiteralPath $AgySource -PathType Leaf)) { throw "agy.exe not found at $AgySource; pass -AgySource." }
-if (-not (Test-Path -LiteralPath $ToolDir -PathType Container)) { throw "Tool folder $ToolDir is missing; run setup.ps1 first." }
+if (-not (Test-AgyPathExists -Path $AgySource -PathType Leaf)) { throw "agy.exe not found at $AgySource; pass -AgySource." }
+if (-not (Test-AgyPathExists -Path $ToolDir -PathType Container)) { throw "Tool folder $ToolDir is missing; run setup.ps1 first." }
 
 Write-Host '1/4 Idle check'
-$task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-if ($task -and $task.State -eq 'Running') { throw "Task $TaskName is running a job; wait for it to finish." }
-$running = Get-Process -Name 'agy' -ErrorAction SilentlyContinue
-if ($running) { throw "agy is running (PID $($running.Id -join ', ')); close it first." }
+# The protected agy.exe serves every project's runner task, so all of them must be idle. Reads stop on failure,
+# so an unreadable scheduler or process list never looks idle.
+$all = @(Get-AgyScheduledTaskAll)
+$tasks = @(@(Get-AgyRunnerTask -Tasks $all) + @(Get-AgyNamedTask -TaskName $TaskName -Tasks $all) | Where-Object { $_ })
+$busy = @($tasks | Where-Object { [string]$_.State -eq 'Running' } | ForEach-Object { $_.TaskName } | Sort-Object -Unique)
+if ($busy.Count -gt 0) { throw "Runner task(s) running a job: $($busy -join ', '); wait for them to finish." }
+$running = @(Get-Process -ErrorAction Stop | Where-Object { [string]::Equals($_.ProcessName, 'agy', [StringComparison]::OrdinalIgnoreCase) })
+if ($running.Count -gt 0) { throw "agy is running (PID $($running.Id -join ', ')); close it first." }
 
-$globalBefore = Get-Sha256 $AgySource
-$localBefore = Get-Sha256 (Join-Path $ToolDir 'agy.exe')
+$globalBefore = Get-Sha256Before $AgySource
+$localBefore = Get-Sha256Before (Join-Path $ToolDir 'agy.exe')
 
 Write-Host "2/4 Global update: $AgySource"
 & $AgySource update
@@ -56,7 +68,7 @@ function Set-ToolAcl {
     icacls $ToolDir /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' `
         "${env:USERNAME}:(OI)(CI)RX" "${UserName}:(OI)(CI)RX" /Q | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "icacls (folder) failed with exit code $LASTEXITCODE." }
-    if (Get-ChildItem -LiteralPath $ToolDir -File) {
+    if (Get-ChildItem -LiteralPath $ToolDir -File -ErrorAction Stop) {
         icacls (Join-Path $ToolDir '*') /reset /Q | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "icacls (files) failed with exit code $LASTEXITCODE." }
     }
@@ -74,6 +86,6 @@ Write-Host "    global before $globalBefore"
 Write-Host "    global after  $globalAfter"
 Write-Host "    local before  $localBefore"
 Write-Host "    local after   $localAfter"
-if ($task) { Get-ScheduledTask -TaskName $TaskName | Select-Object TaskName, State | Format-Table -AutoSize }
+if ($tasks.Count -gt 0) { $tasks | Select-Object TaskName, State -Unique | Format-Table -AutoSize }
 Write-Host 'Done. The agy-runner sign-in is kept; if a job later reports a sign-in error, run:'
 Write-Host "    runas /user:$UserName `"$ToolDir\agy.exe`""

@@ -7,7 +7,8 @@ Usage:
 `check` is read-only. It verifies the binding file `.agents/project.json`, the interpreter and `.venv`, the shared
 instruction files (AGENTS.md, CLAUDE.md importing it), the skills (`.agents/skills` canonical, `.claude/skills` synced
 copy), the enabled agent CLIs, the rendered Claude hook settings, the tool configs that copy a binding value, the files
-the hooks read, the Git-ignore entries, tokens of a previous project, and dead relative links in live Markdown.
+the hooks read, the Windows agy runner binding (this project's task, its -ProjectRoot, the job folder, the work folder,
+the Allow rule on `.tmp/agy-work`; one WARN per missing item, never FAIL), the Git-ignore entries, tokens of a previous project, and dead relative links in live Markdown.
 Exit 0: no FAIL. Exit 1: at least one FAIL. WARN lines are machine-specific or optional (a missing CLI, the Windows
 agy runner scripts). Nothing is sent over the network; `.secrets/` is never read.
 
@@ -29,6 +30,7 @@ import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Callable
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -264,6 +266,158 @@ def check_clis(root: Path, cfg: project_config.ProjectConfig, run_cli: bool) -> 
     return out
 
 
+# ---- agy runner binding (S42) ---------------------------------------------------------------------------------------
+# Single source (fix round 1, F2): the task name, the action parse, the path comparison and the rule decision live in
+# scripts/agy-runner/agy-lib.ps1. This row asks them through one read-only PowerShell call and only presents the result.
+AGY_LIB = ROOT / "scripts" / "agy-runner" / "agy-lib.ps1"
+# Read-only. Every read stops on failure ($ErrorActionPreference Stop and the lib's fail-closed helpers), so a failed
+# read becomes a WARN with its error and never looks like "no task" or "no folder". AGY_CHECK_MODE=name: the name only.
+RUNNER_READ_PS = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
+. $env:AGY_CHECK_LIB
+$root = $env:AGY_CHECK_ROOT
+$out = [ordered]@{ task_name = (Get-AgyRunnerTaskName -ProjectRoot $root) }
+if ($env:AGY_CHECK_MODE -ne 'name') {
+  $all = @(Get-AgyScheduledTaskAll)
+  $own = Get-AgyNamedTask -TaskName $out.task_name -Tasks $all
+  $tasks = @(Get-AgyRunnerTask -Tasks $all)
+  if ($own -and -not @($tasks | Where-Object { $_.TaskName -eq $own.TaskName -and $_.TaskPath -eq $own.TaskPath })) { $tasks += $own }
+  $out.tasks = @(foreach ($t in $tasks) {
+    $info = Get-ScheduledTaskInfo -TaskName $t.TaskName -TaskPath $t.TaskPath
+    $last = 'never'
+    if (($info.LastRunTime -is [datetime]) -and $info.LastRunTime.Year -ge 2000) { $last = $info.LastRunTime.ToString('yyyy-MM-dd HH:mm:ss') }
+    $bound = Get-AgyTaskBoundRoot $t
+    $here = $null
+    $err = ''
+    if ($bound) { try { $here = Test-AgySamePath $bound $root } catch { $err = $_.Exception.Message } }
+    [ordered]@{ name = $t.TaskName; own = [bool]($own -and $t.TaskName -eq $own.TaskName -and $t.TaskPath -eq $own.TaskPath)
+      state = [string]$t.State; user = [string]$t.Principal.UserId; last_run = $last; project_root = $bound
+      bound_here = $here; bound_error = $err }
+  })
+  $out.jobs_exists = Test-AgyPathExists -Path (Join-Path $root '.tmp\agy-jobs') -PathType Container
+  $work = Join-Path $root '.tmp\agy-work'
+  $out.work_exists = Test-AgyPathExists -Path $work -PathType Container
+  # The account comes from the tasks themselves (setup.ps1 -UserName), never from a literal here.
+  $users = @(@(if ($own) { $own } else { $tasks }) | ForEach-Object { [string]$_.Principal.UserId } | Where-Object { $_ } | Sort-Object -Unique)
+  $out.work_rules = @()
+  $out.acl_error = ''
+  if ($out.work_exists -and $users.Count -gt 0) {
+    try {
+      $rules = @((Get-Acl -LiteralPath $work -ErrorAction Stop).Access)
+      $out.work_rules = @(foreach ($u in $users) {
+        [ordered]@{ account = $u; decision = (Get-AgyAceDecision -Rules $rules -UserName $u -Mode grant -Rights Modify -Inherit $true) } })
+    } catch { $out.acl_error = $_.Exception.Message }
+  }
+}
+ConvertTo-Json -InputObject $out -Depth 5 -Compress
+"""
+
+
+def _powershell_json(root: Path | str, mode: str) -> dict[str, object]:
+    """One read-only PowerShell child that dot-sources agy-lib.ps1; raises OSError, ValueError or SubprocessError."""
+    shell = shutil.which("powershell") or shutil.which("pwsh")
+    if shell is None:
+        raise OSError("PowerShell not on PATH")
+    # Paths travel in environment variables, so a non-ASCII root needs no quoting; the reply is UTF-8 JSON.
+    env = {**os.environ, "AGY_CHECK_LIB": str(AGY_LIB), "AGY_CHECK_ROOT": str(root), "AGY_CHECK_MODE": mode}
+    proc = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", RUNNER_READ_PS],
+                          capture_output=True, encoding="utf-8", errors="replace", timeout=CLI_TIMEOUT_SECONDS,
+                          check=False, stdin=subprocess.DEVNULL, env=env,
+                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if proc.returncode != 0:
+        lines = [line.strip() for line in (proc.stderr or proc.stdout or "").splitlines() if line.strip()]
+        raise OSError(lines[0] if lines else f"PowerShell exit {proc.returncode}")
+    data = json.loads(proc.stdout.strip().splitlines()[-1])
+    if not isinstance(data, dict):
+        raise ValueError("the runner state is not a JSON object")
+    return data
+
+
+def runner_task_name(root: Path | str) -> str:
+    """This project's runner task name, from Get-AgyRunnerTaskName in agy-lib.ps1 (the single source)."""
+    name = _powershell_json(root, "name").get("task_name")
+    if not isinstance(name, str) or not name:
+        raise ValueError("agy-lib.ps1 returned no task name")
+    return name
+
+
+def _read_runner_state(root: Path) -> dict[str, object]:
+    return _powershell_json(root, "full")
+
+
+def check_runner(root: Path, cfg: project_config.ProjectConfig,
+                 read: Callable[[Path], dict[str, object]] | None = None,
+                 is_windows: bool = os.name == "nt") -> list[Result]:
+    """Read-only runner rows, one per required item, so each absent item gets its own WARN (fix round 1, F5).
+
+    WARN, never FAIL: read-only Gemini reviews do not need the runner.
+    """
+    read = read or _read_runner_state  # looked up at call time so tests can replace the reader
+    if not cfg.agents["antigravity"].enabled:
+        return []
+    if not is_windows:
+        return [Result("OK", "runner", "agy runner: not applicable (Windows only)")]
+    fix = ("the user runs scripts/agy-runner/setup.ps1 as administrator for this project (scripts/agy-runner/README.md, "
+           "'Set up the runner for this project'); read-only reviews need no runner")
+    try:
+        state = read(root)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        return [Result("WARN", "runner", f"agy runner: could not read the runner state ({exc})", "")]
+    name = state.get("task_name")
+    if not isinstance(name, str) or not name:
+        return [Result("WARN", "runner", "agy runner: could not read the runner state (agy-lib.ps1 gave no task name)", "")]
+    tasks = [t for t in state.get("tasks") or [] if isinstance(t, dict)]
+    own = next((t for t in tasks if t.get("own") is True), None)
+
+    def bound(task: dict[str, object]) -> str:
+        return str(task.get("project_root") or "<not the action layout setup.ps1 writes>")
+
+    out: list[Result] = []
+    # 1. This project's task and its binding.
+    if own is None:
+        elsewhere = "; ".join(f"{t.get('name')} is bound to {bound(t)}" for t in tasks) or "no other runner task"
+        out.append(Result("WARN", "runner", f"agy runner: task {name} for this project is missing ({elsewhere})", fix))
+    elif not own.get("project_root"):
+        out.append(Result("WARN", "runner", f"agy runner: task {name} does not have the action layout setup.ps1 "
+                          "writes, so its project is unknown", fix))
+    elif own.get("bound_error"):
+        out.append(Result("WARN", "runner", f"agy runner: task {name} is bound to {bound(own)}, which could not be "
+                          f"resolved ({own['bound_error']})", fix))
+    elif own.get("bound_here") is not True:
+        out.append(Result("WARN", "runner", f"agy runner: task {name} is bound to {bound(own)}, not to this root", fix))
+    else:
+        out.append(Result("OK", "runner", f"agy runner: task {name} bound to this root, state {own.get('state')}, "
+                          f"last run {own.get('last_run')}"))
+    # 2. The job folder.
+    if state.get("jobs_exists") is True:
+        out.append(Result("OK", "runner", "agy runner: .tmp/agy-jobs exists"))
+    else:
+        out.append(Result("WARN", "runner", "agy runner: .tmp/agy-jobs missing", fix))
+    # 3. The work folder, then the Allow rule on it.
+    rules = [r for r in state.get("work_rules") or [] if isinstance(r, dict)]
+    if state.get("work_exists") is not True:
+        out.append(Result("WARN", "runner", "agy runner: .tmp/agy-work missing (the runner's only writable folder)", fix))
+    elif state.get("acl_error"):
+        out.append(Result("WARN", "runner", f"agy runner: ACL of .tmp/agy-work unreadable: {state['acl_error']}", ""))
+    elif not rules:
+        out.append(Result("WARN", "runner", "agy runner: Allow Modify on .tmp/agy-work not checked: no runner task "
+                          "names the account", fix))
+    for rule in rules if state.get("work_exists") is True and not state.get("acl_error") else []:
+        who, decision = rule.get("account"), str(rule.get("decision", ""))
+        if decision == "present":
+            out.append(Result("OK", "runner", f"agy runner: explicit Allow Modify for {who} on .tmp/agy-work, applying "
+                              "to the folder and its children"))
+        elif decision.startswith("blocked:"):
+            out.append(Result("WARN", "runner", f"agy runner: .tmp/agy-work carries an {decision[len('blocked: '):]}; "
+                              "the runner needs Allow Modify there",
+                              "the user decides how to clear it; setup.ps1 stops on it and never removes a rule"))
+        else:
+            out.append(Result("WARN", "runner", f"agy runner: no explicit Allow Modify for {who} on .tmp/agy-work that "
+                              "applies to the folder and its children", fix))
+    return out
+
+
 def check_claude_settings(root: Path, cfg: project_config.ProjectConfig) -> list[Result]:
     if not cfg.agents["claude"].enabled:
         return []
@@ -413,6 +567,7 @@ def run_checks(root: Path, run_cli: bool = True) -> list[Result]:
         lambda: check_instructions(root),
         lambda: check_skills(root, cfg),
         lambda: check_clis(root, cfg, run_cli),
+        lambda: check_runner(root, cfg),
         lambda: check_claude_settings(root, cfg),
         lambda: check_tool_configs(root, cfg),
         lambda: check_state(root),
