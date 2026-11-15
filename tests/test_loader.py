@@ -22,7 +22,9 @@ def save_config(tmp_path, config):
 
 @pytest.fixture
 def config():
-    return yaml.safe_load(BASE.read_bytes())
+    result = yaml.safe_load(BASE.read_bytes())
+    result['storage']['lock'] = {'timeout_s': 5, 'poll_s': 0.05}  # test-only: resolves deploy_required (T-006)
+    return result
 
 
 def test_config_override(config, tmp_path):

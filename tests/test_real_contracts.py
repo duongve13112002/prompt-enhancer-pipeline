@@ -2,8 +2,9 @@ import json
 from pathlib import Path
 
 import jsonschema
+import pytest
 import yaml
-from prompt_enhancer import load_config, load_profile, resolve_writer_format
+from prompt_enhancer import ConfigurationError, load_config, load_profile, resolve_writer_format
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,10 +49,14 @@ def test_real_loader_examples():
     base = ROOT / 'configs/enhancer.example.yaml'
     dev = ROOT / 'configs/enhancer.dev.example.yaml'
     overlay = ROOT / 'configs/overlays/deploy-vllm.example.yaml'
-    full = load_config(base, 'kb status')
-    smoke = load_config(dev, 'kb status')
-    deployed = load_config(base, 'kb status', overlay=overlay)
-    direct_overlay = load_config(overlay, 'kb status')
+    # The examples keep storage.lock at deploy_required, so a store command refuses them; profile check reads no storage.
+    for args in ((base,), (dev,), (base, overlay), (overlay,)):
+        with pytest.raises(ConfigurationError, match='storage.lock.timeout_s: unresolved sentinel deploy_required'):
+            load_config(args[0], 'kb status', overlay=args[1] if len(args) > 1 else None)
+    full = load_config(base, 'profile check')
+    smoke = load_config(dev, 'profile check')
+    deployed = load_config(base, 'profile check', overlay=overlay)
+    direct_overlay = load_config(overlay, 'profile check')
     assert full['storage']['kb_store'] == 'data/kb'
     assert smoke['vision']['max_image_side'] == 1024
     assert deployed['vlm']['backends']['main']['unsupported_param_policy'] == 'warn'

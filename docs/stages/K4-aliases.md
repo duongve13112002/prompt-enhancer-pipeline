@@ -2,7 +2,7 @@
 
 **Purpose.** Let a mention in another language, another script or a common spelling reach the right concept, without transliteration tables or per-language rules (R-015, decision 18).
 
-**Input and output.** Concept names and descriptions, the card summary from K3, aliases the admin wrote in `kb_overrides.yaml`, then `aliases` rows: `concept_id`, alias text, origin (`curated` for the admin's, `generated` with the model revision), language or script when the model states it, and collision status.
+**Input and output.** Concept names and descriptions, the card summary from K3, aliases the admin wrote in `kb_overrides.yaml`, then `aliases` rows: `concept_id`, alias text, origin (`author` for the admin's, `generated` with the model revision), language or script when the model states it, and collision status.
 
 **Method.**
 - The `alias_generator` model proposes, per concept, names in other languages, other scripts and common spellings. Readings that no conversion rule produces (for example a Sino-Vietnamese reading of a name) come only from a model or from the admin [A].

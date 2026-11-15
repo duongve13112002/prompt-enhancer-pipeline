@@ -567,7 +567,8 @@
                     "retention": {
                       "anyOf": [
                         {
-                          "type": "string"
+                          "type": "string",
+                          "pattern": "^[0-9]+[smhd]$"
                         },
                         {
                           "enum": [
@@ -4866,7 +4867,75 @@
             "table_format": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "enum": [
+                    "parquet",
+                    "arrow"
+                  ]
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "lock": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "timeout_s": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "exclusiveMinimum": 0,
+                          "maximum": 1.7976931348623157e+308
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "poll_s": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "exclusiveMinimum": 0,
+                          "maximum": 1.7976931348623157e+308
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "timeout_s",
+                    "poll_s"
+                  ],
+                  "additionalProperties": false
                 },
                 {
                   "enum": [
@@ -4885,7 +4954,8 @@
           "required": [
             "data_root",
             "kb_store",
-            "table_format"
+            "table_format",
+            "lock"
           ],
           "additionalProperties": false
         },

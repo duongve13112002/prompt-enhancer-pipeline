@@ -25,6 +25,9 @@ runtime:
   vram_budget_gb: deploy_required
   cpu_workers: auto
 
+storage:
+  lock: {timeout_s: deploy_required, poll_s: deploy_required}   # store lock wait, set per machine (T-006)
+
 serving:
   max_concurrency: fit_from_bench
   queue_limit: design_required

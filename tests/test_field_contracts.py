@@ -45,6 +45,7 @@ def node(config, path):
 
 
 def prepare(config, path):
+    config['storage']['lock'] = {'timeout_s': 5, 'poll_s': 0.05}  # test-only: resolves deploy_required (T-006)
     if path == ('vlm', 'backends', 'main', 'provider'):
         config['vlm']['backends']['main'].update(call_budget=3, on_budget_exhausted='stop', allow_images=False)
 
@@ -54,7 +55,7 @@ def options(value):
             'draft', 'confirmed', 'active', 'plain', 'sectioned',
             'medium', 'cards', 'live', 'json_schema', 'json_object', 'engine_native',
             'response_format', 'from_vision', 'intent_ir.v0', 'verifier_result.v0',
-            'openai_compatible', 'anthropic', 'gemini', 'fallback_to_default_backend', 'stop', [],
+            'openai_compatible', 'anthropic', 'gemini', 'fallback_to_default_backend', 'stop', 'arrow', '7d', [],
             ['alternative'], ['generate'], ['edit'], {}, {'other': 'alternative'},
             value + '_alternative' if isinstance(value, str) else 'alternative']
 

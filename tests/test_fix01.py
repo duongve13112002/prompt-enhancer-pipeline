@@ -15,7 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.fixture
 def config():
-    return yaml.safe_load((ROOT / 'configs/enhancer.example.yaml').read_bytes())
+    result = yaml.safe_load((ROOT / 'configs/enhancer.example.yaml').read_bytes())
+    result['storage']['lock'] = {'timeout_s': 5, 'poll_s': 0.05}  # test-only: resolves deploy_required (T-006)
+    return result
 
 
 def write_config(tmp_path, config):

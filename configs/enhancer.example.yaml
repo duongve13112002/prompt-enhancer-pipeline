@@ -36,8 +36,8 @@ knowledge:                               # docs/stages/K0-sync.md, kb/README.md
 
 sync:                                    # K0
   mass_deletion_guard: {max_removed_fraction: design_required}   # R-014: a sync that would remove more stops
-  snapshots: {keep: design_required}
-  gc: {retention: design_required}
+  snapshots: {keep: design_required}     # retired snapshots kept besides CURRENT
+  gc: {retention: design_required}       # e.g. 7d: age since first seen unreferenced
   resume: true                           # R-017
 
 embedding:                               # K1, experiment E5
@@ -317,6 +317,7 @@ storage:
   data_root: data                        # Git-ignored; every derived table lives under it
   kb_store: data/kb                      # snapshots, tables and the serving index
   table_format: parquet                  # decision 19, R-016
+  lock: {timeout_s: deploy_required, poll_s: deploy_required}   # store lock wait, set per machine (T-006)
 
 serving:                                 # docs/serving.md, R-019, decision 21
   max_concurrency: fit_from_bench

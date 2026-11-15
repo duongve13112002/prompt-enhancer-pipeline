@@ -33,7 +33,7 @@ All tables are Parquet or Arrow (R-016, decision 19); embeddings are Arrow. A sn
 | `images` | `image_id` | `size_bytes`, `format`, `width`, `height`, `decode_status`, `near_duplicate_group` | K0, K1 |
 | `folder_images` | `folder_id`, `relative_path` | `image_id`, `modified_at` | K0 |
 | `image_embeddings` | `image_id`, `embedder_revision` | `vector` (Arrow), `dim` | K1 |
-| `concept_text_embeddings` | `concept_id`, `text_kind`, `embedder_revision` | `text_hash`, `vector`; `text_kind` is `name`, `description`, `alias` or `card_summary` | K1 |
+| `concept_text_embeddings` | `concept_id`, `text_kind`, `embedder_revision`, `text_hash` (several aliases of one concept share the first three; T-006, owner T-008 to confirm) | `vector`; `text_kind` is `name`, `description`, `alias` or `card_summary` | K1 |
 | `observations` | `image_id`, `concept_id`, `facet`, observer revisions | `facet_group`, `value`, `visibility`, `region`, `view`, `quality`, `origin` | K2 |
 | `cards` | `concept_id` (per snapshot) | the fields of [concept_card.v0](schemas/concept_card.v0.schema.json) | K3 |
 | `aliases` | `concept_id`, `alias_text` | `origin`, `status`, `collides_with`, revisions | K4 |
@@ -143,7 +143,7 @@ Missing and unknown-key validation covers the keys defined in the configuration 
 
 ## Commit protocol and snapshots
 
-A stage result of many files is committed **data first, manifest last**: the manifest lists keys, sizes and checksums, and a reader trusts only keys the manifest lists. A snapshot is built beside the current one, validated, and published by changing the `CURRENT` pointer; older snapshots stay for `kb rollback` until `kb gc` removes them ([K0](../docs/stages/K0-sync.md), [N125](../docs/note/N125-snapshots-and-vector-deletion.md)). A request pins one published snapshot in S0 and uses only that; an unpublished or half-written snapshot is never read, and a missing pinned snapshot gives the warning `SNAPSHOT_MISSING`. Artifact keys are content hash plus tool revisions ([N126](../docs/note/N126-content-addressed-caches.md)).
+A stage result of many files is committed **data first, manifest last**: the manifest lists keys, sizes and checksums, and a reader trusts only keys the manifest lists. A snapshot is built beside the current one, validated, and published by changing the `CURRENT` pointer; older snapshots stay for `kb rollback` until `kb gc` removes them ([K0](../docs/stages/K0-sync.md), [N125](../docs/note/N125-snapshots-and-vector-deletion.md)). A request pins one published snapshot in S0 and uses only that; an unpublished or half-written snapshot is never read, and a missing pinned snapshot gives the warning `SNAPSHOT_MISSING`. Artifact keys are content hash plus tool revisions ([N126](../docs/note/N126-content-addressed-caches.md)). Publish, rollback, pin and garbage collection serialise on one store lock (`storage.lock`); a request holds a lease on its pinned snapshot until the response is sent, and a trace may hold a snapshot until its retention ends; `kb gc` removes neither. `sync_state.state` is `queued`, `done` or `failed`; `snapshots.state` is `building`, `validated`, `published`, `retired`, `deleting` (garbage collection committed to removing it; holds and rollback refuse it), `collected` or `failed`. `storage.lock` values are finite and positive.
 
 ## Schemas
 

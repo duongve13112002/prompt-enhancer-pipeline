@@ -28,26 +28,31 @@ WINDOWS_DEVICE_NAMES = frozenset(
 
 # Only documented reads are listed; later stage tasks complete their read sets.
 COMMAND_READS = {
-    'kb status': ('storage.kb_store',),
+    'kb status': ('storage.kb_store', 'storage.lock'),
     'kb sync': ('knowledge', 'sync', 'embedding', 'observe', 'cards', 'aliases', 'index', 'storage.kb_store',
+                'storage.lock', 'storage.table_format',
                 'vlm.roles.observer', 'vlm.roles.info_assessor', 'vlm.roles.folder_namer',
                 'vlm.roles.card_builder', 'vlm.roles.alias_generator', 'vision'),
-    'kb rollback': ('storage.kb_store',),
-    'kb gc': ('storage.kb_store', 'sync.gc.retention', 'sync.snapshots.keep'),
-    'kb audit': ('storage.kb_store',),
-    'kb show': ('storage.kb_store',),
+    'kb rollback': ('storage.kb_store', 'storage.lock', 'storage.table_format'),
+    'kb gc': ('storage.kb_store', 'storage.lock', 'storage.table_format', 'sync.gc.retention', 'sync.snapshots.keep'),
+    'kb audit': ('storage.kb_store', 'storage.lock'),
+    'kb show': ('storage.kb_store', 'storage.lock'),
     'profile register': ('profiles.root', 'vlm.roles.manifest_drafter'),
     'profile check': ('profiles.root',),
     'enhance once': ('profiles', 'rag', 'vision', 'candidates', 'embedding', 'planner', 'resolution',
                      'clarification', 'creativity', 'edit', 'assembly', 'writer', 'validation', 'runtime',
-                     'storage.data_root', 'vlm.roles.planner', 'vlm.roles.writer', 'vlm.roles.verifier'),
+                     'storage.data_root', 'storage.table_format',
+                     'vlm.roles.planner', 'vlm.roles.writer', 'vlm.roles.verifier'),
     'enhance serve': ('profiles', 'rag', 'vision', 'candidates', 'embedding', 'planner', 'resolution',
                       'clarification', 'creativity', 'edit', 'assembly', 'writer', 'validation', 'runtime',
-                      'storage.data_root', 'vlm.roles.planner', 'vlm.roles.writer', 'vlm.roles.verifier', 'serving'),
-    'eval build': ('evaluation', 'storage.kb_store', 'vlm.roles.scenario_generator'),
+                      'storage.data_root', 'storage.table_format',
+                      'vlm.roles.planner', 'vlm.roles.writer', 'vlm.roles.verifier', 'serving'),
+    'eval build': ('evaluation', 'storage.kb_store', 'storage.lock', 'storage.data_root', 'storage.table_format',
+                   'vlm.roles.scenario_generator'),
     'eval run': ('evaluation', 'profiles', 'rag', 'vision', 'candidates', 'embedding', 'planner', 'resolution',
                  'clarification', 'creativity', 'edit', 'assembly', 'writer', 'validation', 'runtime',
-                 'storage.data_root', 'vlm.roles.planner', 'vlm.roles.writer', 'vlm.roles.verifier'),
+                 'storage.data_root', 'storage.table_format',
+                 'vlm.roles.planner', 'vlm.roles.writer', 'vlm.roles.verifier'),
     'eval fit': ('evaluation', 'storage.data_root'),
 }
 
@@ -429,7 +434,7 @@ def _command_reads(command, config):
     if not isinstance(config['rag'], dict):
         return keys
     if config['rag']['enabled']:
-        return (*keys, 'storage.kb_store')
+        return (*keys, 'storage.kb_store', 'storage.lock')
     return tuple('rag.enabled' if key == 'rag' else key for key in keys
                  if key not in ('candidates', 'embedding', 'assembly'))
 
