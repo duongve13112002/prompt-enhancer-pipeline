@@ -9,6 +9,7 @@ vlm:
   backends:
     main:
       provider: openai_compatible        # N057
+      engine: {name: vllm, version: pin_required}
       base_urls: [deploy_required]
       model:
         id: Qwen/Qwen3.8-27B-FP8         # decision 20: the BF16 weights (about 55.6 GB) do not fit a 45 to 48 GB card; FP8 is about 30.9 GB on disk, N102
@@ -16,6 +17,9 @@ vlm:
       extra_body:
         chat_template_kwargs: {enable_thinking: false}   # thinking is on by default, so every request switches it off, N102, N121
       max_concurrency: fit_from_bench
+      http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
+      probe: {max_requests: design_required, timeout_s: design_required}
+      image: {max_decode_pixels: deploy_required}
       endpoints:
         chat: deploy_required
         health: deploy_required

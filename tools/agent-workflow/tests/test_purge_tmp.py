@@ -297,6 +297,23 @@ def test_the_agy_runner_job_folder_survives_every_deletion_path(pt: ModuleType) 
     assert not nested.exists()
 
 
+def test_pinned_tool_binaries_survive_every_deletion_path(pt: ModuleType) -> None:
+    """`.tmp/tools` holds hash-pinned binaries the user approved downloading (decision 113); an aged sweep, an archive
+    removal and a child purge all keep it, while a folder of that name deeper in `.tmp` stays ordinary scratch."""
+    tools = tmp_dir(pt, "tools")
+    (tools / "gitleaks.exe").write_bytes(b"pinned")
+    age(tools, 100)
+    nested = pt.PROJECT / ".tmp" / "scratch-3" / "tools"
+    nested.mkdir(parents=True)
+    assert pt.archive_remove([str(tools)]) == 1
+    assert pt.purge_children(str(pt.PROJECT / ".tmp"), ["tools"]) == 1
+    pt.sweep(config=cfg(pt))
+    assert (tools / "gitleaks.exe").read_bytes() == b"pinned"
+    assert {i.path.name: i.status for i in pt.plan_sweep(72, refusals=False)}.get("tools") == "protected"
+    assert pt.purge_children(str(pt.PROJECT / ".tmp"), ["scratch-3"]) == 0
+    assert not nested.exists()
+
+
 @pytest.mark.parametrize("spelling", ["agy-work", "AGY-Work"])
 def test_the_agy_work_container_is_kept_without_results_while_its_workspaces_are_purgeable(
     pt: ModuleType, spelling: str

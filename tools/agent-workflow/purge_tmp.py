@@ -48,8 +48,9 @@ PROTECTED_NAMES = frozenset(
     {"pm-state", "pm-archive", "models", ".venv", "runs", ".secrets", "cli-jobs"}
 )
 # (parent name, name): Gemini job results; periodic audit reports (S22), kept outside the state directory since T-024;
-# the AgyRunner job folder, whose ACL only scripts/agy-runner/setup.ps1 (run by the user as administrator) can recreate.
-PROTECTED_PAIRS = (("agy-work", "_results"), (".tmp", "audit"), (".tmp", "agy-jobs"))
+# the AgyRunner job folder, whose ACL only scripts/agy-runner/setup.ps1 (run by the user as administrator) can recreate;
+# hash-pinned tool binaries the user approved downloading (gitleaks, decision 113), which a sweep must never age out.
+PROTECTED_PAIRS = (("agy-work", "_results"), (".tmp", "audit"), (".tmp", "agy-jobs"), (".tmp", "tools"))
 # Every checkout holds `.secrets/README.md` and `models/README.md` (tracked placeholders): such a nested directory
 # contains nothing to protect. Only a nested directory qualifies, never a target named on the command line.
 PLACEHOLDER_DIRS = frozenset({".secrets", "models"})

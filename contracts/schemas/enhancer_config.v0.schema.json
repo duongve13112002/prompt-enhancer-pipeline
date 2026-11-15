@@ -2917,6 +2917,12 @@
                 }
               ]
             },
+            "alpha_policy": {
+              "oneOf": [
+                {"type": "object", "properties": {"mode": {"const": "refuse"}}, "required": ["mode"], "additionalProperties": false},
+                {"type": "object", "properties": {"mode": {"const": "flatten"}, "background": {"type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "minLength": 7, "maxLength": 7}}, "required": ["mode", "background"], "additionalProperties": false}
+              ]
+            },
             "format": {
               "anyOf": [
                 {
@@ -2939,7 +2945,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": 0
+                  "minimum": 1,
+                  "maximum": 100
                 },
                 {
                   "enum": [
@@ -2975,6 +2982,7 @@
           },
           "required": [
             "max_image_side",
+            "alpha_policy",
             "format",
             "quality",
             "transport"
@@ -3125,6 +3133,15 @@
                               }
                             ]
                           },
+                          "engine": {
+                            "type": "object",
+                            "properties": {
+                              "name": {"enum": ["vllm", "llama_cpp", "anthropic", "gemini", "deploy_required"]},
+                              "version": {"type": "string", "minLength": 1}
+                            },
+                            "required": ["name"],
+                            "additionalProperties": false
+                          },
                           "unsupported_param_policy": {
                             "anyOf": [
                               {
@@ -3147,10 +3164,12 @@
                             "anyOf": [
                               {
                                 "type": "array",
+                                "minItems": 1,
                                 "items": {
                                   "anyOf": [
                                     {
-                                      "type": "string"
+                                      "type": "string",
+                                      "minLength": 1
                                     },
                                     {
                                       "enum": [
@@ -3205,7 +3224,8 @@
                                   "id": {
                                     "anyOf": [
                                       {
-                                        "type": "string"
+                                        "type": "string",
+                                        "minLength": 1
                                       },
                                       {
                                         "enum": [
@@ -3223,7 +3243,8 @@
                                   "revision": {
                                     "anyOf": [
                                       {
-                                        "type": "string"
+                                        "type": "string",
+                                        "minLength": 1
                                       },
                                       {
                                         "enum": [
@@ -3319,7 +3340,7 @@
                             "anyOf": [
                               {
                                 "type": "integer",
-                                "minimum": 0
+                                "minimum": 1
                               },
                               {
                                 "enum": [
@@ -3420,6 +3441,36 @@
                               }
                             ]
                           },
+                          "anthropic_version": {"anyOf": [{"type": "string", "minLength": 10, "maxLength": 10, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}, {"const": "deploy_required"}]},
+                          "anthropic_workspace_id": {"type": "string", "minLength": 1, "not": {"pattern": "[^!-~]"}},
+                          "http": {
+                            "type": "object",
+                            "properties": {
+                              "connect_timeout_s": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "deploy_required"}]},
+                              "read_timeout_s": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "deploy_required"}]},
+                              "write_timeout_s": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "deploy_required"}]},
+                              "pool_timeout_s": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "deploy_required"}]},
+                              "max_retries": {"anyOf": [{"type": "integer", "minimum": 0}, {"const": "design_required"}]},
+                              "backoff_initial_s": {"anyOf": [{"type": "number", "minimum": 0}, {"const": "design_required"}]},
+                              "backoff_max_s": {"anyOf": [{"type": "number", "minimum": 0}, {"const": "design_required"}]},
+                              "retry_statuses": {"anyOf": [{"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 100, "maximum": 599}}, {"const": "design_required"}]}
+                            },
+                            "required": ["connect_timeout_s", "read_timeout_s", "write_timeout_s", "pool_timeout_s", "max_retries", "backoff_initial_s", "backoff_max_s", "retry_statuses"],
+                            "additionalProperties": false
+                          },
+                          "probe": {
+                            "type": "object",
+                            "properties": {
+                              "max_requests": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "design_required"}]},
+                              "timeout_s": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "design_required"}]}
+                            },
+                            "required": ["max_requests", "timeout_s"], "additionalProperties": false
+                          },
+                          "image": {
+                            "type": "object",
+                            "properties": {"max_decode_pixels": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]}},
+                            "required": ["max_decode_pixels"], "additionalProperties": false
+                          },
                           "endpoints": {
                             "anyOf": [
                               {
@@ -3428,7 +3479,8 @@
                                   "chat": {
                                     "anyOf": [
                                       {
-                                        "type": "string"
+                                        "type": "string",
+                                        "minLength": 1
                                       },
                                       {
                                         "enum": [
@@ -3484,16 +3536,39 @@
                         },
                         "required": [
                           "provider",
+                          "engine",
                           "unsupported_param_policy",
                           "base_urls",
                           "api_key_file",
                           "model",
-                          "max_concurrency"
+                          "max_concurrency", "http", "probe", "image", "endpoints"
                         ],
                         "allOf": [
                           {
+                            "if": {"properties": {"provider": {"const": "openai_compatible"}}},
+                            "then": {"properties": {"engine": {"required": ["version"]}}}
+                          },
+                          {
                             "if": {"properties": {"provider": {"enum": ["anthropic", "gemini"]}}},
-                            "then": {"required": ["call_budget", "on_budget_exhausted", "allow_images"]}
+                            "then": {"properties": {"engine": {"not": {"required": ["version"]}}}}
+                          },
+                          {
+                            "if": {"properties": {"provider": {"enum": ["anthropic", "gemini"]}}},
+                            "then": {
+                              "required": ["call_budget", "on_budget_exhausted", "allow_images"],
+                              "properties": {
+                                "api_key_file": {
+                                  "anyOf": [
+                                    {"type": "string", "pattern": "^\\.secrets/[^/\\\\]+$"},
+                                    {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "if": {"properties": {"provider": {"const": "anthropic"}}},
+                            "then": {"required": ["anthropic_version", "anthropic_workspace_id"]}
                           }
                         ],
                         "additionalProperties": false
@@ -3651,6 +3726,7 @@
                                       {
                                         "type": "object",
                                         "additionalProperties": false,
+                                        "required": ["source", "format", "quality", "transport"],
                                         "properties": {
                                           "source": {
                                             "anyOf": [

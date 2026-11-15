@@ -4,6 +4,7 @@ from copy import deepcopy
 import errno
 from functools import lru_cache
 import json
+import math
 import os
 from pathlib import Path, PureWindowsPath
 
@@ -315,7 +316,7 @@ def _validate(value, schema, path, prefix='', sources=None):
         candidates = [item for item in candidates if not (
             item.validator == 'enum' and set(item.validator_value) == SENTINELS
         )] or candidates
-        error = max(candidates, key=lambda item: len(item.absolute_path))
+        error = max(candidates, key=lambda item: (len(item.absolute_path), item.validator == 'required'))
         parts = [str(p) for p in error.absolute_path]
         if error.validator == 'required' and isinstance(error.instance, dict):
             missing = sorted(set(error.validator_value) - set(error.instance))
@@ -384,7 +385,8 @@ def _overlay(overlay, path):
     for name, backend in backends.items():
         if not isinstance(backend, dict):
             raise ConfigurationError(f'{path}: vlm.backends.{name}: expected a mapping')
-        invalid = set(backend) - {'provider', 'base_urls', 'model', 'extra_body', 'max_concurrency', 'endpoints'}
+        invalid = set(backend) - {'provider', 'engine', 'base_urls', 'model', 'extra_body', 'max_concurrency', 'endpoints',
+                                  'http', 'probe', 'image', 'anthropic_version', 'anthropic_workspace_id'}
         if invalid:
             raise ConfigurationError(f'{path}: vlm.backends.{name}.{sorted(invalid)[0]}: not a deployment value')
 
@@ -418,6 +420,36 @@ def _sentinel(value, path, key, sources):
             _sentinel(child, path, f'{key}.{index}', sources)
 
 
+def _gemini_api_version(route, path):
+    """Read the version component of an explicitly configured relative route."""
+    _sentinel(route, path, 'endpoints.chat', {})
+    version, separator, remainder = route.partition('/')
+    if (not separator or not remainder or len(version) < 2 or version[0] != 'v'
+            or version[1] not in '0123456789' or not version.isascii() or not version.isalnum()):
+        raise ConfigurationError(f'{path}: endpoints.chat: expected a versioned Gemini route')
+    return version
+
+
+def resolve_backend_engine(backend, path):
+    """Resolve the configured engine identity without consulting a server."""
+    engine = backend['engine']
+    _sentinel(engine, path, 'engine', {})
+    provider, name = backend['provider'], engine['name']
+    if provider == 'openai_compatible':
+        if name not in ('vllm', 'llama_cpp'):
+            raise ConfigurationError(f'{path}: engine.name: incompatible with provider')
+        version = engine['version']
+    elif provider in ('anthropic', 'gemini') and name == provider:
+        if provider == 'anthropic':
+            version = backend['anthropic_version']
+            _sentinel(version, path, 'anthropic_version', {})
+        else:
+            version = _gemini_api_version(backend['endpoints']['chat'], path)
+    else:
+        raise ConfigurationError(f'{path}: engine.name: incompatible with provider')
+    return {'name': name, 'version': version}
+
+
 def _get(config, key, path):
     value = config
     for part in key.split('.'):
@@ -437,6 +469,100 @@ def _command_reads(command, config):
         return (*keys, 'storage.kb_store', 'storage.lock')
     return tuple('rag.enabled' if key == 'rag' else key for key in keys
                  if key not in ('candidates', 'embedding', 'assembly'))
+
+
+def _validate_model_bindings(config, path):
+    """Reject known provider and encoder incompatibilities before model calls."""
+    from PIL import Image
+    from .model_transport import endpoint_url
+
+    vlm = config['vlm']
+    backends = vlm['backends']
+    default = vlm['default_backend']
+    if default not in SENTINELS:
+        if default not in backends:
+            raise ConfigurationError(f'{path}: vlm.default_backend: expected an existing local backend')
+        local = backends[default]
+        if isinstance(local, dict) and local['provider'] not in SENTINELS and local['provider'] != 'openai_compatible':
+            raise ConfigurationError(f'{path}: vlm.default_backend: expected an existing local backend')
+    for name, backend in backends.items():
+        if isinstance(backend, dict):
+            provider = backend['provider']
+            engine_name = backend['engine']['name']
+            if provider not in SENTINELS and engine_name not in SENTINELS:
+                if ((provider == 'openai_compatible' and engine_name not in ('vllm', 'llama_cpp'))
+                        or (provider in ('anthropic', 'gemini') and engine_name != provider)):
+                    raise ConfigurationError(f'{path}: vlm.backends.{name}.engine.name: incompatible with provider')
+            endpoints = backend['endpoints']
+            if provider == 'gemini' and isinstance(endpoints, dict) and endpoints['chat'] not in SENTINELS:
+                _gemini_api_version(endpoints['chat'], f'{path}: vlm.backends.{name}')
+        if isinstance(backend, dict) and backend['provider'] in ('anthropic', 'gemini'):
+            if isinstance(backend['base_urls'], list) and 'provider_default' in backend['base_urls']:
+                raise ConfigurationError(f'{path}: vlm.backends.{name}.base_urls: provider_default is not documented; configure a URL')
+        if not isinstance(backend, dict):
+            continue
+        bases, endpoints = backend['base_urls'], backend['endpoints']
+        if isinstance(bases, list) and len(bases) > 1:
+            raise ConfigurationError(f'{path}: vlm.backends.{name}.base_urls: multiple URLs are not supported')
+        route = endpoints['chat'] if isinstance(endpoints, dict) else 'chat'
+        if route in SENTINELS:
+            route = 'chat'
+        if isinstance(bases, list):
+            for base in bases:
+                if base in SENTINELS:
+                    continue
+                try:
+                    endpoint_url(base, route)
+                except ValueError as error:
+                    raise ConfigurationError(f'{path}: vlm.backends.{name}.base_urls/endpoints.chat: {error}') from error
+        if isinstance(endpoints, dict) and endpoints['chat'] not in SENTINELS:
+            try:
+                endpoint_url('https://localhost', endpoints['chat'])
+            except ValueError as error:
+                raise ConfigurationError(f'{path}: vlm.backends.{name}.endpoints.chat: {error}') from error
+    Image.init()
+    for name, role in vlm['roles'].items():
+        if not isinstance(role, dict):
+            continue
+        key = f'vlm.roles.{name}'
+        sampling = role['sampling']
+        if isinstance(sampling, dict):
+            for field, value in sampling.items():
+                if isinstance(value, float) and not math.isfinite(value):
+                    raise ConfigurationError(f'{path}: {key}.sampling.{field}: expected finite number')
+        bound = role['backend']
+        if bound in SENTINELS:
+            continue
+        if bound not in backends:
+            raise ConfigurationError(f'{path}: {key}.backend: unknown backend {bound!r}')
+        backend = backends[bound]
+        if not isinstance(backend, dict) or backend['provider'] in SENTINELS:
+            continue
+        provider = backend['provider']
+        reasoning = role['reasoning']
+        maximum = role['max_tokens']
+        if isinstance(reasoning, dict) and provider == 'anthropic' and reasoning['mode'] == 'on':
+            budget = reasoning['budget_tokens']
+            if budget not in SENTINELS and maximum not in SENTINELS:
+                if type(budget) is not int or budget < 1024 or budget >= maximum:
+                    raise ConfigurationError(f'{path}: {key}.reasoning.budget_tokens: Anthropic requires >= 1024 and < max_tokens')
+        output = role['output']
+        if isinstance(output, dict) and output['format'] == 'json_schema' and output['schema_id'] in ('none', 'from_profile_manifest'):
+            raise ConfigurationError(f'{path}: {key}.output.schema_id: json_schema requires a concrete schema')
+        if isinstance(output, dict) and provider in ('anthropic', 'gemini'):
+            fmt = output['format']
+            if fmt not in SENTINELS and fmt != 'none':
+                raise ConfigurationError(f'{path}: {key}.output.format: cloud structured output mapping is not verified')
+        image = role['image']
+        if isinstance(image, dict):
+            if provider == 'gemini' and backend['allow_images'] is True:
+                raise ConfigurationError(f'{path}: {key}.image: Gemini image mapping is not verified')
+            fmt = image['format']
+            if fmt == 'from_vision':
+                vision = config['vision']
+                fmt = vision.get('format') if isinstance(vision, dict) else vision
+            if fmt not in SENTINELS and fmt.upper() not in Image.SAVE:
+                raise ConfigurationError(f'{path}: {key}.image.format: no installed encoder for {fmt!r}')
 
 
 def load_config(path, command, *, overlay=None, project_root=None):
@@ -473,6 +599,18 @@ def load_config(path, command, *, overlay=None, project_root=None):
     except ConfigurationError as error:
         raise ConfigurationError(f'{path}: schema_version: {error}') from error
     _validate(config, config_schema, path, sources=sources)
+    _validate_model_bindings(config, path)
+    for name, backend in config['vlm']['backends'].items():
+        if not isinstance(backend, dict):
+            continue
+        http = backend['http']
+        for section in ('http', 'probe'):
+            for field, value in backend[section].items():
+                if isinstance(value, float) and not math.isfinite(value):
+                    raise ConfigurationError(f'{path}: vlm.backends.{name}.{section}.{field}: expected finite number')
+        initial, maximum = http['backoff_initial_s'], http['backoff_max_s']
+        if isinstance(initial, (int, float)) and isinstance(maximum, (int, float)) and initial > maximum:
+            raise ConfigurationError(f'{path}: vlm.backends.{name}.http.backoff_max_s: less than initial backoff')
     _validate_configured_paths(config, root, path, sources)
     for name, role in config['vlm']['roles'].items():
         if not isinstance(role, dict) or not isinstance(role.get('output'), dict):
@@ -484,7 +622,8 @@ def load_config(path, command, *, overlay=None, project_root=None):
             except ConfigurationError as error:
                 key = f'vlm.roles.{name}.output.schema_id'
                 raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {error}') from error
-    for key in _command_reads(command, config):
+    reads = _command_reads(command, config)
+    for key in reads:
         value = _get(config, key, path)
         _sentinel(value, path, key, sources)
         if key.startswith('vlm.roles.'):
@@ -495,6 +634,11 @@ def load_config(path, command, *, overlay=None, project_root=None):
             _validate(value, role_schema, path, key, sources)
             backend_key = 'vlm.backends.' + value['backend']
             _sentinel(_get(config, backend_key, path), path, backend_key, sources)
+    if any(key.startswith('vlm.roles.') for key in reads):
+        default = config['vlm']['default_backend']
+        _sentinel(default, path, 'vlm.default_backend', sources)
+        default_key = 'vlm.backends.' + default
+        _sentinel(_get(config, default_key, path), path, default_key, sources)
     return config
 
 

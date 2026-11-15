@@ -14,7 +14,7 @@ These rules hold for every worker; a broken one fails the handoff. Rules for you
 8. **Clean up** scratch before handoff, keeping the small reports you cite; remove links as links.
 9. **Configuration:** AGENTS.md section 5 and the template's audit.
 10. **Test slots:** run every pytest, mutant or probe command through the limiter from the project root: `<venv python> -B tools/agent-workflow/test_slot.py -- <interpreter> -m pytest ...`. It allows 4 test commands at once (limit file `.tmp/pm-state/test-slots/max`, else 2); never bypass it.
-11. **Economy:** final reply about 10 short lines with details in the task file (reviewers add the full findings index); keep tool output small (`pytest -q`, grep, tail).
+11. **Economy:** final reply about 10 short lines with details in the task file (reviewers add the full findings index); keep tool output small (`pytest -q`, grep, tail). **Reply in English:** your reader is the PM, not the user (AGENTS.md section 1).
 12. **GPU for models:** permitted model work runs on the GPU through the profile's device setting; when the GPU is busy, wait or report, because a CPU fallback gives results that mean something else.
 13. **Hooks:** follow `[ctx-nudge]` and `[loop-warning]`.
 14. **Recall first:** before asking or deciding, `<venv python> -B -I tools/agent-workflow/recall.py build`, then `recall.py search "<words>"`, so a settled point is not asked again.

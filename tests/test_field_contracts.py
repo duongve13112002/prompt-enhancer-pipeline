@@ -46,17 +46,43 @@ def node(config, path):
 
 def prepare(config, path):
     config['storage']['lock'] = {'timeout_s': 5, 'poll_s': 0.05}  # test-only: resolves deploy_required (T-006)
-    if path == ('vlm', 'backends', 'main', 'provider'):
-        config['vlm']['backends']['main'].update(call_budget=3, on_budget_exhausted='stop', allow_images=False)
+    if path[:3] == ('vlm', 'backends', 'main') and (path[-1] == 'provider' or path[-2:] == ('engine', 'name')):
+        config['vlm']['backends']['alternate'] = deepcopy(config['vlm']['backends']['main'])
+        config['vlm']['default_backend'] = 'alternate'
+        for role in config['vlm']['roles'].values():
+            role['backend'] = 'alternate'
+        config['vlm']['backends']['main'].update(call_budget=3, on_budget_exhausted='stop', allow_images=False,
+                                               anthropic_version='2025-01-01', anthropic_workspace_id='none', api_key_file='.secrets/example.key')
+    elif path == ('vlm', 'default_backend') or path[:2] == ('vlm', 'roles') and path[-1] == 'backend':
+        config['vlm']['backends']['alternate'] = deepcopy(config['vlm']['backends']['main'])
+
+
+def set_candidate(config, path, candidate):
+    """Keep dependent engine/provider fields coherent using the shipped examples."""
+    if path[:2] == ('vlm', 'backends'):
+        is_provider = path[-1] == 'provider'
+        is_engine_name = path[-2:] == ('engine', 'name')
+        names = {'openai_compatible': 'main', 'vllm': 'main', 'llama_cpp': 'main',
+                 'anthropic': 'cloud_claude', 'gemini': 'cloud_gemini'}
+        if (is_provider or is_engine_name) and isinstance(candidate, str) and candidate in names:
+            backend = deepcopy(EXAMPLE['vlm']['backends'][names[candidate]])
+            if names[candidate] == 'main':
+                backend['engine']['name'] = 'llama_cpp'
+            config['vlm']['backends'][path[2]] = backend
+    parent, key = node(config, path)
+    parent[key] = candidate
+    return parent, key
 
 
 def options(value):
     return [False, True, 0, 1, 2, 0.5, '', 'alternative', 'none', 'auto', 'ask', 'off', 'on',
             'draft', 'confirmed', 'active', 'plain', 'sectioned',
             'medium', 'cards', 'live', 'json_schema', 'json_object', 'engine_native',
-            'response_format', 'from_vision', 'intent_ir.v0', 'verifier_result.v0',
-            'openai_compatible', 'anthropic', 'gemini', 'fallback_to_default_backend', 'stop', 'arrow', '7d', [],
+            'response_format', 'from_vision', 'intent_ir.v0', 'verifier_result.v0', '2025-01-01',
+            'openai_compatible', 'anthropic', 'gemini', 'vllm', 'llama_cpp', 'fallback_to_default_backend', 'stop', 'arrow', '7d', 'refuse', 'flatten', '#123456', [],
             ['alternative'], ['generate'], ['edit'], {}, {'other': 'alternative'},
+            {'chat': 'chat', 'health': 'health'},
+            {'source': 'source_image', 'format': 'png', 'quality': 80, 'transport': 'data_uri'},
             value + '_alternative' if isinstance(value, str) else 'alternative']
 
 
@@ -73,12 +99,12 @@ def test_protocol_only_fields():
         for candidate in options(original):
             if candidate == original and type(candidate) is type(original):
                 continue
-            parent[key] = candidate
+            parent, key = set_candidate(config, path, candidate)
             if VALIDATOR.is_valid(config):
                 break
         else:
             constrained.append('.'.join(path))
-    assert constrained == ['schema_version', 'vlm.backends.main.unsupported_param_policy',
+    assert constrained == ['schema_version', 'vision.alpha_policy.mode', 'vlm.backends.main.unsupported_param_policy',
                            'vlm.roles.planner.mode', 'vlm.roles.planner.output.validate_response']
 
 
@@ -92,11 +118,12 @@ def test_all_constrained_fields_are_known():
         for candidate in options(original):
             if candidate == original and type(candidate) is type(original):
                 continue
-            parent[key] = candidate
+            parent, key = set_candidate(config, path, candidate)
             if VALIDATOR.is_valid(config):
                 break
         else:
             allowed = (path == ('schema_version',)
+                       or path == ('vision', 'alpha_policy', 'mode')  # Refuse also removes the background member.
                        or path[:2] == ('vlm', 'backends') and path[-1] == 'unsupported_param_policy'
                        or path[:2] == ('vlm', 'roles') and path[-1] == 'mode' and len(path) == 4
                        or path[:2] == ('vlm', 'roles') and path[-2:] == ('output', 'validate_response'))
@@ -114,7 +141,7 @@ def test_config_override_and_refusal(path, tmp_path):
     for candidate in options(original):
         if candidate == original and type(candidate) is type(original):
             continue
-        parent[key] = candidate
+        parent, key = set_candidate(config, path, candidate)
         if VALIDATOR.is_valid(config):
             break
     else:
@@ -122,8 +149,16 @@ def test_config_override_and_refusal(path, tmp_path):
     # Schema IDs must additionally name an existing file; use a known schema for these.
     if path[-1] == 'schema_id' and path[:2] == ('vlm', 'roles'):
         parent[key] = 'verifier_result.v0' if original == 'intent_ir.v0' else 'intent_ir.v0'
+    if path == ('vlm', 'default_backend') or path[:2] == ('vlm', 'roles') and path[-1] == 'backend':
+        parent[key] = 'alternate'
+    if path == ('vision', 'format') or path[:2] == ('vlm', 'roles') and path[-2:] == ('image', 'format'):
+        parent[key] = 'png' if original != 'png' else 'jpeg'
     if path[-1] == 'api_key_file' and path[:2] == ('vlm', 'backends'):
         parent[key] = '.secrets/alternative.key'
+    if path[-1] == 'base_urls' and path[:2] == ('vlm', 'backends'):
+        parent[key] = ['https://example.org/alternative']
+    if path == ('vlm', 'backends', 'cloud_gemini', 'endpoints'):
+        parent[key] = {'chat': 'v1beta/models/example:generateContent', 'health': 'health'}
     if path in {('knowledge', 'root'), ('storage', 'data_root'), ('storage', 'kb_store'),
                 ('profiles', 'root')}:
         parent[key] = 'data/alternative'

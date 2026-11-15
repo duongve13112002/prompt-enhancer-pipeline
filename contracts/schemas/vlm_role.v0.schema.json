@@ -37,6 +37,7 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["source", "format", "quality", "transport"],
           "properties": {
             "source": {
               "type": "string",

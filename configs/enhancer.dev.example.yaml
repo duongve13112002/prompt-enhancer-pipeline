@@ -23,6 +23,7 @@ vlm:
   backends:
     main:
       provider: openai_compatible        # llama-server speaks the OpenAI style, N055
+      engine: {name: llama_cpp, version: pin_required}
       unsupported_param_policy: warn
       base_urls: [deploy_required]       # a loopback URL of the local server, set per machine
       api_key_file: none
@@ -33,3 +34,6 @@ vlm:
         mmproj_file: mmproj-F16.gguf     # N103
         revision: pin_required
       max_concurrency: 1
+      http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
+      probe: {max_requests: design_required, timeout_s: design_required}
+      image: {max_decode_pixels: deploy_required}

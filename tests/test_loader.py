@@ -113,10 +113,16 @@ def test_command_role_and_backend_validation(config, tmp_path):
     role['reasoning'] = dict(mode='off', effort='none', budget_tokens='none',
                              template_kwargs_key='enable_thinking')
     backend = config['vlm']['backends']['main']
+    backend['engine'] = {'name': 'llama_cpp', 'version': 'test-version'}
     backend['base_urls'] = ['http://127.0.0.1:8080']
+    backend['endpoints'] = {'chat': 'chat', 'health': 'health'}
     backend['model']['id'] = 'local-model'
     backend['model']['revision'] = 'revision'
     backend['max_concurrency'] = 1
+    backend['http'] = dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
+                           max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[])
+    backend['probe'] = dict(max_requests=1, timeout_s=1)
+    backend['image'] = dict(max_decode_pixels=1000)
     path = save_config(tmp_path, config)
     assert load_config(path, 'profile register')['vlm']['roles']['manifest_drafter']['max_tokens'] == 128
     role['sampling']['temperature'] = 'design_required'
@@ -128,6 +134,37 @@ def test_command_role_and_backend_validation(config, tmp_path):
         load_config(save_config(tmp_path, config), 'profile register')
 
 
+@pytest.mark.parametrize(('section', 'field', 'sentinel'), [
+    ('http', 'connect_timeout_s', 'deploy_required'), ('http', 'read_timeout_s', 'deploy_required'),
+    ('http', 'write_timeout_s', 'deploy_required'), ('http', 'pool_timeout_s', 'deploy_required'),
+    ('http', 'max_retries', 'design_required'), ('http', 'backoff_initial_s', 'design_required'),
+    ('http', 'backoff_max_s', 'design_required'), ('http', 'retry_statuses', 'design_required'),
+    ('probe', 'max_requests', 'design_required'), ('probe', 'timeout_s', 'design_required'),
+    ('image', 'max_decode_pixels', 'deploy_required'),
+    ('engine', 'name', 'deploy_required'), ('engine', 'version', 'pin_required'),
+])
+def test_model_backend_read_refuses_operational_sentinel(config, tmp_path, section, field, sentinel):
+    role = config['vlm']['roles']['manifest_drafter']
+    role['max_tokens'] = 128
+    role['sampling'] = dict(temperature=0.2, top_p=0.9, top_k=20, min_p=0.0,
+                            presence_penalty=0.0, frequency_penalty=0.0,
+                            repetition_penalty=1.0, seed='none', stop='none')
+    role['reasoning'] = dict(mode='off', effort='none', budget_tokens='none',
+                             template_kwargs_key='enable_thinking')
+    backend = config['vlm']['backends']['main']
+    backend['engine'] = {'name': 'llama_cpp', 'version': 'test-version'}
+    backend['base_urls'] = ['http://127.0.0.1:8080']
+    backend['endpoints'] = {'chat': 'chat', 'health': 'health'}
+    backend['model']['id'] = 'local-model'
+    backend['model']['revision'] = 'revision'
+    backend['max_concurrency'] = 1
+    backend['http'] = dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
+                           max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[])
+    backend['probe'] = dict(max_requests=1, timeout_s=1)
+    backend['image'] = dict(max_decode_pixels=1000)
+    backend[section][field] = sentinel
+    with pytest.raises(ConfigurationError, match=field + '.*unresolved sentinel'):
+        load_config(save_config(tmp_path, config), 'profile register')
 def test_yaml_boolean_enum_trap(config, tmp_path):
     path = save_config(tmp_path, config)
     text = path.read_text(encoding='utf-8').replace('mode: best_effort', 'mode: off', 1)
@@ -357,8 +394,15 @@ def test_overlay_rejects_policy(config, tmp_path):
 
 
 @pytest.mark.parametrize(('key', 'value'), [
-    ('endpoints', {'chat': '/new-chat', 'health': '/new-health'}),
+    ('endpoints', {'chat': 'new-chat', 'health': '/new-health'}),
     ('extra_body', {'chat_template_kwargs': {'enable_thinking': True}}),
+    ('http', {'connect_timeout_s': 1, 'read_timeout_s': 2, 'write_timeout_s': 3, 'pool_timeout_s': 4,
+              'max_retries': 1, 'backoff_initial_s': 0, 'backoff_max_s': 1, 'retry_statuses': [503]}),
+    ('probe', {'max_requests': 2, 'timeout_s': 3}),
+    ('image', {'max_decode_pixels': 1000}),
+    ('anthropic_version', '2025-01-01'),
+    ('anthropic_workspace_id', 'workspace-123'),
+    ('engine', {'name': 'vllm', 'version': 'test-version'}),
 ])
 def test_overlay_engine_overrides(config, tmp_path, key, value):
     base = save_config(tmp_path, config)

@@ -429,7 +429,7 @@ The new test file was also run against a scratch copy of the round 1 `store.py` 
 - full suite `pytest -q -s -p no:cacheprovider --basetemp=.tmp/T-006/pt tests`: `953 passed, 25 skipped in 168.55s` (906 before plus 47 new; the same 25 T-005 skips), log in `full_suite.log`;
 - lock hold times: `{"reader": {"n": 50, "median_s": 0.0065, "max_s": 0.1807}, "publisher": {"n": 4, "median_s": 0.0845, "max_s": 0.0856}}`. The publisher median rose from 0.0624 s because publish now hashes every file under the store lock;
 - round 1 probes (`review-r1/rerun_probes.py`): output identical to round 1's `after.jsonl` apart from a BOM (`r1_probes_after_r2.jsonl`);
-- `ruff check`: `D:\Project_github\prompt-enhancer-pipeline\.venv\Scripts\python.exe: No module named ruff` (not run).
+- `ruff check`: `<project>\.venv\Scripts\python.exe: No module named ruff` (not run).
 
 **Mutants** (`.tmp/T-006/review-r2/mutants_r2.py`, scratch copy of `src/`, child processes with `CREATE_NO_WINDOW`, log `mutants_r2.log`): 13 run, 13 killed.
 - `store.py` (10): publish `verify_snapshot`, fresh hash, artifacts in full verify, commit immutability, the cache reset in `reference_artifacts`, the cache reset after GC, the `real` check, the walk in `_remove_tree`, GC skipping a link, the single-use Writer.
@@ -520,7 +520,7 @@ Dropped with evidence:
 **Results** (through `test_slot.py`, venv python, `PYTHONPATH=src`, `-W error::pytest.PytestUnhandledThreadExceptionWarning`):
 - full suite: `1083 passed, 25 skipped in 229.54s`, exit 0 (`full_suite_r3.log`). The first run gave `1 failed, 1082 passed`, the hold-file WinError 32 described under Changes;
 - lock hold times: `{"reader": {"n": 50, "median_s": 0.007, "max_s": 0.2234}, "publisher": {"n": 4, "median_s": 0.0565, "max_s": 0.0941}}`;
-- `ruff check`: `D:\Project_github\prompt-enhancer-pipeline\.venv\Scripts\python.exe: No module named ruff`.
+- `ruff check`: `<project>\.venv\Scripts\python.exe: No module named ruff`.
 
 **Mutants** (`review-r3/mutants_r3.py`, scratch copy of `src/`, children with `CREATE_NO_WINDOW`; `mutants_r3.log`): 16 run, 16 killed.
 - `store.py` (8): no Writer mutex, namespace lookup by spelling, build-dir disk check, hold collision, registry sweep by prefix, GC skip of non-generated names, reference via `path` instead of `real`, lease directory names.
@@ -592,13 +592,13 @@ So a link that stayed inside the store was followed. The immutability check and 
 - **Run against the round 3 baseline:** `34 failed, 37 passed, 1 skipped` (`tests_before_r4.txt`); after: `71 passed, 1 skipped` (`tests_after_r4.txt`). The 37 that pass on round 3 are 30 cases whose link leaves the store, which rounds 1 and 2 already refused, and 7 inside-the-store cases that sit on a round 2 traversal or on `reference_artifacts` (round 3).
 - **Earlier tests changed** (`tests/test_storage_review_r3.py`, two tests): `_manifest` now takes a store-relative directory, so both write their manifest under the store root. One test gained a control assertion (the same manifest without the alias is read), because its bare `pytest.raises(StorageError)` would otherwise also pass on a wrong path.
 
-**Results** (through `test_slot.py`, `D:/Project_github/prompt-enhancer-pipeline/.venv/Scripts/python.exe`, `PYTHONPATH=src`, `PYTHONNOUSERSITE=1`, `PYTHONDONTWRITEBYTECODE=1`):
+**Results** (through `test_slot.py`, `<project>/.venv/Scripts/python.exe`, `PYTHONPATH=src`, `PYTHONNOUSERSITE=1`, `PYTHONDONTWRITEBYTECODE=1`):
 - full suite `pytest -q -s -p no:cacheprovider -W error::pytest.PytestUnhandledThreadExceptionWarning --basetemp=.tmp/T-006/review-r4/pt tests`: `1154 passed, 26 skipped in 316.33s`, exit 0 (`full_suite_r4.log`). That is 1083 plus 71 new; the 26 skips are the 25 T-005 skips and the file-symlink test;
 - the eight storage test files of rounds 0 to 3 alone, before the new file existed: `277 passed in 152.90s`;
 - lock hold times in this run: `{"reader": {"n": 50, "median_s": 0.0161, "max_s": 0.1488}, "publisher": {"n": 4, "median_s": 0.0892, "max_s": 0.0934}}`;
 - `git diff --check` (work tree against the index) and `git diff HEAD --check`: clean, exit 0. `git diff --cached --check` still reports line 503, because the index holds the round 3 copy and a worker does not stage; the work tree line is fixed;
 - child processes keep `CREATE_NO_WINDOW` (`tests/test_storage_concurrency.py:22`, `.tmp/T-006/mutants.py:27`); this round starts no new child process in tests;
-- `ruff check` and `ruff format --check`: `D:\Project_github\prompt-enhancer-pipeline\.venv\Scripts\python.exe: No module named ruff`.
+- `ruff check` and `ruff format --check`: `<project>\.venv\Scripts\python.exe: No module named ruff`.
 
 **Mutants** (`review-r4/mutants_r4.py`, scratch copy of `src/`, children with `CREATE_NO_WINDOW`; `mutants_r4.log`): 13 run, 12 killed at first, 13 after one added test.
 - `store.py` (10, each site joins the root instead of calling `path`): commit file arm, commit table arm, the builder's target, lease release, the GC delete, the GC read before any mark, `done` refusing instead of redoing, the hold path, lease creation, data store append.

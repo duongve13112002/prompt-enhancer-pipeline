@@ -84,9 +84,9 @@ Dedicated `tools/agent-workflow/cleanup_config.json`, validated by `purge_tmp.py
 - **Real checkout dry run** (read-only, script loaded from this worktree with `PROJECT` pointed at the real checkout; nothing deleted):
   ```
   $ purge_tmp.py sweep --dry-run
-  D:\Project_github\prompt-enhancer-pipeline\.tmp: would delete 0 orphan(s) older than 72 h
+  <project>\.tmp: would delete 0 orphan(s) older than 72 h
   $ purge_tmp.py prune-archive --dry-run
-  D:\Project_github\prompt-enhancer-pipeline\.tmp\pm-archive: would delete 0 entries older than 336 h
+  <project>\.tmp\pm-archive: would delete 0 entries older than 336 h
   ```
   Everything under `.tmp` is younger than 72 h, so the configured list is empty. To show a non-empty plan, the same dry run with an illustrative age of 0.01 h (not the configured value) printed: `kept T-002 ... T-026, cold-read, pm-checks, worktrees/T-002, T-024, T-025: owned (named in ## IN-FLIGHT)`, `would delete T-002-review (~0.0 MB)`, `would delete T-002-review2 (~0.0 MB)`, `would delete 2 orphan(s)`.
 - **not_run:** `ruff check` and `ruff format --check` (ruff is not installed in the project `.venv`; no installs allowed); full `tools/agent-workflow/tests/` suite (only the two named files, so the 10 known Windows failures are unchecked); CLI end-to-end `sweep` with a real deletion (forbidden); POSIX symlink tests (this host is Windows; junction tests are `skipif(os.name != "nt")`).
