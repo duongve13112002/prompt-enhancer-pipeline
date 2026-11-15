@@ -87,10 +87,12 @@
                       "anyOf": [
                         {
                           "type": "array",
+                          "minItems": 1,
                           "items": {
                             "anyOf": [
                               {
-                                "type": "string"
+                                "type": "string",
+                                "minLength": 1
                               },
                               {
                                 "enum": [
@@ -140,7 +142,7 @@
                     "on_description_count_mismatch": {
                       "anyOf": [
                         {
-                          "type": "string"
+                          "const": "model_assigns"
                         },
                         {
                           "enum": [
@@ -180,10 +182,12 @@
               "anyOf": [
                 {
                   "type": "array",
+                  "minItems": 1,
                   "items": {
                     "anyOf": [
                       {
-                        "type": "string"
+                        "type": "string",
+                        "minLength": 2
                       },
                       {
                         "enum": [
@@ -215,7 +219,8 @@
             "concept_separator": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1
                 },
                 {
                   "enum": [
@@ -482,7 +487,8 @@
                       "anyOf": [
                         {
                           "type": "number",
-                          "minimum": 0
+                          "minimum": 0,
+                          "maximum": 1
                         },
                         {
                           "enum": [
@@ -4905,6 +4911,7 @@
           "type": "object",
           "properties": {
             "data_root": {
+              "description": "For kb sync, a resolved path that does not overlap knowledge.root.",
               "anyOf": [
                 {
                   "type": "string"

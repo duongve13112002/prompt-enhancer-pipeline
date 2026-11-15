@@ -221,10 +221,16 @@ class FileLock:
                 msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
             else:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+        except BaseException as error:
             handle.close()
-            return False
-        self._handle = handle
+            if isinstance(error, OSError):
+                return False
+            raise
+        try:
+            self._handle = handle
+        except BaseException:
+            handle.close()
+            raise
         return True
 
     def acquire(self):

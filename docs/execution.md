@@ -33,12 +33,16 @@ Each command refuses at start when a key it reads still holds a sentinel or is m
 1. **Scan** the whole source tree every time, because an incremental listing cannot see deleted sources ([N124](note/N124-incremental-indexing.md)). Size and modification time pick the files to hash; the hash decides.
 2. **Diff** against the current snapshot: added, changed, moved, removed images and folders, and changed info files and `kb_overrides.yaml`.
 3. **Plan:** print the work and the number of model calls per role. `--plan` stops here.
-4. **Guard:** stop when the plan removes more than `sync.mass_deletion_guard.max_removed_fraction` (`design_required`) of the knowledge base, for example when the source drive is not mounted; `--force` overrides. A full scan that lists too little would otherwise delete everything ([N124](note/N124-incremental-indexing.md)).
+4. **Guard:** stop when the plan removes more than `sync.mass_deletion_guard.max_removed_fraction` (`design_required`) of the knowledge base, for example when the source drive is not mounted; `--force` overrides. The removal fraction is unmatched removed folders divided by folders in the previous snapshot, or zero if it has none; confirmed moves are not removals. Ambiguous matches count as removals. A full scan that lists too little would otherwise delete everything ([N124](note/N124-incremental-indexing.md)).
 5. **Execute** per artifact in the order K1 (image embeddings), K2 (first the info-file assessment and the naming of folders without a usable info file), K3, K4, K1 (concept-text embeddings), resumable; an undecodable file is recorded, skipped and reported.
 6. **Build and validate** the new snapshot beside the current one (K5): referential integrity and sample queries.
 7. **Publish** by moving the current pointer atomically; retain `sync.snapshots.keep` snapshots for rollback.
 
+`--plan` reports the guard verdict and exits 1 when the guard would refuse execution, or 0 when it permits it, including with `--force`. It hashes each selected file because checkpoint reads currently require a writer session that may recover or compact the store; plan preserves the store without taking that writer session.
+
 With `knowledge.on_source_removed: remove` (the default) a deleted source loses its knowledge at the next sync; until then the database and running requests are unaffected, because the request path reads only the snapshot (decision 17).
+
+K0 resolves the configured source root at startup and opens entries below that root without following links. It reports and refuses links it encounters; replacement of a path component after validation remains a race and is not a proof of containment against every concurrent replacement. The resolved and configured root spellings are recorded in the scan report.
 
 ## What changed, what is reprocessed, what is not
 
@@ -68,6 +72,8 @@ Cards are recomputed from the current image list, never accumulated, because row
 ## Snapshots, publish, rollback, garbage collection
 
 A snapshot is an immutable directory under `storage.kb_store` with a manifest: the tables (`folders`, `concepts`, `folder_concepts`, `images`, `folder_images`, `image_embeddings`, `concept_text_embeddings`, `observations`, `cards`, `aliases`), the serving index built from them, and copies of the knowledge-base images the `attach` channel may send. Publishing moves one pointer; `kb rollback` moves it back. Readers pinned to an older snapshot keep a consistent view while a new one is written ([N125](note/N125-snapshots-and-vector-deletion.md)). The index is rebuilt per snapshot rather than edited in place, because some approximate nearest-neighbour indexes cannot delete entries ([N125](note/N125-snapshots-and-vector-deletion.md)). Unreferenced artifacts are kept for `sync.gc.retention` before `kb gc` removes them, so restoring a file removed by mistake costs no model call.
+
+An asynchronous interrupt between returning a pin and recording it in the caller can leave a lease behind. A held lease protects the snapshot from GC until the lease is released; GC removes an unlocked lease as stale. Lease files currently contain no owner identity, so GC cannot determine whether an unlocked lease's originating process is alive. Owner-identity reclamation is deferred as a storage follow-up, pending user review.
 
 ## How a request pins a snapshot
 

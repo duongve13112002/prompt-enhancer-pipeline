@@ -5,8 +5,34 @@ from pathlib import Path
 import shutil
 
 import pytest
+import yaml
 
 from prompt_enhancer import load_config, load_profile
+
+
+@pytest.fixture
+def model_test_profile():
+    """Example profile with synthetic model settings for command-loader tests."""
+    profile = yaml.safe_load((Path(__file__).resolve().parents[1] / 'configs/enhancer.example.yaml').read_bytes())
+    backend = profile['vlm']['backends']['main']
+    backend.update(engine={'name': 'llama_cpp', 'version': 'test-version'},
+                   base_urls=['http://127.0.0.1:8080'], endpoints={'chat': 'chat', 'health': 'health'},
+                   max_concurrency=1, http=dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1,
+                   pool_timeout_s=1, max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[]),
+                   probe={'max_requests': 1, 'timeout_s': 1}, image={'max_decode_pixels': 1000})
+    backend['model'].update(id='synthetic', revision='test')
+    for name in ('observer', 'info_assessor', 'folder_namer', 'card_builder', 'alias_generator'):
+        role = profile['vlm']['roles'][name]
+        role.update(max_tokens=128,
+                    sampling=dict(temperature=0.2, top_p=0.9, top_k=20, min_p=0.0,
+                                  frequency_penalty=0.0, presence_penalty=0.0,
+                                  repetition_penalty=1.0, seed='none', stop='none'),
+                    reasoning=dict(mode='off', effort='none', budget_tokens='none',
+                                   template_kwargs_key='enable_thinking'))
+        if isinstance(role['image'], dict):
+            role['image'].update(source='source_image', quality=80)
+    profile['vision']['quality'] = 80
+    return profile
 
 
 @pytest.fixture(scope='session')

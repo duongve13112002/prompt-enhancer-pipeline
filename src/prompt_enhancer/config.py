@@ -1,6 +1,7 @@
 """Load explicitly configured pipeline and admin profiles."""
 
 from copy import deepcopy
+import codecs
 import errno
 from functools import lru_cache
 import json
@@ -30,8 +31,8 @@ WINDOWS_DEVICE_NAMES = frozenset(
 # Only documented reads are listed; later stage tasks complete their read sets.
 COMMAND_READS = {
     'kb status': ('storage.kb_store', 'storage.lock'),
-    'kb sync': ('knowledge', 'sync', 'embedding', 'observe', 'cards', 'aliases', 'index', 'storage.kb_store',
-                'storage.lock', 'storage.table_format',
+    'kb sync': ('knowledge', 'sync', 'embedding', 'observe', 'cards', 'aliases', 'index', 'storage.kb_store', 'storage.data_root',
+                'storage.lock', 'storage.table_format', 'runtime.cpu_workers',
                 'vlm.roles.observer', 'vlm.roles.info_assessor', 'vlm.roles.folder_namer',
                 'vlm.roles.card_builder', 'vlm.roles.alias_generator', 'vision'),
     'kb rollback': ('storage.kb_store', 'storage.lock', 'storage.table_format'),
@@ -639,6 +640,26 @@ def load_config(path, command, *, overlay=None, project_root=None):
         _sentinel(default, path, 'vlm.default_backend', sources)
         default_key = 'vlm.backends.' + default
         _sentinel(_get(config, default_key, path), path, default_key, sources)
+    if command == 'kb sync':
+        source = _resolve_within(_lexical_path(config['knowledge']['root'], root, path, 'knowledge.root'), root,
+                                 {os.path.normcase('.secrets'), os.path.normcase('models')}, path, 'knowledge.root')
+        for key in ('storage.kb_store', 'storage.data_root'):
+            target = _resolve_within(_lexical_path(_get(config, key, path), root, path, key), root,
+                                     {os.path.normcase('.secrets'), os.path.normcase('models')}, path, key)
+            if source == target or source in target.parents or target in source.parents:
+                raise ConfigurationError(f'{path}: {key} overlaps knowledge.root')
+        key = 'knowledge.info_file.encoding'
+        try:
+            codecs.lookup(config['knowledge']['info_file']['encoding'])
+        except LookupError as error:
+            raise ConfigurationError(f'{_source(sources, key, path)}: {key}: unknown codec') from error
+        workers = config['runtime']['cpu_workers']
+        if workers != 'auto' and (type(workers) is not int or workers <= 0):
+            raise ConfigurationError(f'{path}: runtime.cpu_workers: expected auto or a positive integer')
+        for extension in config['knowledge']['image_extensions']:
+            if not isinstance(extension, str) or not extension.startswith('.') or len(extension) < 2:
+                raise ConfigurationError(f'{path}: knowledge.image_extensions: invalid extension {extension!r}')
+            _filename(extension, path, 'knowledge.image_extensions')
     return config
 
 

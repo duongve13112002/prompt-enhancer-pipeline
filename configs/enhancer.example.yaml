@@ -328,11 +328,11 @@ runtime:                                 # no fixed hardware (AGENTS.md section 
   gpus: auto
   vram_budget_gb: deploy_required        # per GPU
   vram_check: {before: true, after: true}
-  cpu_workers: auto
+  cpu_workers: auto                      # process affinity CPU count when available, else os.cpu_count()
   resume: true                           # R-017
 
 storage:
-  data_root: data                        # Git-ignored; every derived table lives under it
+  data_root: data                        # Git-ignored; must not overlap knowledge.root
   kb_store: data/kb                      # snapshots, tables and the serving index
   table_format: parquet                  # decision 19, R-016
   lock: {timeout_s: deploy_required, poll_s: deploy_required}   # store lock wait, set per machine (T-006)

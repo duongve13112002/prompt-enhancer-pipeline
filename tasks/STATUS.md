@@ -26,7 +26,10 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
     - `not_run`: real symlink tests (no link privilege here; junctions and hard links were tested), Python 3.11, ruff, Linux.
   - **E12 (dev GPU smoke): blocked.** `models/` holds no model file and `llama-server` is absent from PATH. Downloading the dev model (decision 20: `Qwen3.5-4B-Q3_K_M.gguf` 2.29 GB plus `mmproj-F16.gguf` 0.67 GB) and a llama.cpp build needs the user's approval (question 2 below).
   - **T-012 (P profiles): started about 18:40.** Claude Opus 5.5 builds and Codex reviews (decision 91). Step 0 is being written in [task](active/T-012-profiles.md).
-  - **T-007 (K0 sync): reviews PASS.** The fresh Sonnet re-review passed, and so did its check of fix round 2 (1292 passed). The patch conflicts with T-009 in `config.py` and `test_field_contracts.py`, and a Codex worker is combining the two in a fresh worktree.
+  - **T-007 (K0 sync): accepted and pushed.**
+    - The Sonnet re-review passed, and so did its check of fix round 2.
+    - Codex combined T-007 with T-009. The test profile is now built from `enhancer.example.yaml` plus a shared `tests/conftest.py` helper.
+    - Main pipeline suite: `1824 passed, 31 skipped`. A Pillow deprecation warning remains: saving `I` mode PNGs, at `model_image.py:80`, is a T-009 follow-up.
     - The check found a Windows-only race in committed T-006 storage (P2, fails closed). A reader's `release()` unlinks its lease without the lock, while GC resolves the lease names, and `ntpath.realpath` of a vanished file keeps `\\?\`, which reads as "outside project root". The fix follows T-007's integration, because both touch `store.py`.
   - **T-022 (CI):** the Codex review FAILED with 2 P1 and 1 P2:
     - a Ctrl+C at cleanup entry leaves the repository public;

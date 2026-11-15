@@ -104,7 +104,8 @@ def test_protocol_only_fields():
                 break
         else:
             constrained.append('.'.join(path))
-    assert constrained == ['schema_version', 'vision.alpha_policy.mode', 'vlm.backends.main.unsupported_param_policy',
+    assert constrained == ['schema_version', 'knowledge.info_file.on_description_count_mismatch',
+                           'vision.alpha_policy.mode', 'vlm.backends.main.unsupported_param_policy',
                            'vlm.roles.planner.mode', 'vlm.roles.planner.output.validate_response']
 
 
@@ -123,6 +124,7 @@ def test_all_constrained_fields_are_known():
                 break
         else:
             allowed = (path == ('schema_version',)
+                       or path == ('knowledge', 'info_file', 'on_description_count_mismatch')
                        or path == ('vision', 'alpha_policy', 'mode')  # Refuse also removes the background member.
                        or path[:2] == ('vlm', 'backends') and path[-1] == 'unsupported_param_policy'
                        or path[:2] == ('vlm', 'roles') and path[-1] == 'mode' and len(path) == 4

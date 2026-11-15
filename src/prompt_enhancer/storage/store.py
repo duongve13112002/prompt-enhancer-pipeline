@@ -474,8 +474,17 @@ class KnowledgeStore:
             sid, sha = current
             manifest = self._verify_dir(self._snapshot_dir(sid), sha, full=False)
             lease = FileLock(self.path(f'leases/{sid}/{uuid.uuid4().hex}.lease'), self.timeout_s, self.poll_s)
-            lease.acquire()  # a new file a scanner holds briefly is waited for, up to storage.lock.timeout_s
-        return PinnedSnapshot(self, sid, manifest, lease)
+            try:
+                lease.acquire()  # a new file a scanner holds briefly is waited for
+                pinned = PinnedSnapshot(self, sid, manifest, lease)
+            except BaseException:
+                lease.release()
+                try:
+                    _unlink(lease.path)
+                except OSError:
+                    pass
+                raise
+        return pinned
 
     def hold(self, snapshot_id, request_id, expires_at):
         """Keep a snapshot for a trace (its attachments) until expires_at, even past keep (S6-envelope.md:20).
@@ -613,13 +622,14 @@ class Writer:
             if self._entered:
                 raise StorageError('a Writer is single-use: open a new session with store.writer()')
             self._entered = True
-            self._lock = FileLock(self.store.path(WRITER), self.store.timeout_s, self.store.poll_s).acquire()
+            self._lock = FileLock(self.store.path(WRITER), self.store.timeout_s, self.store.poll_s)
             try:
+                self._lock.acquire()
                 self._recover()
+                self.run_id = uuid.uuid4().hex
             except BaseException:
                 self._lock.release()
                 raise
-            self.run_id = uuid.uuid4().hex
             return self
 
     def __exit__(self, exc_type, *exc):
@@ -748,8 +758,11 @@ class Writer:
                 if not name.endswith('.lease'):
                     continue
                 probe = FileLock(path, self.store.timeout_s, self.store.poll_s)
-                if probe.try_acquire():  # no process holds it: its reader ended or crashed
+                try:
+                    acquired = probe.try_acquire()
+                finally:
                     probe.release()
+                if acquired:  # no process holds it: its reader ended or crashed
                     try:
                         _unlink(path)
                     except OSError:
