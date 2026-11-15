@@ -8,6 +8,10 @@
       "Glob(**/.secrets/**)"
     ]
   },
+  "statusLine": {
+    "type": "command",
+    "command": "<VENV_PYTHON> -B -I <PROJECT_ROOT>/tools/agent-workflow/statusline.py --source claude"
+  },
   "hooks": {
     "PreToolUse": [
       {

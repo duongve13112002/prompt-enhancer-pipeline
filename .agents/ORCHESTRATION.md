@@ -23,7 +23,7 @@ The mode is the `CURRENT MODE` line in the `ORCHESTRATION` block of AGENTS.md (C
 2. Confirm with a read-only `gh` call that the GitHub repository is private (AGENTS.md section 11); if it is public and no CI window is open, tell the user at once.
 3. **CLI facts, from real commands only:** `claude --version`, `codex --version`, `agy --version`; confirm in `--help` that resuming by ID still works (Claude and Codex through `cli_worker.py send`; Antigravity `agy -p "..." --conversation <ID>`) whether a CLI has an official delete-by-ID command for a session; and which scheduling tool this session has (a Desktop scheduled-task tool, `CronCreate`, or none), found in its own tool list, never asked of the user. Never invent a flag; if unsure, treat it as absent. Write the results with the time to `.tmp/pm-state/platform-check.json`; a new session checks again.
 4. **Cache TTL:** Claude workers take their TTL from `tools/agent-workflow/worker_profiles.json`. Codex and Antigravity document no TTL setting (re-check `--help`); use the convention 1 hour for an implementer kept for fix rounds and 5 minutes for a reviewer kept for a retest. If the Claude subscription runs on usage credits, treat the Claude TTL as 5 minutes.
-5. **Quota:** `usage_snapshot.py`, then `.tmp/pm-state/quota-blocks.json`: a provider past its reset time is available again; for every provider still blocked make sure a wake is scheduled ([PM_POLICY](policy/PM_POLICY.md) section 1).
+5. **Quota:** `usage_snapshot.py`, then `.tmp/pm-state/quota-blocks.json`: a provider past its reset time is available again; a non-zero exit (`quota_blocks.status: error`) or an `unreadable` line at session start means the blocks are unknown, not empty; for every provider still blocked make sure a wake is scheduled ([PM_POLICY](policy/PM_POLICY.md) section 1).
 6. **Clean up** what the previous session left (section 4, including the orphan sweep).
 7. Write `## NOW` in `.tmp/pm-state/pm-continuation.md` ([PM_POLICY](policy/PM_POLICY.md) section 6).
 
@@ -35,7 +35,7 @@ The mode is the `CURRENT MODE` line in the `ORCHESTRATION` block of AGENTS.md (C
 | Antigravity jobs | `.tmp/pm-state/agents.json` | the `gemini-*.ps1` scripts |
 | Tasks in flight: task, worker, phase, review state, base commit, applied patches, pending cleanup | `## IN-FLIGHT` in `.tmp/pm-state/pm-continuation.md` | PM |
 | Accepted patches | `.tmp/pm-state/patches/<task>.patch` | PM |
-| Blocked providers and their reset times | `.tmp/pm-state/quota-blocks.json` | PM (task T-026 automates it) |
+| Blocked providers and their reset times | `.tmp/pm-state/quota-blocks.json` | `usage_snapshot.py` (its `blocks`) and the PM through `usage_snapshot.py pm-set` only, never by hand |
 | Decision log | `.agents/log.md`, one line per decision (`<epoch> ASSIGN T-13 -> codex-dev-02 (new task)`), last 300 lines | PM |
 
 `.agents/registry.json` of the earlier rules is no longer used (decision 48). Time comes from `date +%s`, never from an estimate. `elapsed` = now minus the end of the worker's last turn; an implementer counts as expired when `elapsed > ttl - 60 s`, a reviewer when `elapsed > ttl - 30 s`. Read the state only when a decision needs it.

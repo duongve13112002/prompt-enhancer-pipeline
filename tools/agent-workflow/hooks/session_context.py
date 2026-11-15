@@ -6,6 +6,11 @@ documented SessionStart JSON output (`hookSpecificOutput.additionalContext`) wit
   `## IN-FLIGHT`, `## NOW`; at most `note_inject_chars`), so they reach the context even if the PM forgets to read the
   note after a compaction. If memory_hooks.json is missing, broken or lacks these two fields, the base behaviour stays
   (`FALLBACK_HEADINGS`, `FALLBACK_NOTE_CHARS`) and the problem is shown on a `not configured` line;
+- one line per entry of the `blocks` list in `usage.quota_blocks_file` (codex_profiles.json; written by
+  usage_snapshot.py and its `pm-set`), read under the writers' lock and marked when its reset time has passed or is
+  not a time with a UTC offset; a file that cannot be read, or that the validator of the stored format
+  (`usage_snapshot.stored_blocks`) calls malformed in any part, gets one `unreadable` line beside the blocks it
+  still holds, never "no block";
 - one line per configuration problem (`not configured: <field>`);
 - decisions from `applied_from_decision` on whose index row says `applied: pending` (decisions_applied.py), and a count
   of rows without a valid marker;
@@ -50,6 +55,10 @@ CONFIG = TOOLS / "memory_hooks.json"
 CONFIG_MODULE = TOOLS / "memory_hooks_config.py"
 APPLIED_MODULE = TOOLS / "decisions_applied.py"
 CLEANUP_CONFIG = TOOLS / "cleanup_config.json"  # validated by purge_tmp.load_cleanup_config
+# `usage.quota_blocks_file` lives in the usage settings, validated by codex_backend.load_usage_settings.
+BACKEND_MODULE = TOOLS / "codex_backend.py"
+USAGE_CONFIG = TOOLS / "codex_profiles.json"
+SNAPSHOT_MODULE = TOOLS / "usage_snapshot.py"  # owns state_path, the contained path of every quota file
 WORKER_ENV_FLAG = "CLAUDE_CODE_DISABLE_AUTO_MEMORY"
 DECISIONS_REL = "tasks/DECISIONS_INDEX.md"
 # Fail-safe of the base behaviour (safety-bound): when memory_hooks.json cannot supply the note settings, the agreements
@@ -332,6 +341,55 @@ def settled_block(path: Path, head_chars: int) -> str:
     return f"Settled decisions (head of .tmp/pm-state/{SETTLED_NAME}):\n{text}"
 
 
+def quota_block(now: float) -> str:
+    """One line per entry of the `blocks` list in `usage.quota_blocks_file` (written by usage_snapshot.py and the PM):
+    provider, window, reset time, and whether that time has passed or is no time at all. The file is judged by the
+    one validator of the stored format (`usage_snapshot.stored_blocks`), and this function branches on its tag:
+    empty text only for ABSENT (`read_quota_file` proved there is no file: missing while the writers' lock is held)
+    and for a VALID file without blocks; a MALFORMED file prints every block it still holds plus one `unreadable`
+    line naming each unreadable part; a file that cannot be read, a busy lock included, is `unreadable` too."""
+    try:
+        settings = load_module(BACKEND_MODULE, "codex_backend").load_usage_settings(USAGE_CONFIG)
+        relative = settings["quota_blocks_file"]
+    except (Exception, SystemExit) as exc:  # a refused config is shown, never raised
+        return f"not configured: usage.quota_blocks_file ({str(exc)[:200]})"
+    try:
+        # The same contained path as the writers: under .tmp/pm-state, refused when a link or junction lies on it.
+        snapshot = load_module(SNAPSHOT_MODULE, "usage_snapshot")
+        path = snapshot.state_path(relative, ROOT)
+    except (Exception, SystemExit) as exc:
+        return f"Quota blocks file {relative} refused: {str(exc)[:200]}"
+    try:
+        # Under the writers' lock: None is a proven absence, which the validator tags ABSENT.
+        stored = snapshot.stored_blocks(snapshot.read_quota_file(path))
+    except (Exception, SystemExit) as exc:
+        return f"Quota blocks file {relative} unreadable: {type(exc).__name__}: {str(exc)[:160]}"
+    if stored.tag == snapshot.ABSENT:
+        return ""
+    lines = []
+    for block in stored.blocks:
+        resets = block.get("resets_at")
+        ends = snapshot.parse_time(resets)  # the tool's one parser: a time without a UTC offset is no time
+        if ends is None:
+            passed = " (no valid reset time: set `resets_at` with its UTC offset through usage_snapshot.py pm-set)"
+        elif ends < now:
+            passed = " (reset time passed: the next usage_snapshot.py run drops the block)"
+        else:
+            passed = ""
+        used = block.get("used_percent")
+        used_text = f", {used}% used" if isinstance(used, (int, float)) else ""
+        lines.append(
+            f"- {block.get('provider')} {block.get('window')} blocked until {resets}{used_text}{passed}"
+        )
+    parts = [f"Quota blocks ({relative}; PM_POLICY section 1):\n" + "\n".join(lines)] if lines else []
+    if stored.tag == snapshot.MALFORMED:
+        parts.append(
+            f"Quota blocks file {relative} unreadable: {'; '.join(stored.problems)[:300]} "
+            "(the blocks are not fully known; repair the file by hand)"
+        )
+    return "\n".join(parts)  # empty only for a valid file without blocks
+
+
 def assemble(blocks: list[tuple[str, str]], limit: int) -> str:
     """Join the (label, text) blocks in priority order into at most `limit` characters.
 
@@ -431,6 +489,11 @@ def main(argv: list[str] | None = None) -> int:
             else f"Session start ({source}). The PM continuation note has no agreements or NOW section.",
         )
     )
+    try:
+        quota_text = quota_block(time.time())
+    except Exception as exc:  # never blocks the session start
+        quota_text = f"Quota blocks check failed: {type(exc).__name__}"
+    blocks.append(("quota blocks", quota_text))
     index_text = ""
     try:
         index_text = (ROOT / DECISIONS_REL).read_text(encoding="utf-8-sig", errors="replace")

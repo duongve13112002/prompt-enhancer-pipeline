@@ -150,6 +150,10 @@ class World:
                 "cache_warn_ratio": 0.5,
                 "antigravity_command": None,
                 "command_timeout_seconds": 20,
+                "block_percent": {"claude": 90, "codex": 100, "antigravity": 100},
+                "claude_statusline_file": ".tmp/pm-state/claude-statusline.json",
+                "antigravity_statusline_file": ".tmp/pm-state/antigravity-statusline.json",
+                "quota_blocks_file": ".tmp/pm-state/quota-blocks.json",
             },
         }
 
@@ -616,6 +620,33 @@ REFUSALS = [
     (put(["usage", "session_file_limit"], True), "positive integer"),
     (put(["usage", "session_file_limit"], "8"), "positive integer"),
     (put(["usage", "stale_minutes"], 0), "positive integer"),
+    *[
+        (drop(["usage", k]), "missing field")
+        for k in (
+            "block_percent",
+            "claude_statusline_file",
+            "antigravity_statusline_file",
+            "quota_blocks_file",
+        )
+    ],
+    (drop(["usage", "block_percent", "claude"]), "missing claude"),
+    (put(["usage", "block_percent", "gemini"], 50), "unknown gemini"),
+    (put(["usage", "block_percent"], 90), "expected an object"),
+    (put(["usage", "block_percent", "claude"], 0), "above 0 and at most 100"),
+    (put(["usage", "block_percent", "codex"], 100.5), "above 0 and at most 100"),
+    (put(["usage", "block_percent", "antigravity"], -1), "above 0 and at most 100"),
+    (put(["usage", "block_percent", "claude"], True), "above 0 and at most 100"),
+    (put(["usage", "block_percent", "claude"], "90"), "above 0 and at most 100"),
+    (put(["usage", "claude_statusline_file"], "../outside.json"), "relative path"),
+    (put(["usage", "antigravity_statusline_file"], "C:/abs.json"), "relative path"),
+    (put(["usage", "quota_blocks_file"], "/abs/quota.json"), "relative path"),
+    (put(["usage", "quota_blocks_file"], "<path>"), "placeholder"),
+    # T-026 fix 1 (F5, F7): every quota file lies under .tmp/pm-state; a `:` form is refused on every OS.
+    (put(["usage", "claude_statusline_file"], "notes/quota.json"), "under .tmp/pm-state/"),
+    (put(["usage", "quota_blocks_file"], ".tmp/pm-state"), "under .tmp/pm-state/"),
+    (put(["usage", "quota_blocks_file"], ".tmp/other/quota.json"), "under .tmp/pm-state/"),
+    (put(["usage", "antigravity_statusline_file"], ".tmp/pm-state/a.json:stream"), "under .tmp/pm-state/"),
+    (put(["usage", "antigravity_statusline_file"], ".tmp\\pm-state\\C:a.json"), "under .tmp/pm-state/"),
 ]
 
 
@@ -966,6 +997,28 @@ def test_the_usage_command_settings_are_honoured(world: World) -> None:
     assert cb.load_codex_config(world.config)["runtime"]["check_timeout_seconds"] == 20
 
 
+def test_the_snapshot_reads_worker_events_from_the_launchers_job_folder() -> None:
+    assert us.JOBS == cw.JOBS  # artifact-bound: the same turn logs cli_worker writes
+
+
+def test_the_quota_settings_are_honoured(world: World) -> None:
+    def change(cfg: dict[str, Any]) -> None:
+        cfg["usage"].update(
+            block_percent={"claude": 75.5, "codex": 99, "antigravity": 100},
+            claude_statusline_file=".tmp/pm-state/sub/c.json",
+            antigravity_statusline_file=".tmp\\pm-state\\a.json",
+            quota_blocks_file="./.tmp/pm-state//blocks.json",
+        )
+
+    world.write_config(change)
+    settings_ = cb.load_usage_settings(world.config)
+    assert settings_["block_percent"] == {"claude": 75.5, "codex": 99.0, "antigravity": 100.0}
+    assert settings_["claude_statusline_file"] == ".tmp/pm-state/sub/c.json"
+    # Either separator gives the same `/` form, so the value names one file on Windows and POSIX (T-026 fix 1, F7).
+    assert settings_["antigravity_statusline_file"] == ".tmp/pm-state/a.json"
+    assert settings_["quota_blocks_file"] == ".tmp/pm-state/blocks.json"
+
+
 def test_a_model_override_cannot_be_read_as_a_flag(world: World) -> None:
     cfg = cb.load_codex_config(world.config)
     with pytest.raises(SystemExit, match="cannot start with"):
@@ -989,6 +1042,10 @@ def test_committed_profiles_are_refused_until_the_placeholders_are_replaced() ->
         "cache_warn_ratio": 0.5,
         "antigravity_command": None,
         "command_timeout_seconds": 60,
+        "block_percent": {"claude": 90.0, "codex": 100.0, "antigravity": 100.0},
+        "claude_statusline_file": ".tmp/pm-state/claude-statusline.json",
+        "antigravity_statusline_file": ".tmp/pm-state/antigravity-statusline.json",
+        "quota_blocks_file": ".tmp/pm-state/quota-blocks.json",
     }
     assert isinstance(raw["runtime"]["codex_command"], str)
     swapped = copy.deepcopy(raw)
@@ -2164,6 +2221,8 @@ def test_session_file_limit_changes_selection_and_is_forwarded_by_all_consumers(
     assert world.start() == 0
     assert limits == [1, 1]  # before and after ledger snapshots
     monkeypatch.setattr(sys, "argv", ["usage_snapshot.py", "--config", str(world.config)])
+    monkeypatch.setattr(us, "ROOT", world.root)
+    monkeypatch.setattr(us, "JOBS", world.root / "no-jobs")
     capsys.readouterr()
     assert us.main() == 0
     assert json.loads(capsys.readouterr().out)["codex"]["observed_at"] == one["observed_at"]
@@ -2222,14 +2281,17 @@ def test_the_antigravity_usage_command_failures_are_unknown_never_zero() -> None
     assert us.antigravity_snapshot("agy", None, returning(0, "{}"))["status"] == "unknown"
     cases = [
         returning(1, "{}"),
-        returning(0, "not json"),
-        returning(0, "[1, 2]"),
         returning(0, ""),
+        returning(0, " \n"),
         raising(FileNotFoundError("agy")),
         raising(subprocess.TimeoutExpired("agy", 15)),
     ]
     for runner in cases:
         assert us.antigravity_snapshot("agy", 15, runner)["status"] == "unknown"
+    # Output that is not a JSON object is kept verbatim as text, never read for windows (no JSON assumed).
+    for text in ("Gemini Models\tWeekly\t0%\n", "[1, 2]"):
+        snap = us.antigravity_snapshot("agy", 15, returning(0, text))
+        assert snap == {"status": "ok", "source": "usage command", "report": text}
     # `collect` forwards the configured command and keeps one failing source from stopping the others.
     home = Path("no-codex-home")
     result = us.collect(home, None, 60, 8, NOW, "agy", 15, returning(0, '{"ok": 1}'))
@@ -2257,9 +2319,8 @@ def test_collect_reports_claude_from_the_pm_file_and_antigravity_unknown(tmp_pat
     assert us.collect(tmp_path, None, 60, 8, NOW)["claude"]["status"] == "unknown"
     assert us.collect(tmp_path, claude, 60, 8, NOW)["claude"]["reason"].startswith("file missing")
     claude.write_text("[1]", encoding="utf-8")
-    assert (
-        us.collect(tmp_path, claude, 60, 8, NOW)["claude"]["reason"] == "file is not a JSON object"
-    )
+    # T-026 fix round 4: the one decoder names the defect after the fixed head.
+    assert us.collect(tmp_path, claude, 60, 8, NOW)["claude"]["reason"].startswith("file is not a JSON object: ")
     claude.write_text(json.dumps({"five_hour": 12}), encoding="utf-8")
     fresh = us.collect(tmp_path, claude, 60, 8, claude.stat().st_mtime + 60)
     assert fresh["claude"]["status"] == "ok" and fresh["claude"]["data"] == {"five_hour": 12}
@@ -2279,6 +2340,8 @@ def test_snapshot_cli_needs_no_filled_in_runtime(
 ) -> None:
     put_session(tmp_path / "h", [session_row(300, None, "2026-11-07T10:00:00Z")])
     monkeypatch.setattr("sys.argv", ["usage_snapshot.py", "--codex-home", str(tmp_path / "h")])
+    monkeypatch.setattr(us, "ROOT", tmp_path)  # the quota files of the tracked profile land here
+    monkeypatch.setattr(us, "JOBS", tmp_path / "no-jobs")
     assert us.main() == 0
     out = json.loads(capsys.readouterr().out)
     assert out["codex"]["status"] in {"ok", "unknown"} and out["antigravity"]["status"] == "unknown"

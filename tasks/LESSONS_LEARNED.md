@@ -20,6 +20,13 @@ Read the Rules digest before every task (AGENTS.md section 9). Each line is a pr
 
 ## Recent entries
 
+- 2026-11-15, the PM passed header file paths to its brief helper's `-Header`, which takes the header text. The T-007 combine, T-012, T-007 recheck and runner retest 2 briefs therefore carried a path string, not the dispatch. The Codex combine worker then worked only from the task file's old feature header, re-reported Step 0, and the turn was wasted.
+  - **Root cause:** a text parameter accepted a path silently, and lint passed because the task file supplied every field.
+  - **Prevention:** the helper reads a header given as a file path and refuses a path-like value naming no file. The PM reads the first lines of each brief it builds.
+  - **Evidence:** `.tmp/cli-jobs/t007-combine-codex/001.jsonl`.
+- 2026-11-15, the PM wrote "18:55" in STATUS without reading `Get-Date`; the clock said 18:45.
+  - **Prevention:** run `Get-Date` in the same step that writes any time. This is the standing rule; it recurred.
+
 - 2026-11-15, the page-fetch agent's report on the Anthropic API headers left out the `anthropic-workspace-id` row. That row is required for keys not scoped to a workspace. The PM's own browser re-read of the same table found it.
   - **Root cause:** a fetch agent answers the question it was asked, so a row outside the question is dropped silently.
   - **Prevention:** before a provider fact reaches a worker, the PM re-reads the whole table or section in the browser, not only the quoted lines.

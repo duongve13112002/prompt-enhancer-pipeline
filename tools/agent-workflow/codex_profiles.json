@@ -34,5 +34,8 @@
     "codex-scout": {"model": "gpt-6.1-terra", "effort": "medium", "web_search": "cached", "timeout_minutes": 60, "hook_allowed_tools": ["Bash", "view_image", "webrun"]},
     "codex-image": {"model": "gpt-6.1-terra", "effort": "medium", "web_search": "disabled", "timeout_minutes": 120, "hook_allowed_tools": ["Bash", "apply_patch", "view_image", "image_genimagegen"]}
   },
-  "usage": {"stale_minutes": 60, "session_file_limit": 8, "cache_warn_ratio": 0.5, "antigravity_command": null, "command_timeout_seconds": 60}
+  "usage": {"stale_minutes": 60, "session_file_limit": 8, "cache_warn_ratio": 0.5, "antigravity_command": null, "command_timeout_seconds": 60,
+            "block_percent": {"claude": 90, "codex": 100, "antigravity": 100},
+            "claude_statusline_file": ".tmp/pm-state/claude-statusline.json", "antigravity_statusline_file": ".tmp/pm-state/antigravity-statusline.json",
+            "quota_blocks_file": ".tmp/pm-state/quota-blocks.json"}
 }

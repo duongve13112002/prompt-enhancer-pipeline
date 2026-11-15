@@ -108,7 +108,15 @@ USAGE_KEYS = (
     "cache_warn_ratio",
     "antigravity_command",
     "command_timeout_seconds",
+    "block_percent",
+    "claude_statusline_file",
+    "antigravity_statusline_file",
+    "quota_blocks_file",
 )
+# Providers that `usage.block_percent` must name, each with its own line (S32, decisions 44 and 46).
+BLOCK_PROVIDERS = ("claude", "codex", "antigravity")
+# Artifact-bound: the PM state folder (ORCHESTRATION section 3) that holds every quota file, as path components.
+STATE_DIR = (".tmp", "pm-state")
 # `web_search` values of Codex 0.160 (developers.openai.com/codex/config-sample).
 WEB_SEARCH = ("disabled", "cached", "live")
 WINDOWS_SANDBOX = ("elevated", "unelevated")
@@ -233,6 +241,17 @@ def _relative_dir(owner: str, field: str, value: object) -> str:
     return text
 
 
+def _state_file(owner: str, field: str, value: object) -> str:
+    """A quota file under STATE_DIR, returned with `/` separators whatever the host: either separator splits a
+    component and a `:` (a drive, drive-relative or alternate-stream form) is refused on every OS, so one configured
+    value names the same file on Windows and POSIX."""
+    text = _relative_dir(owner, field, value)
+    parts = [p for p in re.split(r"[\\/]", text) if p not in ("", ".")]
+    if any(":" in p for p in parts) or len(parts) <= len(STATE_DIR) or tuple(parts[: len(STATE_DIR)]) != STATE_DIR:
+        refuse(f"{owner}, field {field!r}: expected a file under {'/'.join(STATE_DIR)}/: {text!r}")
+    return "/".join(parts)
+
+
 def validate_command(owner: str, field: str, value: object, shim_ok: bool = False) -> list[str]:
     """One executable path and nothing else: arguments never come from configuration, so no value in it can carry a
     forbidden flag. A command line, a list, a `-`-leading word or (unless `shim_ok`) a shim (`.cmd`/`.bat`/`.ps1`,
@@ -249,6 +268,31 @@ def validate_command(owner: str, field: str, value: object, shim_ok: bool = Fals
     return [path]
 
 
+def validate_block_percent(owner: str, value: object) -> dict[str, float]:
+    """The used percentage at which each provider counts as blocked: exactly the providers of BLOCK_PROVIDERS, each a
+    number above 0 and at most 100 (0 would block a provider that has used nothing)."""
+    field = "block_percent"
+    if not isinstance(value, dict):
+        refuse(f"{owner}, field {field!r}: expected an object naming {', '.join(BLOCK_PROVIDERS)}")
+    extra = sorted(set(value) - set(BLOCK_PROVIDERS))
+    missing = [p for p in BLOCK_PROVIDERS if p not in value]
+    if extra or missing:
+        refuse(
+            f"{owner}, field {field!r}: expected exactly the providers {', '.join(BLOCK_PROVIDERS)}"
+            + (f"; missing {', '.join(missing)}" if missing else "")
+            + (f"; unknown {', '.join(extra)}" if extra else "")
+        )
+    lines: dict[str, float] = {}
+    for provider in BLOCK_PROVIDERS:
+        line = value[provider]
+        if isinstance(line, bool) or not isinstance(line, (int, float)) or not 0 < line <= 100:
+            refuse(
+                f"{owner}, field '{field}.{provider}': expected a number above 0 and at most 100"
+            )
+        lines[provider] = float(line)
+    return lines
+
+
 def validate_usage(owner: str, entry: object) -> dict[str, Any]:
     if not isinstance(entry, dict):
         refuse(f"{owner}: expected an object")
@@ -257,7 +301,13 @@ def validate_usage(owner: str, entry: object) -> dict[str, Any]:
     if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 < ratio <= 1:
         refuse(f"{owner}, field 'cache_warn_ratio': expected a number above 0 and at most 1")
     agy = entry["antigravity_command"]
+    files = {
+        key: _state_file(owner, key, entry[key])
+        for key in ("claude_statusline_file", "antigravity_statusline_file", "quota_blocks_file")
+    }
     return {
+        "block_percent": validate_block_percent(owner, entry["block_percent"]),
+        **files,
         "stale_minutes": _positive_int(owner, "stale_minutes", entry["stale_minutes"]),
         "session_file_limit": _positive_int(
             owner, "session_file_limit", entry["session_file_limit"]
