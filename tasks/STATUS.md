@@ -45,8 +45,9 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
   - **T-006** storage, Claude Opus builds: Step 0 about 12:15, implementation about 15:30, Gemini then Codex review about 16:30, accepted about 17:30.
   - **T-009** model client, Codex builds: Step 0 about 12:30, implementation about 15:45, Gemini then Claude review about 17:00, accepted about 18:00. The live E12 run needs the GPU, which the peer currently holds (decision 98).
   - **Contract-drift docs fix**, the first Gemini implementation smoke: about 13:30.
-  - **T-026** quota tooling about 17:30 and **T-021** about 18:30, both after T-024 (shared hooks and settings).
-  - Then the next plan tasks whose dependencies are accepted: T-007 (K0 sync, needs T-006), then T-008 (K1 embeddings, needs T-007; dev GPU).
+  - **Pipeline first (decision 100; the user asked on 2026-11-15 why tooling took so much time):** after T-024 lands, new tooling work waits behind the pipeline queue. Only defects that block pipeline work are fixed at once (S42).
+  - **Pipeline queue:** a Gemini scout prepares T-007 (K0 sync) now, so it starts the moment T-006 is accepted (about 17:30). T-008 (K1 embeddings, dev GPU) follows T-007. A scout for T-012 (profiles) runs next, so T-012 starts when T-009 is accepted (about 18:00).
+  - **Tooling in parallel, second priority (decision 105):** T-026 (quota) and T-021 (brief order and scope guard) run beside the pipeline queue, so agents stay easy to manage. A pipeline task gets a free worker or the Gemini slot first. T-026 starts once T-024 is integrated (they share `settings.example.json` and the SessionStart hook, decision 97): its Gemini approach note follows the T-012 scout; target build about 17:00, accepted about 19:00. T-021 follows T-026 (same hooks); target about 21:00.
 
 ## PM proposals in force, awaiting the user's explicit confirmation
 
