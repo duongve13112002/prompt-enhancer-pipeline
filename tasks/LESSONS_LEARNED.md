@@ -20,6 +20,7 @@ Read the Rules digest before every task (AGENTS.md section 9). Each line is a pr
 
 ## Recent entries
 
+- 2026-11-15, two accepted patches built on different bases (T-006 race on b4eb856, T-012 on 6b03510) applied cleanly in turn, but T-012 imported helpers T-006 removed, so the suite did not even collect. **Prevention:** before integrating a patch whose base is older than main, grep main for every symbol the patch removes or renames. **Evidence:** ImportError `_temporary`, 2026-11-15 23:4x.
 - 2026-11-15, the PM added a baseline entry and repinned its hash, but a test listing the entries stayed at two, so CI went red. **Prevention:** before committing a pinned data file, grep the tests for its content, and run that file's tests. **Evidence:** CI run 43729022948.
 - 2026-11-15, the PM passed header file paths to its brief helper's `-Header`, which takes the header text. The T-007 combine, T-012, T-007 recheck and runner retest 2 briefs therefore carried a path string, not the dispatch. The Codex combine worker then worked only from the task file's old feature header, re-reported Step 0, and the turn was wasted.
   - **Root cause:** a text parameter accepted a path silently, and lint passed because the task file supplied every field.
@@ -78,11 +79,3 @@ Read the Rules digest before every task (AGENTS.md section 9). Each line is a pr
     - `setup.ps1` re-registers the one task with `-Force`, so running it here would unbind the other project.
   - **Prevention:** log a root cause only after the failing object is shown to have existed (creation time, owner or a log line). `gemini-launch.ps1` refuses when the task's `-ProjectRoot` is not this root; `setup_project.py check` reports the runner binding; `Set-RunnerAce` matches the rule type (fixes in progress, S42). The purge protections for the runner folders stay as hardening.
   - **Evidence:** `Get-ScheduledTask AgyRunner` arguments and `Get-ScheduledTaskInfo` LastRunTime 2026-11-06 18:42; `.tmp/agy-rca/report.md`.
-- 2026-11-15, the T-022 worker's tooling suite failed 2 tests in `test_setup_project.py`, because tracked task files named the machine's absolute project path. One was a brief line the PM wrote (T-007 line 29); one was a worker report the PM integrated (T-006 line 595).
-  - **Root cause:** the foreign-path scan exempts the checkout's own path, so it passes in the main tree, and the PM ran only that tree's suites before pushing. Every other checkout fails: worktrees, the user's clones, and the CI runners.
-  - **Prevention:**
-    - tracked text writes `<project>` or a relative path, never the absolute checkout path;
-    - the scan should also flag the checkout's own absolute path in tracked text (S42 fix queued).
-  - **Evidence:** `.tmp/cli-jobs/t022-opus-dev/002.result.md`; `git grep` for the checkout's absolute path.
-  - **Recurred** at the T-007 push (`b4eb856`): 11 paths in the T-007 task file and 1 in T-009's. Two workers had called these failures "already fixed in main". Added rules: grep the staged diff for the absolute root before each commit, and check a worker's "known or fixed" claim in main.
-- 2026-11-14, the T-002 worker spent its single authorized `nvidia-smi` call on `--help`, leaving the GPU facts unknown. Root cause: the brief authorized "one call" without naming it. Prevention: a brief that grants a limited command names the exact command line. Evidence: `.tmp/T-002/fix-01.md`.
