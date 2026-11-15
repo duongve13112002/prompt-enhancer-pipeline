@@ -32,28 +32,30 @@ def guard_removals(plan, previous_count, threshold, *, force=False):
     return fraction
 
 
+def trim_info_token(value):
+    """Trim token boundaries while retaining Unicode line separators as source data."""
+    data = '\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029'
+    start, end = 0, len(value)
+    while start < end and value[start].isspace() and value[start] not in data:
+        start += 1
+    while end > start and value[end - 1].isspace() and value[end - 1] not in data:
+        end -= 1
+    return value[start:end]
+
+
 def parse_info(text, separator):
     """Return names and positional descriptions, or a pending/duplicate status."""
     if not isinstance(separator, str) or not separator:
         raise ValueError('concept separator must be nonempty')
     lines = re.split(r'\r\n|\r|\n', text)
-    def trim(value):
-        # Unicode line separators are source data, even at token boundaries.
-        data = '\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029'
-        start, end = 0, len(value)
-        while start < end and value[start].isspace() and value[start] not in data:
-            start += 1
-        while end > start and value[end - 1].isspace() and value[end - 1] not in data:
-            end -= 1
-        return value[start:end]
-    names = [trim(part) for part in lines[0].split(separator)]
+    names = [trim_info_token(part) for part in lines[0].split(separator)]
     if any(not name for name in names):
         return {'names': [], 'descriptions': [], 'line2': '', 'status': 'pending_naming'}
     normalized = [normalise_name(name) for name in names]
     if len(set(normalized)) != len(normalized):
         return {'names': names, 'descriptions': [], 'line2': '', 'status': 'duplicate_names'}
     line2 = lines[1] if len(lines) > 1 else ''
-    descriptions = [trim(part) for part in line2.split(separator)]
+    descriptions = [trim_info_token(part) for part in line2.split(separator)]
     mismatch = len(descriptions) != len(names)
     return {'names': names, 'concept_ids': [concept_id(name) for name in names],
             'descriptions': [] if mismatch else descriptions, 'line2': line2,

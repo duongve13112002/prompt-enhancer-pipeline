@@ -109,3 +109,42 @@
 
   - **T-008 (K1 embeddings): fix round 1 done (20:58).** The Codex review FAILED 3 P2 (numeric overflow without a failed checkpoint, a sentinel `embedding.candidates` accepted, no exact metadata property). The fix closed all three (2016 passed). Gemini PASSED it; the Codex retest FAILED on 3 new P2 (a BigTIFF offset overflow aborts K1, TIFF orientations 5-8 store oriented sizes, an unbounded `embedding.dimension` crashes Arrow) and 1 P3. Fix round 2 closed RT1 to RT4 and an audit find (`vision.quality` unbounded in the standalone preflight); 9/9 mutants; full suite 2045 passed, 1 intermittent T-006 storage failure. Gemini PASSED round 2 (P3: `embedding.batch_size` lower bound); the Codex retest 2 FAILED on 2 P2: a truncated QOI raises `IndexError` past the decode boundary, and the standalone preflight skips the schema's numeric domains (`batch_size: -1` returns an empty result). Round 3 put one boundary around every decode of file bytes and reused the loader's validation on the standalone path; Gemini PASSED it (0 findings); the Codex retest 3 (23:04) closed R2F1/R2F2 and FAILED on 2 P2 of one wider class: `vision.format` empty or unknown passes (fallback sends `data:image/;base64`, unknown encoder aborts after the read), and an integer timer `10**400` passes both paths then overflows AnyIO's deadline. Round 4 (fresh Opus, decision 121, done 23:34) audited all 35 keys K1 reads: `vision.format` is refused by name against Pillow's encoder registry before any read, and every schema number (timers and backoffs) must convert to a finite float; 2431 passed, 9/10 mutants. **PM decision pending user review:** the loader applies that timer rule to every backend, not only K1's. Gemini PASSED round 4 (2 P3); the Codex retest 4 FAILED R4F1 (P2: data URI media type built from the encoder name, `image/jpeg2000` for JPEG2000 where Pillow registers `image/jp2`) and reproduced N1 (P2, inherited from T-009: `model_transport.py:65` applies the backoff cap after the power, so 1025 retries with zero backoff abort K1 with no checkpoint). Round 5, the last allowed (decision 121), started 23:5x with a fresh Opus: one registry-derived media type for K1 and T-009 and overflow-safe capped backoff. A failed retest 5 blocks the task and goes to you.
   - **Pipeline queue:** T-008 next (scout running); T-010 waits on T-008 and E12.
+
+## Rows moved from STATUS 2026-11-16 06:0x (T-007, S42 runner, PM decisions accepted by decision 119)
+
+  - **T-007 (K0 sync): accepted and pushed.**
+    - The Sonnet re-review passed, and so did its check of fix round 2.
+    - Codex combined T-007 with T-009. The test profile is now built from `enhancer.example.yaml` plus a shared `tests/conftest.py` helper.
+    - Main pipeline suite: `1824 passed, 31 skipped`. A Pillow deprecation warning remains: saving `I` mode PNGs, at `model_image.py:80`, is a T-009 follow-up.
+  - **S42 Antigravity runner: accepted and pushed.**
+    - Round 2 closed RF1 and RF2.
+    - Round 3 wraps every collection read in `@(...)` after a class audit, which closed R2F1 (a scalar CIM `Count` in `undo.ps1`).
+    - The Codex retest 3 PASSED; `test_agy_lib.py`: 149 passed.
+    - Its P3s are in the S42 queue.
+    - Before you run `setup.ps1`, see question 6.
+  - **PM decisions of 2026-11-15, all accepted by the user (decision 119); the rows elsewhere in this file that still say "pending user review" are accepted too:**
+    - **T-022 RT1 rule, T-022, T-009 and T-007 decisions (all accepted):** moved verbatim to [status-history](archive/status-history-2026-11-14.md).
+    - **T-026:** when the file is malformed, nothing is written and the exit code is 1. A valid file is re-rendered canonically. Readers show the valid entries plus one diagnostic.
+    - **T-012 Step 0:**
+      - Conflicts may cite `config_keys`, and the lint checks them structurally.
+      - The runtime addendum is rendered from the template `runtime_addendum_v0` and recorded by hash at check.
+      - Register refuses to overwrite an existing manifest.
+      - Check writes `activation.json` and never rewrites the admin's manifest.
+      - Golden cases use a new `golden_case.v0`. A pass means a valid envelope whose status is in the expected set (v0, weak on purpose until S5).
+      - The input variable is the `[USER]` placeholder without a `template_values` entry.
+      - The drafter prompt `manifest_drafter_v0` text is written by the builder.
+    - **S42 runner:** the task name hashes the upper-cased canonical root. Binding refuses bare or relative wrappers but still counts them as runners. Exactly one `powershell.exe` action. Any mention of `agy-job.ps1` counts as a runner.
+
+## Rows moved from STATUS 2026-11-16 06:0x (T-012 and T-008 accepted rows)
+
+  - **T-012 (P profiles): accepted 2026-11-15 23:1x** (Opus build, 2 fix rounds; Codex, Gemini and Sonnet reviews; history in the status archive). Full pipeline suite on main: 2017 passed, 31 skipped.
+    - P3 follow-ups: R2-1 a 100000-bracket `activation.json` leaks `RecursionError` (`profiles.py:645`, fails closed); R2-2 the lost-edit window is one fsync wide; R2-3 confirm refuses a CRLF or BOM manifest; R2-4 a leftover `check.lock` for an unknown id; R2-6 no test of the addendum clause; R2-7 register can lose a paid draft when the lock is busy after the model call. **PM decision pending user review (R2-5):** `check_code_sha256` hashes all of `config.py`, so any edit there, comments included, forces a new paid golden run; kept fail-closed until you choose a narrower scope. **PM decisions pending user review:** a code fingerprint and schema hashes in activation; raw NEL, LS and PS refused in admin YAML; confirm rewrites only its own writer form; one bundle lock for register and confirm (`PROFILE_BUSY`).
+    - **PM decision pending user review:** META types only the YAML 1.2 core `true`/`false` and decimal numbers. `yes`, `no`, `on`, `off`, dates and leading-zero numbers stay strings, exactly as written.
+  - **T-008 (K1 embeddings): accepted 2026-11-16 00:46** (Opus build, 5 fix rounds under decision 121; Codex retest 5 PASS, Gemini PASS; round history in the status archive). Main suite with T-008: 2900 passed, 42 skipped. Integration: `config.py` import merged by hand; K1's `_commit` renamed `_commit_record` (the anchored-writes AST guard refuses the removed helper's name). Follow-ups: N3 P2 (T-009) ICO under 16 px gives an empty container; N4 P3 MPO labelled `image/mpo` with JPEG bytes; N5 P3 PALM and XBM cannot encode RGB (refused as `encode_failed`); N2 P3 integral floats outside K1's read set. **PM decision pending user review:** the loader applies the finite-float timer rule to every backend.
+    - **PM decisions pending user review:**
+      - The embedder is a named `vlm.backends` entry.
+      - There is no `embedding.devices` key: the server launch places the model.
+      - The llama.cpp and vLLM image adapters are both built, and the request shape stays `design_required` until a live smoke.
+      - Pixel size is stored before EXIF orientation.
+      - A referenced artifact is reused.
+    - The dev pairing, EmbeddingGemma 2 on llama.cpp, has no primary confirmation. Qwen3-VL-Embedding-2B on vLLM has an official example. This goes to you with E5.

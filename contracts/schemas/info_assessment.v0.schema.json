@@ -6,21 +6,36 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "folder_id",
     "usable",
-    "reason"
+    "reason",
+    "assigned_descriptions"
   ],
   "properties": {
-    "folder_id": {
-      "type": "string",
-      "minLength": 1
-    },
     "usable": {
       "type": "boolean",
       "description": "Whether the info file gives usable concept names, judged by the model."
     },
     "reason": {
       "type": "string"
+    },
+    "assigned_descriptions": {
+      "description": "Null except for a usable file with a nonempty mismatched description line. Code verifies exact coverage of the declared zero-based name positions.",
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["position", "description"],
+            "properties": {
+              "position": {"type": "integer", "minimum": 0},
+              "description": {"type": "string"}
+            }
+          }
+        }
+      ]
     }
   }
 }

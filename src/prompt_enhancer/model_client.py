@@ -4,6 +4,7 @@ import hashlib
 import json
 import time
 import base64
+import asyncio
 from copy import deepcopy
 
 from jsonschema.exceptions import ValidationError
@@ -14,6 +15,7 @@ from .model_cloud import cloud_headers, cloud_request
 from .model_mapping import map_generation_fields
 from .model_image import configure_decode_backstop, prepare_image
 from .model_probe import (ProbeResult, probe_backend, probe_local_image_pair, probe_local_thinking_pair,
+                         probe_local_multiple_images_pair, multiple_images_plan,
                           require_capabilities)
 from .model_resources import BackendConcurrency, BudgetExhausted, SingleRunBudgetLedger
 from .model_schemas import SchemaRegistry
@@ -47,7 +49,7 @@ class ModelClientRun:
                                  project_root=self.project_root, probe_cases=probe_cases,
                                  local_probe_plans=local_probe_plans)
 
-    async def for_role(self, role_name):
+    async def for_role(self, role_name, *, require=()):
         role = self.config['vlm']['roles'][role_name]
         _sentinel(role, self.project_root, f'vlm.roles.{role_name}', {})
         image = role['image']
@@ -66,12 +68,11 @@ class ModelClientRun:
             _sentinel(backend, self.project_root, f'vlm.backends.{name}', {})
             if name not in self.transports:
                 self.transports[name] = ModelTransport(name, backend, self.concurrency, self.ledger)
-        if role['backend'] not in self.probes:
-            try:
-                await self.client.start_backend(role['backend'])
-            except BudgetExhausted:
-                if self.config['vlm']['backends'][role['backend']].get('on_budget_exhausted') != 'fallback_to_default_backend':
-                    raise
+        try:
+            await self.client.ensure_role_capabilities(role['backend'], role_name, require=require)
+        except BudgetExhausted:
+            if self.config['vlm']['backends'][role['backend']].get('on_budget_exhausted') != 'fallback_to_default_backend':
+                raise
         return BoundModelClient(self, role_name)
 
     async def close(self):
@@ -89,8 +90,8 @@ class BoundModelClient:
     async def call(self, system_prompt, user_text, *, manifest=None, images=()):
         return await self.run.client.call(self.role_name, system_prompt, user_text, manifest=manifest, images=images)
 
-    async def for_role(self, role_name):
-        return await self.run.for_role(role_name)
+    async def for_role(self, role_name, *, require=()):
+        return await self.run.for_role(role_name, require=require)
 
     async def close(self):
         await self.run.close()
@@ -133,30 +134,89 @@ class RoleClient:
         self.project_root = project_root
         self.probe_cases = probe_cases or {}
         self.local_probe_plans = local_probe_plans or {}
+        self._probe_remaining = {}
+        self._probe_locks = {}
+        self._multiple_attempted = set()
 
-    async def start_backend(self, backend_name):
+    def _multiple_images_pair(self, backend_name, role_name, *, require=()):
+        if 'multiple_images' not in require:
+            return None
+        backend = self.config['vlm']['backends'][backend_name]
+        role = self.config['vlm'].get('roles', {}).get(role_name)
+        if (role is not None and role['backend'] == backend_name
+                and backend['provider'] == 'openai_compatible' and isinstance(role['image'], dict)
+                and role['image'].get('source') in ('source_image', 'user_reference', 'knowledge_reference')):
+            return multiple_images_plan(backend['model']['id'], role['max_tokens'])
+        return None
+
+    def _take_probe_requests(self, backend_name, wanted):
+        # Reserve before awaiting: errors and later role binds cannot reset the backend allowance.
+        count = min(wanted, self._probe_remaining.get(backend_name, 0))
+        self._probe_remaining[backend_name] = self._probe_remaining.get(backend_name, 0) - count
+        return count
+
+    async def _extend_multiple_images(self, backend_name, pair):
+        result = self.probes[backend_name]
+        if (pair is None or result.capabilities.get('multiple_images') is not None
+                or backend_name in self._multiple_attempted):
+            return result
+        self._multiple_attempted.add(backend_name)
+        count = self._take_probe_requests(backend_name, 2)
+        if not count:
+            return result
+        backend = self.config['vlm']['backends'][backend_name]
+        multiple = await probe_local_multiple_images_pair(self.transports[backend_name], backend['endpoints']['chat'],
+                                                         *pair, count, backend['probe']['timeout_s'])
+        status = ('failed' if 'failed' in (result.status, multiple.status) else
+                  'incomplete' if 'incomplete' in (result.status, multiple.status) else 'complete')
+        result = ProbeResult(status, {**result.capabilities, **multiple.capabilities},
+                             {**result.errors, **multiple.errors})
+        self.probes[backend_name] = result
+        return result
+
+    async def start_backend(self, backend_name, *, role_name=None, require=()):
+        async with self._probe_locks.setdefault(backend_name, asyncio.Lock()):
+            return await self._start_backend(backend_name, role_name=role_name, require=require)
+
+    async def ensure_role_capabilities(self, backend_name, role_name, *, require=()):
+        async with self._probe_locks.setdefault(backend_name, asyncio.Lock()):
+            if backend_name not in self.probes:
+                return await self._start_backend(backend_name, role_name=role_name, require=require)
+            return await self._extend_multiple_images(
+                backend_name, self._multiple_images_pair(backend_name, role_name, require=require))
+
+    async def _start_backend(self, backend_name, *, role_name, require=()):
         backend = self.config['vlm']['backends'][backend_name]
         resolve_backend_engine(backend, f'vlm.backends.{backend_name}')
+        production_pair = self._multiple_images_pair(backend_name, role_name, require=require)
+        cached = self.probes.get(backend_name)
+        if cached is not None and backend_name in self._probe_remaining:
+            return await self._extend_multiple_images(backend_name, production_pair)
+        self._probe_remaining.setdefault(backend_name, backend['probe']['max_requests'])
         if backend_name in self.local_probe_plans:
             if backend['provider'] != 'openai_compatible':
                 raise ModelCallError('local probe plan requires an OpenAI-compatible backend')
             plan = self.local_probe_plans[backend_name]
             limits, transport = backend['probe'], self.transports[backend_name]
             endpoint = backend['endpoints']['chat']
-            image = await probe_local_image_pair(transport, endpoint, *plan['image'],
-                                                 min(2, limits['max_requests']), limits['timeout_s'])
-            remaining = limits['max_requests'] - min(2, limits['max_requests'])
-            if remaining:
+            count = self._take_probe_requests(backend_name, 2)
+            image = (await probe_local_image_pair(transport, endpoint, *plan['image'], count, limits['timeout_s'])
+                     if count else ProbeResult('incomplete', {}, {}))
+            count = self._take_probe_requests(backend_name, 2)
+            if count:
                 thinking = await probe_local_thinking_pair(transport, endpoint, *plan['thinking'],
-                                                            min(2, remaining), limits['timeout_s'])
+                                                            count, limits['timeout_s'])
             else:
                 thinking = ProbeResult('incomplete', {}, {})
-            status = ('failed' if 'failed' in (image.status, thinking.status) else
-                      'incomplete' if 'incomplete' in (image.status, thinking.status) else 'complete')
-            result = ProbeResult(status, {**image.capabilities, **thinking.capabilities},
-                                 {**image.errors, **thinking.errors})
+            results = [image, thinking]
+            status = ('failed' if any(item.status == 'failed' for item in results) else
+                      'incomplete' if any(item.status == 'incomplete' for item in results) else 'complete')
+            result = ProbeResult(status, {key: value for item in results for key, value in item.capabilities.items()},
+                                 {key: value for item in results for key, value in item.errors.items()})
             self.probes[backend_name] = result
-            return result
+            pair = (plan.get('multiple_images', production_pair)
+                    if role_name is None or production_pair is not None else None)
+            return await self._extend_multiple_images(backend_name, pair)
         if backend_name not in self.probe_cases:
             raise ModelCallError('backend has no verifiable probe cases')
         headers = {}
@@ -167,11 +227,12 @@ class RoleClient:
                 raise ModelCallError('cloud backend requires a project root')
             headers = cloud_headers(backend['provider'], backend, self.project_root)
         limits = backend['probe']
-        result = await probe_backend(self.transports[backend_name], backend['endpoints']['chat'],
-                                     self.probe_cases[backend_name], limits['max_requests'], limits['timeout_s'],
-                                     headers=headers)
+        count = self._take_probe_requests(backend_name, len(self.probe_cases[backend_name]))
+        result = (await probe_backend(self.transports[backend_name], backend['endpoints']['chat'],
+                                      self.probe_cases[backend_name], count, limits['timeout_s'], headers=headers)
+                  if count else ProbeResult('incomplete', {}, {}))
         self.probes[backend_name] = result
-        return result
+        return await self._extend_multiple_images(backend_name, production_pair)
 
     async def call(self, role_name, system_prompt, user_text, *, manifest=None, images=()):
         try:
@@ -213,7 +274,7 @@ class RoleClient:
                 if fallback == backend_name:
                     raise ModelCallError('image fallback is not local')
                 backend_name = fallback
-                await self.start_backend(backend_name)
+                await self.start_backend(backend_name, role_name=role_name)
                 continue
             engine = resolve_backend_engine(backend, f'vlm.backends.{backend_name}')
             if provider != 'openai_compatible':
@@ -227,7 +288,7 @@ class RoleClient:
                 headers = cloud_headers(provider, backend, self.project_root)
             if backend_name not in self.probes:
                 try:
-                    await self.start_backend(backend_name)
+                    await self.start_backend(backend_name, role_name=role_name)
                 except BudgetExhausted:
                     if backend.get('on_budget_exhausted') != 'fallback_to_default_backend':
                         raise
@@ -238,7 +299,7 @@ class RoleClient:
                                      'status': 'BUDGET_EXHAUSTED'})
                     fallback_warnings.append(('BUDGET_EXHAUSTED', backend_name))
                     backend_name = fallback
-                    await self.start_backend(backend_name)
+                    await self.start_backend(backend_name, role_name=role_name)
                     continue
             output = role['output']
             if output['format'] != 'none' and output['validate_response'] is not True:
@@ -248,6 +309,9 @@ class RoleClient:
                 required.append('image')
                 if len(images) > 1:
                     required.append('multiple_images')
+                    if (backend_name == role['backend']
+                            and self.probes[backend_name].capabilities.get('multiple_images') is None):
+                        await self.ensure_role_capabilities(backend_name, role_name, require=('multiple_images',))
             try:
                 require_capabilities(self.probes[backend_name], required)
             except ValueError as error:
@@ -351,7 +415,7 @@ class RoleClient:
                                  'status': 'BUDGET_EXHAUSTED'})
                 fallback_warnings.append(('BUDGET_EXHAUSTED', backend_name))
                 backend_name = fallback
-                await self.start_backend(backend_name)
+                await self.start_backend(backend_name, role_name=role_name)
                 continue
             except Exception as error:
                 record['status'] = 'HTTP_ERROR'

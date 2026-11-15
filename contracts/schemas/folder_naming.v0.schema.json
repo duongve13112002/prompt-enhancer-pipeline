@@ -6,19 +6,13 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "folder_id",
     "folder_name_fits",
     "info_file_fits",
     "images_consistent",
     "concepts",
-    "reason",
-    "sampled_image_ids"
+    "reason"
   ],
   "properties": {
-    "folder_id": {
-      "type": "string",
-      "minLength": 1
-    },
     "folder_name_fits": {
       "type": "boolean",
       "description": "Whether the folder name fits what the sampled images show, judged by the model."
@@ -47,7 +41,8 @@
         "properties": {
           "name": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "description": "Code applies K0 token trimming, then refuses blank names and names containing the configured knowledge.concept_separator; the trimmed name is used throughout."
           },
           "description": {
             "type": "string",
@@ -58,13 +53,6 @@
     },
     "reason": {
       "type": "string"
-    },
-    "sampled_image_ids": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1
-      }
     }
   }
 }

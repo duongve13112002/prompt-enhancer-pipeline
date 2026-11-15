@@ -32,6 +32,7 @@ def model_test_profile():
                                    template_kwargs_key='enable_thinking'))
         if isinstance(role['image'], dict):
             role['image'].update(source='source_image', quality=80)
+    profile['vlm']['roles']['folder_namer']['image']['source'] = 'knowledge_reference'
     profile['vision']['quality'] = 80
     # T-008: kb sync reads the embedder; a synthetic local embedding backend with every K1 field resolved.
     embedder = deepcopy(backend)
@@ -51,6 +52,13 @@ def project_root(tmp_path_factory):
     schemas = Path(__file__).resolve().parents[1] / 'contracts' / 'schemas'
     shutil.copytree(schemas, root / 'contracts' / 'schemas')
     return root
+
+
+@pytest.fixture
+def k2_env(project_root, tmp_path, model_test_profile):
+    from k2_fixtures import environment
+
+    return environment(project_root, tmp_path, model_test_profile)
 
 
 @pytest.fixture(autouse=True)

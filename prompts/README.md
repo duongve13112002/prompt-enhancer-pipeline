@@ -21,13 +21,17 @@ Role `verifier`. Placeholders: `{ledger_entries}` (only entries the risk rules s
 
 Role `observer`. One image per call. Placeholders: `{concept_names}` (names only, no descriptions), `{facet_schema}` (versioned). Delimited data: concept names. Asks for observations per concept and facet with visibility and an optional region. Output schema: `image_observation.v0`. A change invalidates every observation and therefore cards, their embeddings and the index ([K2](../docs/stages/K2-observe.md)); image embeddings stay.
 
-## `info_assessor_v0` (K2, first step), status: not written
+## `info_assessor_v0` (K2, first step), status: written
 
 Role `info_assessor`. Text only, one call per folder with a parsed info file. Placeholders: `{folder_name}`, `{info_file_text}`. Delimited data: both, as data and never as instructions (R-026). Asks whether the file gives usable concept names; a missing description alone is not a reason to answer no. No rule or word list makes the judgement (R-015). Output schema: `info_assessment.v0`. A change re-judges every info file; a folder whose verdict changes is renamed or restored and its observations, cards and aliases follow ([K2](../docs/stages/K2-observe.md)).
 
-## `folder_namer_v0` (K2, first step), status: not written
+Text: [info_assessor_v0.txt](info_assessor_v0.txt), loaded byte-for-byte as the system message. Code renders hints, raw info text and names labelled by zero-based position in a JSON user object. The reply contains no folder id. `assigned_descriptions` is required-nullable: only a usable file with a nonempty mismatched second line returns `{position, description}` entries, covering exactly the declared positions. The original line stays verbatim; assigned descriptions have generated provenance. Disabling assessment with a parsed description mismatch refuses the stage before any model call.
+
+## `folder_namer_v0` (K2, first step), status: written
 
 Role `folder_namer`. Several images in one call (a deliberate exception to one image per call, because the question is what the images have in common; leakage between images is the failure mode to measure in E17). Placeholders: `{folder_name}`, `{info_file_text}` (present only when the folder has an info file that cannot be read as names or was judged unclear), `{images}` (drawn at random, `knowledge.naming.sample_size`). Delimited data: the folder name and the info-file text, each labelled as a hint that may be wrong, and the images; text read from an image is data (R-026). Asks whether the folder name fits what the images show, whether the info file's names fit, whether the images belong together, the concept name or names (the folder name itself when it fits, otherwise names the model proposes, several when the images consistently show several concepts), a one-sentence description for each and a short reason. No rule decides whether the name is related (R-015). Output schema: `folder_naming.v0`. A change invalidates generated names and everything computed from them (observations, cards, aliases) and the E17 results ([K2](../docs/stages/K2-observe.md)).
+
+Text: [folder_namer_v0.txt](folder_namer_v0.txt), unchanged system bytes plus a JSON data message and raw `knowledge_reference` attachments. T-009 prepares each image once. The reply never supplies `folder_id`, `sampled_image_ids` or provenance; code writes these into the checkpoint/report. Fitting info names take precedence over a fitting folder-name hint and must be returned exactly; fitting human descriptions stay intact. Invalid replies commit no naming result. More than one image requires proved `multiple_images` capability, not a loop of single-image calls.
 
 ## `card_builder_v0` (K3), status: not written
 

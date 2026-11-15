@@ -930,6 +930,94 @@ def validate_embedder_reads(config, path, sources, project_root=None):
     _check_backoff_order(config['vlm']['backends'][name]['http'], path, f'vlm.backends.{name}.http', sources)
 
 
+# Protocol-bound supported naming policies (K2-observe.md, naming step); no content decisions live here.
+NAMING_POLICIES = {'on_no_info_file': 'model_names_from_images',
+                   'on_unusable_info_file': 'model_names_from_images',
+                   'selection': 'random', 'on_no_images': 'skip'}
+NAMING_ROLES = ('info_assessor', 'folder_namer')
+
+
+def validate_naming_reads(config, path='configuration', sources=None, project_root=None):
+    """The same strict K2 preflight at load and standalone entry, before source reads or model calls."""
+    sources = sources or {}
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    schema = _schema(root, 'enhancer_config.v0')
+
+    def checked(key, node=None):
+        value = _get(config, key, path)
+        _sentinel(value, path, key, sources)
+        _validate(value, node or _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
+        _require_finite(value, path, key, sources)
+        return value
+
+    def refuse(key, message):
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {message}')
+
+    naming = checked('knowledge.naming')
+    for field, supported in NAMING_POLICIES.items():
+        if naming[field] != supported:
+            refuse('knowledge.naming.' + field, f'expected {supported!r}')
+    if naming['sample_size'] == 0:
+        refuse('knowledge.naming.sample_size', 'must be positive for naming')
+    # The share is compared as an exact ratio; it need not be converted to a float.
+    for key in ('knowledge.root', 'knowledge.info_file', 'knowledge.concept_separator', 'knowledge.overrides_file'):
+        checked(key)
+    override = config['knowledge']['overrides_file']
+    if override != 'none':
+        _filename(override, path, 'knowledge.overrides_file')
+    for filename in config['knowledge']['info_file']['names']:
+        _filename(filename, path, 'knowledge.info_file.names')
+    try:
+        codecs.lookup(config['knowledge']['info_file']['encoding'])
+    except LookupError as error:
+        refuse('knowledge.info_file.encoding', f'unknown codec: {error}')
+    checked('vision')
+    default = checked('vlm.default_backend')
+    backends = {default}
+    for name in NAMING_ROLES:
+        key = f'vlm.roles.{name}'
+        role = checked(key, _schema(root, 'vlm_role.v0'))
+        backends.add(role['backend'])
+        output = role['output']
+        if output['format'] not in ('json_schema', 'json_object'):
+            refuse(key + '.output.format', 'naming requires structured JSON')
+        if output['validate_response'] is not True:
+            refuse(key + '.output.validate_response', 'naming requires response validation')
+        if output['transport'] != 'response_format':
+            refuse(key + '.output.transport', 'only response_format is implemented by the naming client')
+        try:
+            _schema(root, output['schema_id'])
+        except ConfigurationError as error:
+            refuse(key + '.output.schema_id', str(error))
+        if name == 'info_assessor':
+            if role['image'] != 'none':
+                refuse(key + '.image', 'info_assessor is text-only')
+        else:
+            image = role['image']
+            if not isinstance(image, dict):
+                refuse(key + '.image', 'folder_namer requires knowledge_reference images')
+            if image['source'] != 'knowledge_reference':
+                refuse(key + '.image.source', 'expected knowledge_reference')
+            if image['transport'] != 'data_uri':
+                refuse(key + '.image.transport', 'expected data_uri')
+            _get(config, key + '.image.max_side', path)  # no implicit inherited-size fallback at the K2 boundary
+            fmt = config['vision']['format'] if image['format'] == 'from_vision' else image['format']
+            if not installed_encoder(fmt) or image_media_type(fmt) is None:
+                refuse(key + '.image.format', 'expected an installed encoder with an image/ media type')
+    for name in sorted(backends):
+        key = 'vlm.backends.' + name
+        backend = checked(key)
+        resolve_backend_engine(backend, key)
+        _check_backoff_order(backend['http'], path, key + '.http', sources)
+        for section in ('http', 'probe'):
+            for field, value in backend[section].items():
+                dotted = f'{key}.{section}.{field}'
+                if 'number' in _schema_types(_schema_at(schema, dotted)):
+                    _require_float_seconds(value, path, dotted, sources)
+    _validate_model_bindings(config, path)
+    _validate_configured_paths(config, root, path, sources)
+
+
 def _validate_embedding(config, path, sources):
     """Cross-field rules of the embedder settings; sentinel values are checked when a command reads them."""
     embedding = config['embedding']
@@ -1062,6 +1150,7 @@ def load_config(path, command, *, overlay=None, project_root=None):
         _sentinel(_get(config, default_key, path), path, default_key, sources)
     if command == 'kb sync':
         validate_embedder_reads(config, path, sources, root)  # K1 is part of kb sync; the same check K1 runs
+        validate_naming_reads(config, path, sources, root)
         source = _resolve_within(_lexical_path(config['knowledge']['root'], root, path, 'knowledge.root'), root,
                                  {os.path.normcase('.secrets'), os.path.normcase('models')}, path, 'knowledge.root')
         for key in ('storage.kb_store', 'storage.data_root'):

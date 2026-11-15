@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kb_overrides.v0",
+  "title": "Knowledge-base curated overrides",
+  "$comment": "Concept names are matched by the existing NFKC/casefold identity. P1 applies concept_type only; later stages consume aliases, facts and suppress. This contract does not rename folders or create concepts.",
+  "type": "object",
+  "propertyNames": {"minLength": 1},
+  "additionalProperties": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "concept_type": {"enum": ["character", "clothing", "place", "object", "style", "other"]},
+      "aliases": {"type": "array", "items": {"type": "string"}},
+      "facts": {"type": "array", "items": {"type": "string"}},
+      "suppress": {"type": "array", "items": {"type": "string"}}
+    }
+  }
+}

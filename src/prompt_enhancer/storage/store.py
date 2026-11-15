@@ -71,7 +71,7 @@ from ..config import SENTINELS, ConfigurationError, _command_reads, _get, _lexic
 from ._anchored import (atomic_write_bytes, lock_file, make_directory, make_root, remove_entry, rename_entry,
                         write_table_file)
 from ._fs import SUFFIX, StorageError, format_of, read_table_file, real_inside, sha256_file
-from .identity import artifact_path, check_artifact_key, check_artifact_path, check_relative_name, identity_key
+from .identity import artifact_path, check_artifact_key, check_artifact_path, check_kind, check_relative_name, identity_key
 from .tables import (MANIFEST_KINDS, MANIFEST_SCHEMA, SNAPSHOT_TABLES, SPECS, TS, Catalog, check_embedding_space,
                      check_references, check_tags)
 
@@ -451,6 +451,37 @@ class KnowledgeStore:
         with self.store_lock():
             return list(self._registry().values())
 
+    def referenced_artifacts(self, kind):
+        """Artifact entries of one kind, grouped by live snapshot, newest stored created_at first.
+
+        Reads only: take the existing store lock for this read, verify each manifest against its registry
+        checksum, and return its recorded paths, hashes and sizes. Callers needing stable artifacts beyond
+        the read must hold their existing writer/lease protection; this reader creates neither.
+        """
+        check_kind(kind)
+        if not self.root.exists():
+            return []
+        with self.store_lock():
+            snapshots = sorted(self._registry().values(), key=lambda row: row['created_at'], reverse=True)
+            result = []
+            for snapshot in snapshots:
+                if snapshot['state'] not in LIVE:
+                    continue
+                entries = self._manifest(self._snapshot_dir(snapshot['snapshot_id']), snapshot['manifest_sha256'])
+                artifacts = []
+                for index, entry in enumerate(entries):
+                    if entry['kind'] != 'artifact':
+                        continue
+                    try:
+                        path = check_artifact_path(entry['path'])
+                    except StorageError as error:
+                        raise StorageError(f"snapshot {snapshot['snapshot_id']} entry {index}: {error}") from error
+                    if path.split('/')[1] == kind:
+                        artifacts.append(entry)
+                result.append({'snapshot_id': snapshot['snapshot_id'], 'created_at': snapshot['created_at'],
+                               'artifacts': artifacts})
+            return result
+
     def current(self):
         if not self.root.exists():
             return None
@@ -476,14 +507,18 @@ class KnowledgeStore:
         check_tags(table.schema, 'manifest')
         rows = table.to_pylist()
         names, artifacts = _namespace(), set()
-        for row in rows:
+        for index, row in enumerate(rows):
             if row['kind'] not in MANIFEST_KINDS:
                 raise StorageError(f'{path}: unknown manifest entry kind {row["kind"]!r}')
             if row['size_bytes'] is None or row['sha256'] is None:
                 raise StorageError(f'{path}: entry {row["path"]!r} lacks size or checksum')
             # Manifest keys follow the identity rule too: one spelling, and no two entries one file (round 3).
             if row['kind'] == 'artifact':
-                if check_artifact_path(row['path']) in artifacts:
+                try:
+                    relative = check_artifact_path(row['path'])
+                except StorageError as error:
+                    raise StorageError(f'{path}: entry {index}: {error}') from error
+                if relative in artifacts:
                     raise StorageError(f'{path}: artifact {row["path"]!r} is listed twice')
                 artifacts.add(row['path'])
             else:
