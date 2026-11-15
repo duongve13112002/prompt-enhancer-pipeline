@@ -1,0 +1,186 @@
+"""Check configuration fields against real example data and the public loader."""
+
+from copy import deepcopy
+import json
+from pathlib import Path
+
+from jsonschema import Draft202012Validator
+import pytest
+import yaml
+
+from prompt_enhancer import ConfigurationError, load_config, load_profile
+
+
+ROOT = Path(__file__).resolve().parents[1]
+EXAMPLE = yaml.safe_load((ROOT / 'configs/enhancer.example.yaml').read_bytes())
+SCHEMA = json.loads((ROOT / 'contracts/schemas/enhancer_config.v0.schema.json').read_bytes())
+VALIDATOR = Draft202012Validator(SCHEMA)
+
+
+def fields(value, prefix=()):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            yield from fields(child, prefix + (key,))
+    else:
+        yield prefix
+
+
+def select_representatives():
+    # Backends and roles share schemas; retain one of each structure and each ordinary key.
+    seen = set()
+    for path in fields(EXAMPLE):
+        normalized = list(path)
+        if len(path) > 2 and path[:2] in (('vlm', 'roles'), ('vlm', 'backends')):
+            normalized[2] = '*'
+        normalized = tuple(normalized)
+        if normalized not in seen:
+            seen.add(normalized)
+            yield path
+
+
+def node(config, path):
+    for key in path[:-1]:
+        config = config[key]
+    return config, path[-1]
+
+
+def prepare(config, path):
+    if path == ('vlm', 'backends', 'main', 'provider'):
+        config['vlm']['backends']['main'].update(call_budget=3, on_budget_exhausted='stop', allow_images=False)
+
+
+def options(value):
+    return [False, True, 0, 1, 2, 0.5, '', 'alternative', 'none', 'auto', 'ask', 'off', 'on',
+            'draft', 'confirmed', 'active', 'plain', 'sectioned',
+            'medium', 'cards', 'live', 'json_schema', 'json_object', 'engine_native',
+            'response_format', 'from_vision', 'intent_ir.v0', 'verifier_result.v0',
+            'openai_compatible', 'anthropic', 'gemini', 'fallback_to_default_backend', 'stop', [],
+            ['alternative'], ['generate'], ['edit'], {}, {'other': 'alternative'},
+            value + '_alternative' if isinstance(value, str) else 'alternative']
+
+
+PATHS = list(fields(EXAMPLE))
+
+
+def test_protocol_only_fields():
+    constrained = []
+    for path in select_representatives():
+        config = deepcopy(EXAMPLE)
+        prepare(config, path)
+        parent, key = node(config, path)
+        original = parent[key]
+        for candidate in options(original):
+            if candidate == original and type(candidate) is type(original):
+                continue
+            parent[key] = candidate
+            if VALIDATOR.is_valid(config):
+                break
+        else:
+            constrained.append('.'.join(path))
+    assert constrained == ['schema_version', 'vlm.backends.main.unsupported_param_policy',
+                           'vlm.roles.planner.mode', 'vlm.roles.planner.output.validate_response']
+
+
+def test_all_constrained_fields_are_known():
+    unexpected = []
+    for path in PATHS:
+        config = deepcopy(EXAMPLE)
+        prepare(config, path)
+        parent, key = node(config, path)
+        original = parent[key]
+        for candidate in options(original):
+            if candidate == original and type(candidate) is type(original):
+                continue
+            parent[key] = candidate
+            if VALIDATOR.is_valid(config):
+                break
+        else:
+            allowed = (path == ('schema_version',)
+                       or path[:2] == ('vlm', 'backends') and path[-1] == 'unsupported_param_policy'
+                       or path[:2] == ('vlm', 'roles') and path[-1] == 'mode' and len(path) == 4
+                       or path[:2] == ('vlm', 'roles') and path[-2:] == ('output', 'validate_response'))
+            if not allowed:
+                unexpected.append('.'.join(path))
+    assert not unexpected
+
+
+@pytest.mark.parametrize('path', PATHS, ids=lambda path: '.'.join(path))
+def test_config_override_and_refusal(path, tmp_path):
+    config = deepcopy(EXAMPLE)
+    prepare(config, path)
+    parent, key = node(config, path)
+    original = parent[key]
+    for candidate in options(original):
+        if candidate == original and type(candidate) is type(original):
+            continue
+        parent[key] = candidate
+        if VALIDATOR.is_valid(config):
+            break
+    else:
+        pytest.skip('No alternative found: schema may constrain this field to a protocol constant')
+    # Schema IDs must additionally name an existing file; use a known schema for these.
+    if path[-1] == 'schema_id' and path[:2] == ('vlm', 'roles'):
+        parent[key] = 'verifier_result.v0' if original == 'intent_ir.v0' else 'intent_ir.v0'
+    if path[-1] == 'api_key_file' and path[:2] == ('vlm', 'backends'):
+        parent[key] = '.secrets/alternative.key'
+    if path in {('knowledge', 'root'), ('storage', 'data_root'), ('storage', 'kb_store'),
+                ('profiles', 'root')}:
+        parent[key] = 'data/alternative'
+    if path == ('knowledge', 'overrides_file'):
+        parent[key] = 'alternative.yaml'
+    if path == ('profiles', 'default_profile_id'):
+        parent[key] = 'alternative-profile'
+    if path[:2] == ('vlm', 'backends') and path[-1] in ('file', 'mmproj_file'):
+        parent[key] = 'alternative.gguf'
+    config_path = tmp_path / 'override.yaml'
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding='utf-8')
+    try:
+        loaded = load_config(config_path, 'kb status')
+    except ConfigurationError as error:
+        pytest.fail(f'Override {".".join(path)}: {error}')
+    loaded_parent, loaded_key = node(loaded, path)
+    assert loaded_parent[loaded_key] == parent[key]
+    for invalid in [None, 0.123, False, [], {}, 'invalid-value']:
+        parent[key] = invalid
+        if not VALIDATOR.is_valid(config):
+            break
+    else:
+        pytest.skip('No invalid candidate found for unrestricted mapping')
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding='utf-8')
+    with pytest.raises(ConfigurationError):
+        load_config(config_path, 'kb status')
+
+
+MANIFEST = yaml.safe_load((ROOT / 'configs/profiles/_example/manifest.yaml').read_bytes())
+MANIFEST_SCHEMA = json.loads((ROOT / 'contracts/schemas/profile_manifest.v0.schema.json').read_bytes())
+MANIFEST_VALIDATOR = Draft202012Validator(MANIFEST_SCHEMA)
+
+
+@pytest.mark.parametrize('path', list(fields(MANIFEST)), ids=lambda path: '.'.join(path))
+def test_manifest_fields_override_and_refusal(path, tmp_path):
+    manifest = deepcopy(MANIFEST)
+    parent, key = node(manifest, path)
+    original = parent[key]
+    for candidate in options(original):
+        if candidate == original and type(candidate) is type(original):
+            continue
+        parent[key] = candidate
+        if MANIFEST_VALIDATOR.is_valid(manifest) and not (path == ('schema_version',) and candidate != 1):
+            break
+    else:
+        pytest.skip('No supported alternative found for manifest field')
+    manifest_path = tmp_path / 'manifest.yaml'
+    manifest_path.write_text(yaml.safe_dump(manifest), encoding='utf-8')
+    (tmp_path / 'system_prompt.txt').write_bytes(b'test prompt')
+    loaded, _ = load_profile(tmp_path)
+    loaded_parent, loaded_key = node(loaded, path)
+    assert loaded_parent[loaded_key] == candidate
+    for invalid in [None, 0.123, False, [], {}, '']:
+        parent[key] = invalid
+        if not MANIFEST_VALIDATOR.is_valid(manifest):
+            break
+    else:
+        pytest.skip('No invalid candidate found for manifest field')
+    manifest_path.write_text(yaml.safe_dump(manifest), encoding='utf-8')
+    with pytest.raises(ConfigurationError):
+        load_profile(tmp_path)

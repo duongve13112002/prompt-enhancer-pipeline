@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prompt-enhancer-pipeline"
+version = "0.1.0"
+dependencies = ["PyYAML>=6.0.3", "jsonschema>=4.26.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=9.2.0", "hypothesis>=6.170.15"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

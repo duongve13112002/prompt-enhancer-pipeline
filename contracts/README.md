@@ -123,12 +123,23 @@ Decisions 9, 10, 30 and 31, R-007. Details for authors: [kb/README.md](../kb/REA
 
 Two things are called a profile; see [Terms](#terms). This section describes the configuration profile.
 
-- **Full configuration profiles** define every key: `schema_version`, `status`, `purpose`, `knowledge`, `sync`, `embedding`, `observe`, `cards`, `aliases`, `index`, `rag`, `candidates`, `planner`, `resolution`, `assembly`, `edit`, `creativity`, `writer`, `validation`, `vision`, `profiles`, `vlm`, `runtime`, `storage`, `serving`, `evaluation`. A configuration profile may `extends:` another and override any key (the dev profile does).
-- **Deployment overlays** may override only deployment values: the `storage`, `runtime` and `serving` blocks and, inside `vlm.backends`, the endpoints, the served model identity and the engine-specific request body; never a role, prompt or fitted value. A dev profile that `extends` the full profile may override any key. The merged profile is validated, then hashed.
+- **Full configuration profiles** define every key: `schema_version`, `status`, `purpose`, `knowledge`, `sync`, `embedding`, `observe`, `cards`, `aliases`, `index`, `rag`, `candidates`, `planner`, `resolution`, `clarification`, `assembly`, `edit`, `creativity`, `writer`, `validation`, `vision`, `profiles`, `vlm`, `runtime`, `storage`, `serving`, `evaluation`. A configuration profile may `extends:` another and override any key (the dev profile does).
+- **Deployment overlays** may override only deployment values: the `storage`, `runtime` and `serving` blocks and, inside `vlm.backends`, the endpoints, the served model identity, concurrency and the engine-specific request body; never a role, prompt or fitted value. A dev profile that `extends` the full profile may override any key. The merged profile is validated, then hashed.
 - Every key is required after merging; an unknown key is refused, and so is a missing one.
+- Relative paths supplied to `load_config` and `load_profile` start at the project root. Resolve `extends` and `overlay_of` relative to the referring file, refusing cycles. Merge mappings recursively, replacing scalars and lists, in base, derived, then explicitly selected overlay order. `overlay_of` refers to the overlay's base; overlay restrictions still apply. Configuration and manifest `schema_version` must be `1`. Schema IDs resolve to `contracts/schemas/<id>.schema.json`; unknown versions and IDs are refused.
+- The literal string `none` means an optional setting is off or is not sent; it is not silently converted to YAML null. For `vision.max_image_side`, it keeps the original image (decision 84). `computed_at_registration` is retained for registration; `from_profile_manifest` is a per-request reference resolved from the loaded manifest, with unresolved references refused.
 - **Sentinels** mark values not known yet; a run refuses a sentinel only in keys its stages read: `fit_from_gt` (fitted on the evaluation set), `fit_from_bench` (measured on the machine), `fit_from_pilot` (from a pilot run), `pin_required` (exact model revision), `deploy_required` (set per machine), `design_required` (decided by the implementing task with evidence), `ask_user` (a paid-call budget). Only `ask_user` is ever a question for the user. No threshold is typed by hand (R-015).
 - **YAML 1.1 pitfall:** parsers read unquoted `off`, `on`, `yes`, `no` as booleans. Enum values are quoted and the loader parses with a schema.
 - VLM roles follow [vlm-request.md](vlm-request.md) and [vlm_role.v0](schemas/vlm_role.v0.schema.json).
+
+### Settings owned by later tasks
+
+Missing and unknown-key validation covers the keys defined in the configuration schema. The owning stage adds the following settings and their schemas and examples when it is implemented:
+
+| Setting without a defined key | Owner |
+| --- | --- |
+| Embedding backend, dimension, batch size and devices (K1) | T-008 |
+| Intake runtime deadlines (S0) | T-013 |
 
 ## Commit protocol and snapshots
 
@@ -136,4 +147,4 @@ A stage result of many files is committed **data first, manifest last**: the man
 
 ## Schemas
 
-JSON Schema draft 2020-12 files in [schemas/](schemas/), versioned in the name; a change is a new version. All are drafts: `intent_ir.v0`, `constraint_ledger.v0`, `knowledge_pack.v0`, `image_observation.v0`, `concept_card.v0`, `verifier_result.v0`, `profile_manifest.v0`, `response_envelope.v0`, `alias_set.v0`, `info_assessment.v0`, `folder_naming.v0`, `eval_scenario.v0`, `vlm_role.v0`. Ranges in them are the schemas' own bounds, not engine limits. VLM request fields and engine mapping: [vlm-request.md](vlm-request.md).
+JSON Schema draft 2020-12 files in [schemas/](schemas/), versioned in the name; a change is a new version. All are drafts: `enhancer_config.v0`, `intent_ir.v0`, `constraint_ledger.v0`, `knowledge_pack.v0`, `image_observation.v0`, `concept_card.v0`, `verifier_result.v0`, `profile_manifest.v0`, `response_envelope.v0`, `alias_set.v0`, `info_assessment.v0`, `folder_naming.v0`, `eval_scenario.v0`, `vlm_role.v0`. Ranges in them are the schemas' own bounds, not engine limits. VLM request fields and engine mapping: [vlm-request.md](vlm-request.md).

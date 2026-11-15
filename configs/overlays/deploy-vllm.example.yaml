@@ -2,7 +2,7 @@
 # Applied over configs/enhancer.example.yaml. The user deploys and runs the server; the agent never starts the production
 # server and only writes the run guide. Facts: decision 20, N102, N121, N057.
 schema_version: 1
-overlay_of: enhancer.example.yaml
+overlay_of: ../enhancer.example.yaml
 status: template
 
 vlm:

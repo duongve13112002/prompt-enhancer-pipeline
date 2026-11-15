@@ -165,12 +165,14 @@ vlm:                                     # R-018: rules name no model; models ar
   backends:
     main:
       provider: openai_compatible        # the user's server, or llama-server on the dev machine, N055, N057
+      unsupported_param_policy: warn     # docs/stages/S4-writer.md: unsupported request fields emit PARAM_UNSUPPORTED
       base_urls: [deploy_required]
       api_key_file: none
       model: {id: deploy_required, revision: pin_required, source: none, file: none, mmproj_file: none}   # source, file and mmproj_file are used only by servers that load a local model file
       max_concurrency: fit_from_bench
     cloud_claude:                        # decision 28: optional cloud backend; used only when a role binds to it and the user granted requests
       provider: anthropic
+      unsupported_param_policy: warn
       base_urls: [provider_default]
       api_key_file: .secrets/anthropic.key   # the user puts the key file here; agents never open .secrets/
       model: {id: claude-haiku-5-5, revision: none, source: none, file: none, mmproj_file: none}   # the user's default cloud model
@@ -180,6 +182,7 @@ vlm:                                     # R-018: rules name no model; models ar
       allow_images: true                 # decision 29: images may be sent when a role is bound here; false keeps every request with an image on the local backend
     cloud_gemini:                        # decision 28
       provider: gemini
+      unsupported_param_policy: warn
       base_urls: [provider_default]
       api_key_file: .secrets/gemini.key
       model: {id: gemini-3.1-flash-lite, revision: none, source: none, file: none, mmproj_file: none}   # the user's default; confirm the provider still offers it before use [A]

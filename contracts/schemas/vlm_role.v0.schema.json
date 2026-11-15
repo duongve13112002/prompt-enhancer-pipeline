@@ -122,16 +122,16 @@
           "exclusiveMinimum": 0
         },
         "seed": {
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {"type": ["integer", "null"]},
+            {"const": "none"}
           ]
         },
         "stop": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+          "anyOf": [
+            {"type": "array", "items": {"type": "string"}},
+            {"const": "none"}
+          ]
         }
       }
     },
@@ -165,11 +165,10 @@
           ]
         },
         "budget_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "minimum": 0
+          "anyOf": [
+            {"type": ["integer", "null"], "minimum": 0},
+            {"const": "none"}
+          ]
         },
         "template_kwargs_key": {
           "type": "string"
@@ -191,7 +190,8 @@
           "enum": [
             "none",
             "json_object",
-            "json_schema"
+            "json_schema",
+            "from_profile_manifest"
           ]
         },
         "schema_id": {

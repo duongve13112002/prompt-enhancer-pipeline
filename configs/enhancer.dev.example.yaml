@@ -23,6 +23,7 @@ vlm:
   backends:
     main:
       provider: openai_compatible        # llama-server speaks the OpenAI style, N055
+      unsupported_param_policy: warn
       base_urls: [deploy_required]       # a loopback URL of the local server, set per machine
       api_key_file: none
       model:

@@ -1,0 +1,5176 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "anyOf": [
+        {
+          "const": 1
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "status": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "purpose": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "knowledge": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "root": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "info_file": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "names": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "encoding": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "on_description_count_mismatch": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "names",
+                    "encoding",
+                    "on_description_count_mismatch"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "image_extensions": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "enum": [
+                          "fit_from_gt",
+                          "fit_from_bench",
+                          "fit_from_pilot",
+                          "pin_required",
+                          "deploy_required",
+                          "design_required",
+                          "ask_user"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "concept_separator": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "naming": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "on_no_info_file": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "on_unusable_info_file": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "selection": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "on_no_images": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "assess_info_file": {
+                      "anyOf": [
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "report": {
+                      "anyOf": [
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "sample_size": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "rename_on_change": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "on_no_info_file",
+                    "on_unusable_info_file",
+                    "selection",
+                    "on_no_images",
+                    "assess_info_file",
+                    "report",
+                    "sample_size",
+                    "rename_on_change"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "overrides_file": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "on_source_removed": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "root",
+            "info_file",
+            "image_extensions",
+            "concept_separator",
+            "naming",
+            "overrides_file",
+            "on_source_removed"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "sync": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mass_deletion_guard": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "max_removed_fraction": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "max_removed_fraction"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "snapshots": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "keep": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "keep"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "gc": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "retention": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "retention"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "resume": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "mass_deletion_guard",
+            "snapshots",
+            "gc",
+            "resume"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "embedding": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "candidates": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "note": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "note"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "enum": [
+                          "fit_from_gt",
+                          "fit_from_bench",
+                          "fit_from_pilot",
+                          "pin_required",
+                          "deploy_required",
+                          "design_required",
+                          "ask_user"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "chosen": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "query_text_limit": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "candidates",
+            "chosen",
+            "revision",
+            "query_text_limit"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "observe": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "one_image_per_call": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "lazy_observation_of_rest": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "representatives_per_folder": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "facet_schema_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "region_output": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "one_image_per_call",
+            "lazy_observation_of_rest",
+            "representatives_per_folder",
+            "facet_schema_version",
+            "region_output"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "cards": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "stability_policy": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "labels": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "labels"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "min_visible_images": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "low_diversity": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "variant_groups": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "lint_report": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "stability_policy",
+            "min_visible_images",
+            "low_diversity",
+            "variant_groups",
+            "lint_report"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "aliases": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "generated": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "collision_policy": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "review_queue": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "only_add_candidates": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "generated",
+            "collision_policy",
+            "review_queue",
+            "only_add_candidates"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "index": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ann": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "params": {
+                      "anyOf": [
+                        {
+                          "type": "object"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "params"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "exact_search_below_count": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "lexical": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "ngram_size": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "ngram_size"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "ann",
+            "exact_search_below_count",
+            "lexical"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "rag": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "evidence_mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "cards",
+                    "live",
+                    "cards_then_live"
+                  ]
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "enabled",
+            "evidence_mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "candidates": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "sources": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "alias": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "enabled": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "enum": [
+                                    "fit_from_gt",
+                                    "fit_from_bench",
+                                    "fit_from_pilot",
+                                    "pin_required",
+                                    "deploy_required",
+                                    "design_required",
+                                    "ask_user"
+                                  ]
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "enabled"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "lexical": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "enabled": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "enum": [
+                                    "fit_from_gt",
+                                    "fit_from_bench",
+                                    "fit_from_pilot",
+                                    "pin_required",
+                                    "deploy_required",
+                                    "design_required",
+                                    "ask_user"
+                                  ]
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "enabled"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "dense": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "enabled": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "enum": [
+                                    "fit_from_gt",
+                                    "fit_from_bench",
+                                    "fit_from_pilot",
+                                    "pin_required",
+                                    "deploy_required",
+                                    "design_required",
+                                    "ask_user"
+                                  ]
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "enabled"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "alias",
+                    "lexical",
+                    "dense"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "segment_prompt": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "fusion": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "shortlist_size": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "sources",
+            "segment_prompt",
+            "fusion",
+            "shortlist_size"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "planner": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "second_chance_rounds": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "catalogue_in_context": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "second_chance_rounds",
+            "catalogue_in_context"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "resolution": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "on_family_match": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "random_seed": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "on_variant_unspecified": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "trace_choice": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "on_family_match",
+            "random_seed",
+            "on_variant_unspecified",
+            "trace_choice"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "clarification": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "best_effort",
+                    "ask"
+                  ]
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "assembly": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "scope_matrix": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "subject_identity": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "worn_garment": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "location": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "object": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "style_reference": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "other": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "subject_identity",
+                    "worn_garment",
+                    "location",
+                    "object",
+                    "style_reference",
+                    "other"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "default_outfit": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "max_facts_per_concept": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "max_images_per_concept": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "max_facts_per_request": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "fact_order": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "scope_matrix",
+            "default_outfit",
+            "max_facts_per_concept",
+            "max_images_per_concept",
+            "max_facts_per_request",
+            "fact_order"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "edit": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "attach_kb_reference_images": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "max_kb_reference_images": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "source_entity_linking": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "default_preservation": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "local_edit": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "global_transform": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "subject_recompose": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "local_edit",
+                    "global_transform",
+                    "subject_recompose"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "attach_kb_reference_images",
+            "max_kb_reference_images",
+            "source_entity_linking",
+            "default_preservation"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "creativity": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "allowed_additions": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "enum": [
+                          "fit_from_gt",
+                          "fit_from_bench",
+                          "fit_from_pilot",
+                          "pin_required",
+                          "deploy_required",
+                          "design_required",
+                          "ask_user"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "max_new_entities": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "max_added_text_blocks": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "preserve": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "enum": [
+                          "fit_from_gt",
+                          "fit_from_bench",
+                          "fit_from_pilot",
+                          "pin_required",
+                          "deploy_required",
+                          "design_required",
+                          "ask_user"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "edit_cap": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "mode",
+            "allowed_additions",
+            "max_new_entities",
+            "max_added_text_blocks",
+            "preserve",
+            "edit_cap"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "writer": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "system_prompt_verbatim": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "runtime_addendum": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "knowledge_block": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "system_prompt_verbatim",
+            "runtime_addendum",
+            "knowledge_block"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "validation": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "structural_checks": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "verifier": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "gating_rules": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "inline_for": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "sampled_fraction_for_rest": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "gating_rules",
+                    "inline_for",
+                    "sampled_fraction_for_rest"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "max_repairs": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "fallbacks": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "enum": [
+                          "fit_from_gt",
+                          "fit_from_bench",
+                          "fit_from_pilot",
+                          "pin_required",
+                          "deploy_required",
+                          "design_required",
+                          "ask_user"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "structural_checks",
+            "verifier",
+            "max_repairs",
+            "fallbacks"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "vision": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "max_image_side": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "const": "none"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "format": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "quality": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "transport": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "max_image_side",
+            "format",
+            "quality",
+            "transport"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "profiles": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "root": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "default_profile_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "exclude": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "enum": [
+                          "fit_from_gt",
+                          "fit_from_bench",
+                          "fit_from_pilot",
+                          "pin_required",
+                          "deploy_required",
+                          "design_required",
+                          "ask_user"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "root",
+            "default_profile_id",
+            "exclude"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "vlm": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "backends": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "minProperties": 1,
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "provider": {
+                            "anyOf": [
+                              {
+                                "enum": ["openai_compatible", "anthropic", "gemini"]
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "unsupported_param_policy": {
+                            "anyOf": [
+                              {
+                                "const": "warn"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "base_urls": {
+                            "anyOf": [
+                              {
+                                "type": "array",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "enum": [
+                                        "fit_from_gt",
+                                        "fit_from_bench",
+                                        "fit_from_pilot",
+                                        "pin_required",
+                                        "deploy_required",
+                                        "design_required",
+                                        "ask_user"
+                                      ]
+                                    }
+                                  ]
+                                }
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "api_key_file": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "model": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "revision": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "source": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "file": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "mmproj_file": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "revision",
+                                  "source",
+                                  "file",
+                                  "mmproj_file"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "max_concurrency": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "call_budget": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "on_budget_exhausted": {
+                            "anyOf": [
+                              {
+                                "enum": ["fallback_to_default_backend", "stop"]
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "allow_images": {
+                            "anyOf": [
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "extra_body": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "chat_template_kwargs": {
+                                    "type": "object",
+                                    "properties": {
+                                      "enable_thinking": {
+                                        "anyOf": [
+                                          {"type": "boolean"},
+                                          {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}
+                                        ]
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "endpoints": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "chat": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "health": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "chat",
+                                  "health"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "provider",
+                          "unsupported_param_policy",
+                          "base_urls",
+                          "api_key_file",
+                          "model",
+                          "max_concurrency"
+                        ],
+                        "allOf": [
+                          {
+                            "if": {"properties": {"provider": {"enum": ["anthropic", "gemini"]}}},
+                            "then": {"required": ["call_budget", "on_budget_exhausted", "allow_images"]}
+                          }
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "enum": [
+                          "fit_from_gt",
+                          "fit_from_bench",
+                          "fit_from_pilot",
+                          "pin_required",
+                          "deploy_required",
+                          "design_required",
+                          "ask_user"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "default_backend": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "roles": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "minProperties": 1,
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "title": "VLM role in a non-template profile",
+                        "$comment": "Draft v0. Describes the final form of vlm.roles.<name> (contracts/vlm-request.md). Template sentinels such as fit_from_gt are refused by the loader before this schema applies. Ranges are the schema's own bounds, not engine limits. The role's image field is none or an object that names the image source and where size and encoding come from (the configuration profile block vision).",
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "mode",
+                          "backend",
+                          "prompt_id",
+                          "image",
+                          "max_tokens",
+                          "sampling",
+                          "reasoning",
+                          "output"
+                        ],
+                        "properties": {
+                          "mode": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "generate"
+                                ]
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "backend": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "prompt_id": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "image": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "anyOf": [
+                                      {
+                                        "const": "none"
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "source": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              {
+                                                "enum": [
+                                                  "fit_from_gt",
+                                                  "fit_from_bench",
+                                                  "fit_from_pilot",
+                                                  "pin_required",
+                                                  "deploy_required",
+                                                  "design_required",
+                                                  "ask_user"
+                                                ]
+                                              }
+                                            ]
+                                          },
+                                          "max_side": {
+                                            "anyOf": [
+                                              {
+                                                "anyOf": [
+                                                  {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "integer",
+                                                        "minimum": 1
+                                                      },
+                                                      {
+                                                        "enum": [
+                                                          "fit_from_gt",
+                                                          "fit_from_bench",
+                                                          "fit_from_pilot",
+                                                          "pin_required",
+                                                          "deploy_required",
+                                                          "design_required",
+                                                          "ask_user"
+                                                        ]
+                                                      }
+                                                    ]
+                                                  },
+                                                  {
+                                                    "anyOf": [
+                                                      {
+                                                        "const": "from_vision"
+                                                      },
+                                                      {
+                                                        "enum": [
+                                                          "fit_from_gt",
+                                                          "fit_from_bench",
+                                                          "fit_from_pilot",
+                                                          "pin_required",
+                                                          "deploy_required",
+                                                          "design_required",
+                                                          "ask_user"
+                                                        ]
+                                                      }
+                                                    ]
+                                                  },
+                                                  {
+                                                    "anyOf": [
+                                                      {
+                                                        "const": "none"
+                                                      },
+                                                      {
+                                                        "enum": [
+                                                          "fit_from_gt",
+                                                          "fit_from_bench",
+                                                          "fit_from_pilot",
+                                                          "pin_required",
+                                                          "deploy_required",
+                                                          "design_required",
+                                                          "ask_user"
+                                                        ]
+                                                      }
+                                                    ]
+                                                  }
+                                                ],
+                                                "description": "Longer side in pixels after a downscale that keeps the aspect ratio and never upscales; `none` sends the original image; `from_vision` takes `vision.max_image_side` (decision 84)"
+                                              },
+                                              {
+                                                "enum": [
+                                                  "fit_from_gt",
+                                                  "fit_from_bench",
+                                                  "fit_from_pilot",
+                                                  "pin_required",
+                                                  "deploy_required",
+                                                  "design_required",
+                                                  "ask_user"
+                                                ]
+                                              }
+                                            ]
+                                          },
+                                          "format": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              {
+                                                "enum": [
+                                                  "fit_from_gt",
+                                                  "fit_from_bench",
+                                                  "fit_from_pilot",
+                                                  "pin_required",
+                                                  "deploy_required",
+                                                  "design_required",
+                                                  "ask_user"
+                                                ]
+                                              }
+                                            ]
+                                          },
+                                          "quality": {
+                                            "anyOf": [
+                                              {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 100
+                                              },
+                                              {
+                                                "enum": [
+                                                  "fit_from_gt",
+                                                  "fit_from_bench",
+                                                  "fit_from_pilot",
+                                                  "pin_required",
+                                                  "deploy_required",
+                                                  "design_required",
+                                                  "ask_user"
+                                                ]
+                                              }
+                                            ]
+                                          },
+                                          "transport": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              {
+                                                "enum": [
+                                                  "fit_from_gt",
+                                                  "fit_from_bench",
+                                                  "fit_from_pilot",
+                                                  "pin_required",
+                                                  "deploy_required",
+                                                  "design_required",
+                                                  "ask_user"
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "max_tokens": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "sampling": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "temperature",
+                                  "top_p",
+                                  "top_k",
+                                  "min_p",
+                                  "presence_penalty",
+                                  "frequency_penalty",
+                                  "repetition_penalty",
+                                  "seed",
+                                  "stop"
+                                ],
+                                "properties": {
+                                  "temperature": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number",
+                                        "minimum": 0
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "top_p": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 1
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "top_k": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "min_p": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number",
+                                        "minimum": 0,
+                                        "maximum": 1
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "presence_penalty": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "frequency_penalty": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "repetition_penalty": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number",
+                                        "exclusiveMinimum": 0
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "seed": {
+                                    "anyOf": [
+                                      {
+                                        "anyOf": [
+                                          {
+                                            "anyOf": [
+                                              {
+                                                "type": [
+                                                  "integer",
+                                                  "null"
+                                                ]
+                                              },
+                                              {
+                                                "enum": [
+                                                  "fit_from_gt",
+                                                  "fit_from_bench",
+                                                  "fit_from_pilot",
+                                                  "pin_required",
+                                                  "deploy_required",
+                                                  "design_required",
+                                                  "ask_user"
+                                                ]
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "anyOf": [
+                                              {
+                                                "const": "none"
+                                              },
+                                              {
+                                                "enum": [
+                                                  "fit_from_gt",
+                                                  "fit_from_bench",
+                                                  "fit_from_pilot",
+                                                  "pin_required",
+                                                  "deploy_required",
+                                                  "design_required",
+                                                  "ask_user"
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "stop": {
+                                    "anyOf": [
+                                      {
+                                        "anyOf": [
+                                          {
+                                            "anyOf": [
+                                              {
+                                                "type": "array",
+                                                "items": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "enum": [
+                                                        "fit_from_gt",
+                                                        "fit_from_bench",
+                                                        "fit_from_pilot",
+                                                        "pin_required",
+                                                        "deploy_required",
+                                                        "design_required",
+                                                        "ask_user"
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              {
+                                                "enum": [
+                                                  "fit_from_gt",
+                                                  "fit_from_bench",
+                                                  "fit_from_pilot",
+                                                  "pin_required",
+                                                  "deploy_required",
+                                                  "design_required",
+                                                  "ask_user"
+                                                ]
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "anyOf": [
+                                              {
+                                                "const": "none"
+                                              },
+                                              {
+                                                "enum": [
+                                                  "fit_from_gt",
+                                                  "fit_from_bench",
+                                                  "fit_from_pilot",
+                                                  "pin_required",
+                                                  "deploy_required",
+                                                  "design_required",
+                                                  "ask_user"
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "reasoning": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "mode",
+                                  "effort",
+                                  "budget_tokens",
+                                  "template_kwargs_key"
+                                ],
+                                "properties": {
+                                  "mode": {
+                                    "anyOf": [
+                                      {
+                                        "enum": [
+                                          "off",
+                                          "on",
+                                          "auto"
+                                        ]
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "effort": {
+                                    "anyOf": [
+                                      {
+                                        "enum": [
+                                          "none",
+                                          "minimal",
+                                          "low",
+                                          "medium",
+                                          "high",
+                                          "xhigh",
+                                          "max",
+                                          "backend_default"
+                                        ]
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "budget_tokens": {
+                                    "anyOf": [
+                                      {
+                                        "anyOf": [
+                                          {
+                                            "anyOf": [
+                                              {
+                                                "type": [
+                                                  "integer",
+                                                  "null"
+                                                ],
+                                                "minimum": 0
+                                              },
+                                              {
+                                                "enum": [
+                                                  "fit_from_gt",
+                                                  "fit_from_bench",
+                                                  "fit_from_pilot",
+                                                  "pin_required",
+                                                  "deploy_required",
+                                                  "design_required",
+                                                  "ask_user"
+                                                ]
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "anyOf": [
+                                              {
+                                                "const": "none"
+                                              },
+                                              {
+                                                "enum": [
+                                                  "fit_from_gt",
+                                                  "fit_from_bench",
+                                                  "fit_from_pilot",
+                                                  "pin_required",
+                                                  "deploy_required",
+                                                  "design_required",
+                                                  "ask_user"
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "template_kwargs_key": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          },
+                          "output": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "format",
+                                  "schema_id",
+                                  "strict",
+                                  "transport",
+                                  "validate_response"
+                                ],
+                                "properties": {
+                                  "format": {
+                                    "anyOf": [
+                                      {
+                                        "enum": [
+                                          "none",
+                                          "json_object",
+                                          "json_schema",
+                                          "from_profile_manifest"
+                                        ]
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "schema_id": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "strict": {
+                                    "anyOf": [
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "transport": {
+                                    "anyOf": [
+                                      {
+                                        "enum": [
+                                          "response_format",
+                                          "engine_native"
+                                        ]
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "validate_response": {
+                                    "anyOf": [
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "enum": [
+                                          "fit_from_gt",
+                                          "fit_from_bench",
+                                          "fit_from_pilot",
+                                          "pin_required",
+                                          "deploy_required",
+                                          "design_required",
+                                          "ask_user"
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "allOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "if": {
+                                  "properties": {
+                                    "output": {
+                                      "properties": {
+                                        "format": {
+                                          "enum": [
+                                            "json_object",
+                                            "json_schema"
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                "then": {
+                                  "anyOf": [
+                                    {
+                                      "properties": {
+                                        "output": {
+                                          "anyOf": [
+                                            {
+                                              "properties": {
+                                                "validate_response": {
+                                                  "anyOf": [
+                                                    {
+                                                      "const": true
+                                                    },
+                                                    {
+                                                      "enum": [
+                                                        "fit_from_gt",
+                                                        "fit_from_bench",
+                                                        "fit_from_pilot",
+                                                        "pin_required",
+                                                        "deploy_required",
+                                                        "design_required",
+                                                        "ask_user"
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "enum": [
+                                                "fit_from_gt",
+                                                "fit_from_bench",
+                                                "fit_from_pilot",
+                                                "pin_required",
+                                                "deploy_required",
+                                                "design_required",
+                                                "ask_user"
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "enum": [
+                                        "fit_from_gt",
+                                        "fit_from_bench",
+                                        "fit_from_pilot",
+                                        "pin_required",
+                                        "deploy_required",
+                                        "design_required",
+                                        "ask_user"
+                                      ]
+                                    }
+                                  ]
+                                }
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "enum": [
+                          "fit_from_gt",
+                          "fit_from_bench",
+                          "fit_from_pilot",
+                          "pin_required",
+                          "deploy_required",
+                          "design_required",
+                          "ask_user"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "backends",
+            "default_backend",
+            "roles"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "runtime": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "gpus": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "const": "auto"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "vram_budget_gb": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "vram_check": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "before": {
+                      "anyOf": [
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "after": {
+                      "anyOf": [
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "before",
+                    "after"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "cpu_workers": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "const": "auto"
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "resume": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "gpus",
+            "vram_budget_gb",
+            "vram_check",
+            "cpu_workers",
+            "resume"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "storage": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "data_root": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "kb_store": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "table_format": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "data_root",
+            "kb_store",
+            "table_format"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "serving": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "max_concurrency": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "queue_limit": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "total_deadline_s": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "prefix_cache": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "max_concurrency",
+            "queue_limit",
+            "total_deadline_s",
+            "prefix_cache"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "evaluation": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "scenario_kinds": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "enum": [
+                          "fit_from_gt",
+                          "fit_from_bench",
+                          "fit_from_pilot",
+                          "pin_required",
+                          "deploy_required",
+                          "design_required",
+                          "ask_user"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "languages": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "enum": [
+                          "fit_from_gt",
+                          "fit_from_bench",
+                          "fit_from_pilot",
+                          "pin_required",
+                          "deploy_required",
+                          "design_required",
+                          "ask_user"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "split_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "min_items_per_class": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "scenario_kinds",
+            "languages",
+            "split_by",
+            "min_items_per_class"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "status",
+    "purpose",
+    "knowledge",
+    "sync",
+    "embedding",
+    "observe",
+    "cards",
+    "aliases",
+    "index",
+    "rag",
+    "candidates",
+    "planner",
+    "resolution",
+    "clarification",
+    "assembly",
+    "edit",
+    "creativity",
+    "writer",
+    "validation",
+    "vision",
+    "profiles",
+    "vlm",
+    "runtime",
+    "storage",
+    "serving",
+    "evaluation"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "enhancer_config.v0"
+}
