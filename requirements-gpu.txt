@@ -1,0 +1,11 @@
+# Dependencies of the GPU environment `.venv-gpu` (the embedding server, T-018). The CPU `.venv` never installs these.
+# Create it from a Python 3.12 interpreter, then, from the project root (downloads happen only when the task allows):
+#   python -m venv .venv-gpu
+#   .venv-gpu/Scripts/python -m pip install --no-cache-dir -e . -r requirements-gpu.txt   (Linux: .venv-gpu/bin/python)
+# --no-cache-dir keeps pip from storing a second copy of the 2 GB torch wheel (disk and download budget).
+--extra-index-url https://download.pytorch.org/whl/cu130
+torch==2.14.1+cu130
+torchvision==0.29.1+cu130
+transformers==5.23.0
+# pinned in P2 after the available version is read from the index: safetensors, huggingface_hub and
+# sentence-transformers (the reference check only; the EmbeddingGemma 2 card asks for sentence-transformers >=6.1.0)

@@ -43,6 +43,7 @@ sync:                                    # K0
 embedding:                               # K1, experiment E5
   candidates:
     - {id: qwen3-vl-embedding-2b, note: N105}
+    - {id: qwen3-vl-embedding-8b, note: N105}     # T-018: supported by the embedding server and the manifest, never run on the dev machine (decision 137)
     - {id: embeddinggemma-2, note: N104}
     - {id: "bge-m3+siglip2", note: N106}          # baseline pair for comparison
   chosen: fit_from_gt
@@ -50,7 +51,7 @@ embedding:                               # K1, experiment E5
   query_text_limit: design_required      # some encoders cap text length (SigLIP 2 does, N008); applies to that candidate only
   backend: deploy_required               # name of the vlm.backends entry that serves the embedder (openai_compatible only); its model.revision must equal revision above
   request:                               # T-008: the documented image request layouts differ per engine and model; fixed by the live smoke
-    shape: design_required               # openai_input_content (llama.cpp /v1/embeddings with --mmproj) | vllm_chat_messages (vLLM /v1/embeddings with messages)
+    shape: design_required               # openai_input_content (llama.cpp /v1/embeddings with --mmproj, or this project's embed_server) | vllm_chat_messages (vLLM /v1/embeddings with messages)
     image_instruction: design_required   # system text sent with each image, or none (Qwen3-VL-Embedding card default "Represent the user's input."; EmbeddingGemma 2: none)
     extra_body: design_required          # vllm_chat_messages only: {continue_final_message, add_special_tokens} as the vLLM example sends them; {} otherwise
     text_template: design_required       # concept text request; exactly one {text} placeholder (EmbeddingGemma 2 uses task prefixes, N104)
@@ -191,7 +192,34 @@ vlm:                                     # R-018: rules name no model; models ar
       http: &model_http {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
       probe: &model_probe {max_requests: design_required, timeout_s: design_required}
       image: &model_image {max_decode_pixels: deploy_required}
-    cloud_claude:                        # decision 28: optional cloud backend; used only when a role binds to it and the user granted requests
+    embedder_qwen3vl8b:                  # T-018: Qwen3-VL-Embedding-8B on this project's embedding server (decision 137); selected with embedding.backend, never run on the dev machine
+      provider: openai_compatible
+      engine: {name: embed_server, version: pin_required}
+      unsupported_param_policy: warn
+      base_urls: [deploy_required]       # a loopback http URL with an explicit port
+      endpoints: {embeddings: v1/embeddings, health: health}
+      api_key_file: none
+      model: {id: Qwen/Qwen3-VL-Embedding-8B, revision: 2c4565515e0f265c6511776e7193b22c0968ddc7, source: none, file: none, mmproj_file: none}   # N105; revision from the Hub, read 2026-11-16 (16.3 GB, four shards)
+      max_concurrency: design_required
+      http: *model_http
+      probe: *model_probe
+      image: *model_image
+      server:
+        family: qwen3_vl_embedding
+        dtype: bfloat16
+        attn_implementation: deploy_required
+        forward_batch: deploy_required
+        max_length: 8192                 # MAX_LENGTH of the card's scripts/qwen3_vl_embedding.py
+        image: {min_pixels: 4096, max_pixels: 1843200, max_soft_tokens: none}   # [A] the script's MIN_PIXELS and MAX_PIXELS
+        default_instruction: Represent the user's input.
+        idle_exit_s: deploy_required
+        max_request_bytes: deploy_required
+        max_image_bytes: deploy_required
+        max_pending_requests: deploy_required   # admitted POSTs at once (body read, decode, GPU wait); more get 503
+        max_connections: deploy_required   # accepted sockets and handler threads at once, at least max_pending_requests; more are turned away
+        max_discard_bytes: deploy_required   # most bytes read and dropped after a refusal, at least max_request_bytes
+        read_timeout_s: deploy_required   # one deadline per connection for the whole request; also the reply send timeout
+    cloud_claude:                       # decision 28: optional cloud backend; used only when a role binds to it and the user granted requests
       provider: anthropic
       engine: {name: anthropic}
       anthropic_version: deploy_required

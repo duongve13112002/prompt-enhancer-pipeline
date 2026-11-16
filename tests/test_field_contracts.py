@@ -111,6 +111,9 @@ def test_protocol_only_fields():
     assert constrained == ['schema_version', 'knowledge.info_file.on_description_count_mismatch',
                            'index.lexical.kind',
                            'vision.alpha_policy.mode', 'vision.transport', 'vlm.backends.main.unsupported_param_policy',
+                           # T-018: the embedding server's three enum-valued keys (the first backend that has them)
+                           'vlm.backends.embedder_qwen3vl8b.server.family', 'vlm.backends.embedder_qwen3vl8b.server.dtype',
+                           'vlm.backends.embedder_qwen3vl8b.server.attn_implementation',
                            'vlm.roles.planner.mode', 'vlm.roles.planner.output.validate_response']
 
 
@@ -134,6 +137,9 @@ def test_all_constrained_fields_are_known():
                        or path == ('vision', 'alpha_policy', 'mode')  # Refuse also removes the background member.
                        or path == ('vision', 'transport')  # T-008: protocol-bound, data_uri is the only value
                        or path[:2] == ('vlm', 'backends') and path[-1] == 'unsupported_param_policy'
+                       # T-018: enum-valued embedding server keys (the schema's closed value sets)
+                       or path[:2] == ('vlm', 'backends') and path[3:] in (('server', 'family'), ('server', 'dtype'),
+                                                                          ('server', 'attn_implementation'))
                        or path[:2] == ('vlm', 'roles') and path[-1] == 'mode' and len(path) == 4
                        or path[:2] == ('vlm', 'roles') and path[-2:] == ('output', 'validate_response'))
             if not allowed:

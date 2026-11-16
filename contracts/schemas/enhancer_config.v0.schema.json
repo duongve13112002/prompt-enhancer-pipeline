@@ -3198,7 +3198,7 @@
                           "engine": {
                             "type": "object",
                             "properties": {
-                              "name": {"enum": ["vllm", "llama_cpp", "anthropic", "gemini", "deploy_required"]},
+                              "name": {"enum": ["vllm", "llama_cpp", "embed_server", "anthropic", "gemini", "deploy_required"]},
                               "version": {"type": "string", "minLength": 1}
                             },
                             "required": ["name"],
@@ -3533,6 +3533,43 @@
                             "properties": {"max_decode_pixels": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]}},
                             "required": ["max_decode_pixels"], "additionalProperties": false
                           },
+                          "server": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "family": {"enum": ["embedding_gemma2", "qwen3_vl_embedding", "deploy_required"]},
+                                  "dtype": {"enum": ["bfloat16", "float16", "float32", "deploy_required"]},
+                                  "attn_implementation": {"enum": ["sdpa", "eager", "deploy_required"]},
+                                  "forward_batch": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]},
+                                  "max_length": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]},
+                                  "image": {
+                                    "type": "object",
+                                    "properties": {
+                                      "min_pixels": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "none"}, {"const": "deploy_required"}]},
+                                      "max_pixels": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "none"}, {"const": "deploy_required"}]},
+                                      "max_soft_tokens": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "none"}, {"const": "deploy_required"}]}
+                                    },
+                                    "required": ["min_pixels", "max_pixels", "max_soft_tokens"], "additionalProperties": false
+                                  },
+                                  "default_instruction": {"anyOf": [{"type": "string", "minLength": 1}, {"const": "design_required"}]},
+                                  "idle_exit_s": {"anyOf": [{"type": "integer", "minimum": 0}, {"const": "deploy_required"}]},
+                                  "max_request_bytes": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]},
+                                  "max_image_bytes": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]},
+                                  "max_pending_requests": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]},
+                                  "max_connections": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]},
+                                  "max_discard_bytes": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]},
+                                  "read_timeout_s": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "deploy_required"}]}
+                                },
+                                "required": ["family", "dtype", "attn_implementation", "forward_batch", "max_length", "image",
+                                             "default_instruction", "idle_exit_s", "max_request_bytes", "max_image_bytes",
+                                             "max_pending_requests", "max_connections", "max_discard_bytes",
+                                             "read_timeout_s"],
+                                "additionalProperties": false
+                              },
+                              {"const": "deploy_required"}
+                            ]
+                          },
                           "endpoints": {
                             "anyOf": [
                               {
@@ -3610,6 +3647,10 @@
                           {
                             "if": {"properties": {"provider": {"const": "openai_compatible"}}},
                             "then": {"properties": {"engine": {"required": ["version"]}}}
+                          },
+                          {
+                            "if": {"properties": {"engine": {"properties": {"name": {"const": "embed_server"}}, "required": ["name"]}}, "required": ["engine"]},
+                            "then": {"required": ["server"]}
                           },
                           {
                             "if": {"properties": {"provider": {"enum": ["anthropic", "gemini"]}}},

@@ -24,7 +24,13 @@ vision:
 
 embedding:
   chosen: embeddinggemma-2              # N104; the smoke choice for the dev machine, small enough to share the dev GPU; experiment E5 chooses for the full profile
-  backend: embedder                      # [A] no primary source yet confirms EmbeddingGemma 2 image embedding on llama.cpp (T-008 Step 0, A1-A3)
+  backend: embedder                      # T-018: this project's embedding server on the original weights (decisions 137 to 139); the Qwen3-VL-Embedding-2B comparison selects embedder_qwen3vl2b through enhancer.dev-qwen3vl2b.example.yaml
+  revision: f9972ac22e696a105c482202646979e33e4b5a1e   # must equal the backend's model.revision
+  request:                               # EmbeddingGemma 2: no system instruction (N104); the document prefix is the card's `Document` prompt
+    shape: openai_input_content
+    image_instruction: none
+    extra_body: {}
+    text_template: "title: none | text: {text}"
   dimension: 768                         # native output dimension, N104
   dimension_mode: native
   batch_size: 8                          # a profile value for the dev GPU [P]
@@ -47,15 +53,57 @@ vlm:
       http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
       probe: {max_requests: design_required, timeout_s: design_required}
       image: {max_decode_pixels: deploy_required}
-    embedder:                            # K1 embedding server (llama-server with --embedding and --mmproj, N055); T-008
+    embedder:                            # K1 embedding server: EmbeddingGemma 2 from its original weights (T-018); the weights sit under models/ and are verified against models/manifest.json
       provider: openai_compatible
-      engine: {name: llama_cpp, version: pin_required}
+      engine: {name: embed_server, version: pin_required}   # python -m prompt_enhancer.embed_server serve, run in .venv-gpu
       unsupported_param_policy: warn
-      base_urls: [deploy_required]       # a loopback URL of the local embedding server, set per machine
+      base_urls: [deploy_required]       # a loopback http URL with an explicit port, set per machine
       api_key_file: none
-      model: {id: deploy_required, revision: pin_required, source: none, file: none, mmproj_file: none}
+      model: {id: google/embeddinggemma-2, revision: f9972ac22e696a105c482202646979e33e4b5a1e, source: none, file: none, mmproj_file: none}   # N104; revision from the Hub, read 2026-11-16
       max_concurrency: 1
       http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
       probe: {max_requests: design_required, timeout_s: design_required}   # unused by K1; required by the backend schema
       image: {max_decode_pixels: deploy_required}
       endpoints: {embeddings: v1/embeddings, health: health}
+      server:                            # T-018; every key is a profile value, the server has no defaults
+        family: embedding_gemma2
+        dtype: bfloat16                  # card: "Run inference in bfloat16 or float32. Do not use float16." (N104)
+        attn_implementation: deploy_required   # sdpa | eager
+        forward_batch: deploy_required   # images per forward pass, at most embedding.batch_size; VRAM measured in P2
+        max_length: 8192                 # card: "a single shared 8,192-token context"
+        image: {min_pixels: none, max_pixels: none, max_soft_tokens: 280}   # processor_config.json default; the card allows 70 to 1120
+        default_instruction: none
+        idle_exit_s: deploy_required     # seconds without a request before the server exits; 0 = never
+        max_request_bytes: deploy_required
+        max_image_bytes: deploy_required
+        max_pending_requests: deploy_required   # admitted POSTs at once (body read, decode, GPU wait); more get 503
+        max_connections: deploy_required   # accepted sockets and handler threads at once, at least max_pending_requests; more are turned away
+        max_discard_bytes: deploy_required   # most bytes read and dropped after a refusal, at least max_request_bytes
+        read_timeout_s: deploy_required   # one deadline per connection for the whole request; also the reply send timeout
+    embedder_qwen3vl2b:                  # the second dev embedder for the accuracy comparison (decision 137); selected by enhancer.dev-qwen3vl2b.example.yaml
+      provider: openai_compatible
+      engine: {name: embed_server, version: pin_required}
+      unsupported_param_policy: warn
+      base_urls: [deploy_required]       # another loopback port than embedder, set per machine
+      api_key_file: none
+      model: {id: Qwen/Qwen3-VL-Embedding-2B, revision: 9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda, source: none, file: none, mmproj_file: none}   # N105; revision from the Hub, read 2026-11-16
+      max_concurrency: 1
+      http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
+      probe: {max_requests: design_required, timeout_s: design_required}
+      image: {max_decode_pixels: deploy_required}
+      endpoints: {embeddings: v1/embeddings, health: health}
+      server:
+        family: qwen3_vl_embedding
+        dtype: bfloat16
+        attn_implementation: deploy_required
+        forward_batch: deploy_required
+        max_length: 8192                 # MAX_LENGTH of the card's scripts/qwen3_vl_embedding.py
+        image: {min_pixels: 4096, max_pixels: 1843200, max_soft_tokens: none}   # [A] MIN_PIXELS and MAX_PIXELS of that script (4*32*32 and 1800*32*32); P2 compares them with preprocessor_config.json
+        default_instruction: Represent the user's input.   # card: the default system instruction of every input
+        idle_exit_s: deploy_required
+        max_request_bytes: deploy_required
+        max_image_bytes: deploy_required
+        max_pending_requests: deploy_required   # admitted POSTs at once (body read, decode, GPU wait); more get 503
+        max_connections: deploy_required   # accepted sockets and handler threads at once, at least max_pending_requests; more are turned away
+        max_discard_bytes: deploy_required   # most bytes read and dropped after a refusal, at least max_request_bytes
+        read_timeout_s: deploy_required   # one deadline per connection for the whole request; also the reply send timeout

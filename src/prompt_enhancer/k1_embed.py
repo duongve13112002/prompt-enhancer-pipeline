@@ -108,6 +108,12 @@ def embedder_settings(config, path='configuration'):
     identity = {'engine': engine, 'model': {'id': backend['model']['id'], 'revision': backend['model']['revision']},
                 'chosen': embedding['chosen'], 'revision': embedding['revision'], 'shape': request['shape'],
                 'dimension': embedding['dimension'], 'dimension_mode': embedding['dimension_mode']}
+    if engine['name'] == 'embed_server':
+        # The project's own server turns these settings into vectors (T-018, review R2): they are part of the space.
+        # Other engines keep exactly their earlier identity, so their checkpoints stay valid.
+        from .embed_server.families import output_fingerprint
+
+        identity['server'] = output_fingerprint(backend['server'])
     # Instructions and image settings stay out of the revision, so image and text rows share one embedding space
     # (tables.check_embedding_space); they enter the artifact keys instead.
     return EmbedderSettings(

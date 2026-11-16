@@ -1,0 +1,21 @@
+# Dev-machine profile for the Qwen3-VL-Embedding-2B side of the dev comparison (decision 137, T-018).
+# It extends the dev profile and switches only the embedder. A deployment overlay cannot do this (`embedding` is not an
+# overlay key), so the comparison selects this file instead of enhancer.dev.example.yaml. Smoke only: the comparison
+# never sets the full profile's embedding.chosen (experiment E5 does, R-020).
+schema_version: 1
+extends: enhancer.dev.example.yaml
+status: template
+purpose: smoke
+
+embedding:
+  chosen: qwen3-vl-embedding-2b
+  backend: embedder_qwen3vl2b
+  revision: 9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda   # must equal the backend's model.revision
+  request:                               # card: every input is wrapped by the system instruction "Represent the user's input."
+    shape: openai_input_content
+    image_instruction: Represent the user's input.
+    extra_body: {}
+    text_template: "{text}"
+  dimension: 2048                        # native output dimension, N105
+  dimension_mode: native
+  batch_size: 8

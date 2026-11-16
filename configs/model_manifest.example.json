@@ -1,0 +1,475 @@
+{
+  "schema": "model_manifest.v0",
+  "entries": [
+    {
+      "repository": "google/embeddinggemma-2",
+      "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
+      "file": "1_Pooling/config.json",
+      "size": 90,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/1_Pooling/config.json",
+      "gated": false
+    },
+    {
+      "repository": "google/embeddinggemma-2",
+      "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
+      "file": "2_Normalize/config.json",
+      "size": 97,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/2_Normalize/config.json",
+      "gated": false
+    },
+    {
+      "repository": "google/embeddinggemma-2",
+      "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
+      "file": "chat_template.jinja",
+      "size": 1016,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/chat_template.jinja",
+      "gated": false
+    },
+    {
+      "repository": "google/embeddinggemma-2",
+      "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
+      "file": "config.json",
+      "size": 4455,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/config.json",
+      "gated": false
+    },
+    {
+      "repository": "google/embeddinggemma-2",
+      "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
+      "file": "config_sentence_transformers.json",
+      "size": 1565,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/config_sentence_transformers.json",
+      "gated": false
+    },
+    {
+      "repository": "google/embeddinggemma-2",
+      "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
+      "file": "model.safetensors",
+      "size": 1488915288,
+      "sha256": "197a32965d4b1105faf060417baa899e193fb73cd401f42ec9295234d5553d79",
+      "licence": "apache-2.0",
+      "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/model.safetensors",
+      "gated": false
+    },
+    {
+      "repository": "google/embeddinggemma-2",
+      "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
+      "file": "modules.json",
+      "size": 413,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/modules.json",
+      "gated": false
+    },
+    {
+      "repository": "google/embeddinggemma-2",
+      "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
+      "file": "preprocessor_config.json",
+      "size": 511,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/preprocessor_config.json",
+      "gated": false
+    },
+    {
+      "repository": "google/embeddinggemma-2",
+      "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
+      "file": "processor_config.json",
+      "size": 1788,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/processor_config.json",
+      "gated": false
+    },
+    {
+      "repository": "google/embeddinggemma-2",
+      "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
+      "file": "sentence_bert_config.json",
+      "size": 747,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/sentence_bert_config.json",
+      "gated": false
+    },
+    {
+      "repository": "google/embeddinggemma-2",
+      "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
+      "file": "tokenizer.json",
+      "size": 32170510,
+      "sha256": "4d777ef5bdc1aa36227abdfb77c3e49e7b9c892d16e1b6bda41c393504828be4",
+      "licence": "apache-2.0",
+      "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/tokenizer.json",
+      "gated": false
+    },
+    {
+      "repository": "google/embeddinggemma-2",
+      "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
+      "file": "tokenizer.model",
+      "size": 4689013,
+      "sha256": "e594c8a90eb08d8bda498ff4747977dc827ae0c3c56b5c0d41a605a22d02ef03",
+      "licence": "apache-2.0",
+      "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/tokenizer.model",
+      "gated": false
+    },
+    {
+      "repository": "google/embeddinggemma-2",
+      "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
+      "file": "tokenizer_config.json",
+      "size": 1599,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/tokenizer_config.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-2B",
+      "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "file": "1_Pooling/config.json",
+      "size": 96,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/1_Pooling/config.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-2B",
+      "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "file": "added_tokens.json",
+      "size": 707,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/added_tokens.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-2B",
+      "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "file": "chat_template.jinja",
+      "size": 5519,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/chat_template.jinja",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-2B",
+      "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "file": "config.json",
+      "size": 1570,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/config.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-2B",
+      "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "file": "config_sentence_transformers.json",
+      "size": 238,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/config_sentence_transformers.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-2B",
+      "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "file": "merges.txt",
+      "size": 1671853,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/merges.txt",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-2B",
+      "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "file": "model.safetensors",
+      "size": 4255140312,
+      "sha256": "c73fa9caeddeb3ff831d46c085a7a5708343248ca777e90f2d486964464509c1",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/model.safetensors",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-2B",
+      "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "file": "modules.json",
+      "size": 429,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/modules.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-2B",
+      "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "file": "preprocessor_config.json",
+      "size": 783,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/preprocessor_config.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-2B",
+      "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "file": "sentence_bert_config.json",
+      "size": 770,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/sentence_bert_config.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-2B",
+      "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "file": "special_tokens_map.json",
+      "size": 613,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/special_tokens_map.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-2B",
+      "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "file": "tokenizer.json",
+      "size": 11423705,
+      "sha256": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/tokenizer.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-2B",
+      "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "file": "tokenizer_config.json",
+      "size": 5404,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/tokenizer_config.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-2B",
+      "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "file": "video_preprocessor_config.json",
+      "size": 817,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/video_preprocessor_config.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-2B",
+      "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "file": "vocab.json",
+      "size": 2776833,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/vocab.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "1_Pooling/config.json",
+      "size": 97,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/1_Pooling/config.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "added_tokens.json",
+      "size": 707,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/added_tokens.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "chat_template.jinja",
+      "size": 5519,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/chat_template.jinja",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "config.json",
+      "size": 1539,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/config.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "config_sentence_transformers.json",
+      "size": 238,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/config_sentence_transformers.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "merges.txt",
+      "size": 1671853,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/merges.txt",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "model-00001-of-00004.safetensors",
+      "size": 4998056552,
+      "sha256": "79ef275ec5f751d5fb59357c00d473268f9fd74abf5e38aa30137d268e7733c4",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/model-00001-of-00004.safetensors",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "model-00002-of-00004.safetensors",
+      "size": 4915962464,
+      "sha256": "a4da61f512e84fc0f0b80bcb7bcc5137eb3bf25b658a7d55f84f4056078545f0",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/model-00002-of-00004.safetensors",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "model-00003-of-00004.safetensors",
+      "size": 4915962496,
+      "sha256": "7fb17cf8f06d6fe5aaacf114e85c4e6d8318799f24b517f50d1ec154a8d47007",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/model-00003-of-00004.safetensors",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "model-00004-of-00004.safetensors",
+      "size": 1459698112,
+      "sha256": "000213b6d1d03ed9023fac23716da51ec4c5be221a04526c2f732d31d8fed1f5",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/model-00004-of-00004.safetensors",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "model.safetensors.index.json",
+      "size": 67737,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/model.safetensors.index.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "modules.json",
+      "size": 430,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/modules.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "preprocessor_config.json",
+      "size": 784,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/preprocessor_config.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "sentence_bert_config.json",
+      "size": 771,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/sentence_bert_config.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "special_tokens_map.json",
+      "size": 613,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/special_tokens_map.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "tokenizer.json",
+      "size": 11423705,
+      "sha256": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/tokenizer.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "tokenizer_config.json",
+      "size": 5404,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/tokenizer_config.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "video_preprocessor_config.json",
+      "size": 817,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/video_preprocessor_config.json",
+      "gated": false
+    },
+    {
+      "repository": "Qwen/Qwen3-VL-Embedding-8B",
+      "revision": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+      "file": "vocab.json",
+      "size": 2776833,
+      "sha256": "pin_required",
+      "licence": "apache-2.0",
+      "path": "models/Qwen--Qwen3-VL-Embedding-8B/2c4565515e0f265c6511776e7193b22c0968ddc7/vocab.json",
+      "gated": false
+    }
+  ]
+}

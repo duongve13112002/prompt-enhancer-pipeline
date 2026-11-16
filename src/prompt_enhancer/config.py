@@ -4,12 +4,15 @@ from copy import deepcopy
 import codecs
 import errno
 from functools import lru_cache
+import ipaddress
 import json
 import math
 import os
 from pathlib import Path, PureWindowsPath
 import re
+import socket
 import sys
+from urllib.parse import urlsplit
 
 from jsonschema import Draft202012Validator, exceptions, validators
 import yaml
@@ -30,8 +33,13 @@ WINDOWS_DEVICE_NAMES = frozenset(
     + tuple(f'{prefix}{number}' for prefix in ('COM', 'LPT') for number in '0123456789\u00b9\u00b2\u00b3')
 )
 
+# protocol-bound: the engines an openai_compatible backend may name; `embed_server` is this project's own embedding
+# server (T-018, src/prompt_enhancer/embed_server).
+LOCAL_ENGINES = ('vllm', 'llama_cpp', 'embed_server')
+
 # Only documented reads are listed; later stage tasks complete their read sets.
 COMMAND_READS = {
+    'embed serve': ('runtime.gpus', 'runtime.vram_budget_gb', 'embedding.backend'),
     'kb status': ('storage.kb_store', 'storage.lock'),
     'kb sync': ('knowledge', 'sync', 'embedding', 'observe', 'cards', 'aliases', 'index', 'storage.kb_store', 'storage.data_root',
                 'storage.lock', 'storage.table_format', 'runtime.cpu_workers',
@@ -634,7 +642,7 @@ def resolve_backend_engine(backend, path):
     _sentinel(engine, path, 'engine', {})
     provider, name = backend['provider'], engine['name']
     if provider == 'openai_compatible':
-        if name not in ('vllm', 'llama_cpp'):
+        if name not in LOCAL_ENGINES:
             raise ConfigurationError(f'{path}: engine.name: incompatible with provider')
         version = engine['version']
     elif provider in ('anthropic', 'gemini') and name == provider:
@@ -690,7 +698,7 @@ def _validate_model_bindings(config, path):
             provider = backend['provider']
             engine_name = backend['engine']['name']
             if provider not in SENTINELS and engine_name not in SENTINELS:
-                if ((provider == 'openai_compatible' and engine_name not in ('vllm', 'llama_cpp'))
+                if ((provider == 'openai_compatible' and engine_name not in LOCAL_ENGINES)
                         or (provider in ('anthropic', 'gemini') and engine_name != provider)):
                     raise ConfigurationError(f'{path}: vlm.backends.{name}.engine.name: incompatible with provider')
             endpoints = backend['endpoints']
@@ -813,8 +821,12 @@ EMBEDDER_BACKEND_READS = ('provider', 'engine', 'engine.name', 'engine.version',
                           'http.read_timeout_s', 'http.write_timeout_s', 'http.pool_timeout_s', 'http.max_retries',
                           'http.backoff_initial_s', 'http.backoff_max_s', 'http.retry_statuses', 'max_concurrency',
                           'image.max_decode_pixels')
+# K1 also reads these for an `embed_server` backend: `embed_server.families.output_fingerprint` hashes them into the
+# embedding-space identity (T-018 fix round 1, R2).
+EMBED_SERVER_IDENTITY_READS = ('server', 'server.family', 'server.dtype', 'server.attn_implementation',
+                               'server.max_length', 'server.image', 'server.default_instruction')
 # protocol-bound: request layout -> the engine whose documentation defines it (T-008 Step 0, A1 and A2).
-EMBEDDING_SHAPE_ENGINE = {'openai_input_content': 'llama_cpp', 'vllm_chat_messages': 'vllm'}
+EMBEDDING_SHAPE_ENGINE = {'openai_input_content': ('llama_cpp', 'embed_server'), 'vllm_chat_messages': ('vllm',)}
 TEXT_PLACEHOLDER = '{text}'  # protocol-bound: the one placeholder of embedding.request.text_template
 # jsonschema's Draft 2020-12 checker counts an integral float such as 2.0 as an integer (jsonschema/_types.py:195-201).
 # K1 slices, counts and passes these values to C-level code, so its read set takes exact ints (never bool or float).
@@ -826,7 +838,12 @@ def embedder_reads(config, path):
     """K1's read keys, with the backend fields resolved through embedding.backend."""
     name = _get(config, 'embedding.backend', path)
     _sentinel(name, path, 'embedding.backend', {})
-    return K1_READS + tuple(f'vlm.backends.{name}.{field}' for field in EMBEDDER_BACKEND_READS)
+    backend = config['vlm']['backends'].get(name) if isinstance(config['vlm']['backends'], dict) else None
+    engine = backend.get('engine') if isinstance(backend, dict) else None
+    fields = EMBEDDER_BACKEND_READS
+    if isinstance(engine, dict) and engine.get('name') == 'embed_server':
+        fields += EMBED_SERVER_IDENTITY_READS  # the server's output settings are part of the embedding space
+    return K1_READS + tuple(f'vlm.backends.{name}.{field}' for field in fields)
 
 
 def _schema_at(schema, key):
@@ -928,7 +945,139 @@ def validate_embedder_reads(config, path, sources, project_root=None):
         key = 'vision.format'
         raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {NO_MEDIA_TYPE.format(fmt)}')
     name = config['embedding']['backend']
+    if config['vlm']['backends'][name]['engine']['name'] == 'embed_server':
+        from .embed_server.protocol import ALLOWED_FORMATS
+
+        if fmt.upper() not in ALLOWED_FORMATS:  # the server decodes only these (T-018 review R6); refuse at start
+            key = 'vision.format'
+            raise ConfigurationError(f'{_source(sources, key, path)}: {key}: the embedding server decodes only '
+                                     f'{", ".join(ALLOWED_FORMATS)}, not {fmt!r}')
     _check_backoff_order(config['vlm']['backends'][name]['http'], path, f'vlm.backends.{name}.http', sources)
+
+
+SERVER_READS = ('runtime.gpus', 'runtime.vram_budget_gb', 'embedding.backend', 'embedding.batch_size',
+                'embedding.dimension', 'embedding.dimension_mode', 'embedding.revision', 'embedding.request.shape',
+                'embedding.request.image_instruction')
+SERVER_BACKEND_READS = ('provider', 'engine', 'engine.name', 'engine.version', 'base_urls', 'model.id', 'model.revision',
+                        'endpoints.embeddings', 'endpoints.health', 'image.max_decode_pixels', 'server.family',
+                        'server.dtype', 'server.attn_implementation', 'server.forward_batch', 'server.max_length',
+                        'server.image', 'server.default_instruction', 'server.idle_exit_s', 'server.max_request_bytes',
+                        'server.max_image_bytes', 'server.max_pending_requests', 'server.max_connections',
+                        'server.max_discard_bytes', 'server.read_timeout_s')
+NONE = 'none'  # protocol-bound profile value of "not used": no instruction, or an image limit the family lacks
+
+
+def embed_server_address(base_url):
+    """(host, port) of an embedding server's base URL; plain http on an IPv4 loopback host with an explicit port.
+
+    IPv6 is refused: the server binds one IPv4 socket (stdlib `ThreadingHTTPServer`), so an accepted `[::1]` could
+    never bind. Narrowing the contract is the reversible choice; binding `AF_INET6` can be added with its own test.
+    """
+    parts = urlsplit(base_url)
+    if parts.scheme != 'http' or not parts.hostname or parts.username or parts.password:
+        raise ValueError('expected a plain http URL')
+    try:
+        address = ipaddress.ip_address(parts.hostname)
+    except ValueError:
+        loopback = parts.hostname.lower() == 'localhost'
+    else:
+        if address.version != 4:
+            raise ValueError('the embedding server listens on IPv4 only; use 127.0.0.1 or localhost')
+        loopback = address.is_loopback
+    if not loopback:
+        raise ValueError('the embedding server listens on loopback only')
+    port = parts.port  # raises ValueError for an out-of-range port
+    if port is None or port == 0:
+        raise ValueError('an explicit port is required')
+    return parts.hostname, port
+
+
+def validate_embed_server_reads(config, path, sources, project_root=None):
+    """The embedding server's read set (T-018): present, resolved, inside the schema's domain, consistent.
+
+    One check for the loader's `embed serve` and the server's own entry, as with `validate_embedder_reads`. The
+    backend is `embedding.backend`; it must name an `embed_server` engine and hold a `server` block.
+    """
+    from .embed_server.families import FAMILIES
+    from .model_transport import endpoint_url
+
+    def refuse(key, message):
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {message}')
+
+    name = _get(config, 'embedding.backend', path)
+    _sentinel(name, path, 'embedding.backend', sources)
+    backends = config['vlm']['backends']
+    if name not in backends:
+        refuse('embedding.backend', f'unknown backend {name!r}')
+    backend = backends[name]
+    if not isinstance(backend, dict) or backend['provider'] != 'openai_compatible':
+        refuse('embedding.backend', 'the embedding server needs a local openai_compatible backend')
+    if not isinstance(backend['engine'], dict) or backend['engine']['name'] != 'embed_server':
+        refuse(f'vlm.backends.{name}.engine.name', 'expected embed_server')
+    keys = SERVER_READS + tuple(f'vlm.backends.{name}.{field}' for field in SERVER_BACKEND_READS)
+    for key in keys:
+        _sentinel(_get(config, key, path), path, key, sources)
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    schema = _schema(root, 'enhancer_config.v0')
+    for key in keys:
+        value = _get(config, key, path)
+        _validate(value, _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
+        _require_finite(value, path, key, sources)
+    prefix = f'vlm.backends.{name}'
+    gpus = config['runtime']['gpus']
+    if not isinstance(gpus, list) or len(gpus) != 1:
+        refuse('runtime.gpus', 'the embedding server places its model on exactly one listed GPU')
+    budget = config['runtime']['vram_budget_gb']
+    if type(budget) not in (int, float) or budget <= 0:
+        refuse('runtime.vram_budget_gb', 'expected a positive number of GB')
+    bases = backend['base_urls']
+    if not isinstance(bases, list) or len(bases) != 1:
+        refuse(f'{prefix}.base_urls', 'expected exactly one URL')
+    try:
+        embed_server_address(bases[0])
+        embeddings, health = (urlsplit(endpoint_url(bases[0], backend['endpoints'][route])).path
+                              for route in ('embeddings', 'health'))
+    except ValueError as error:
+        refuse(f'{prefix}.base_urls', str(error))
+    if embeddings == health:
+        refuse(f'{prefix}.endpoints', 'embeddings and health must be different routes')
+    server = backend['server']
+    family = FAMILIES[server['family']]
+    if server['dtype'] in family.forbidden_dtypes:
+        refuse(f'{prefix}.server.dtype', f"{server['dtype']} is refused for {family.name} (model card)")
+    image, instruction = server['image'], config['embedding']['request']['image_instruction']
+    if family.accepts_instruction:
+        fields = {'min_pixels': int, 'max_pixels': int, 'max_soft_tokens': None}
+    else:
+        fields = {'min_pixels': None, 'max_pixels': None, 'max_soft_tokens': int}
+        for key, value in ((f'{prefix}.server.default_instruction', server['default_instruction']),
+                           ('embedding.request.image_instruction', instruction)):
+            if value != NONE:
+                refuse(key, f'{family.name} has no system instruction; expected none')
+    for field, kind in fields.items():
+        if (kind is None) != (image[field] == NONE):
+            refuse(f'{prefix}.server.image.{field}', f'{family.name} {"does not use" if kind is None else "requires"} it')
+    if family.accepts_instruction and image['min_pixels'] > image['max_pixels']:
+        refuse(f'{prefix}.server.image.min_pixels', 'exceeds max_pixels')
+    try:  # the consumer decides what a usable timeout is: the platform's socket (its limit differs per OS)
+        with socket.socket() as probe:
+            probe.settimeout(server['read_timeout_s'])
+    except (OverflowError, ValueError, OSError):
+        refuse(f'{prefix}.server.read_timeout_s', 'the platform socket cannot hold a timeout this long')
+    if server['forward_batch'] > config['embedding']['batch_size']:
+        refuse(f'{prefix}.server.forward_batch', 'exceeds embedding.batch_size')
+    if server['max_request_bytes'] < -(-server['max_image_bytes'] // 3) * 4:
+        refuse(f'{prefix}.server.max_request_bytes', 'too small for one image of max_image_bytes as base64')
+    if server['max_discard_bytes'] < server['max_request_bytes']:
+        refuse(f'{prefix}.server.max_discard_bytes', 'below max_request_bytes: a refused body over the limit could not be drained')
+    if server['max_connections'] < server['max_pending_requests']:
+        refuse(f'{prefix}.server.max_connections', 'below max_pending_requests: admitted requests could not all hold a connection')
+    if config['embedding']['request']['shape'] != 'openai_input_content':
+        refuse('embedding.request.shape', 'the embedding server answers openai_input_content only')
+    if config['embedding']['revision'] != backend['model']['revision']:
+        refuse('embedding.revision', f'differs from {prefix}.model.revision')
+    if config['embedding']['dimension_mode'] == 'request_field':
+        refuse('embedding.dimension_mode', 'request_field is not supported by the embedding server')
 
 
 # Protocol-bound supported naming policies (K2-observe.md, naming step); no content decisions live here.
@@ -1306,7 +1455,7 @@ def _validate_embedding(config, path, sources):
         refuse('embedding.revision', f'differs from vlm.backends.{name}.model.revision')
     engine = backend['engine']['name']
     if engine not in SENTINELS:
-        if shape in EMBEDDING_SHAPE_ENGINE and EMBEDDING_SHAPE_ENGINE[shape] != engine:
+        if shape in EMBEDDING_SHAPE_ENGINE and engine not in EMBEDDING_SHAPE_ENGINE[shape]:
             refuse('embedding.request.shape', f'{shape} is not documented for engine {engine}')
         if embedding['dimension_mode'] == 'request_field' and engine != 'vllm':
             refuse('embedding.dimension_mode', f'request_field is not documented for engine {engine}')
@@ -1390,6 +1539,8 @@ def load_config(path, command, *, overlay=None, project_root=None):
         _sentinel(default, path, 'vlm.default_backend', sources)
         default_key = 'vlm.backends.' + default
         _sentinel(_get(config, default_key, path), path, default_key, sources)
+    if command == 'embed serve':
+        validate_embed_server_reads(config, path, sources, root)
     if command == 'kb sync':
         validate_index_reads(config, path, sources, root)
         validate_embedder_reads(config, path, sources, root)  # K1 is part of kb sync; the same check K1 runs

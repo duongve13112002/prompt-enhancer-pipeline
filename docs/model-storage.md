@@ -6,6 +6,10 @@ Design only; nothing exists yet.
 
 Weights live under `models/` in the project root (Git-ignored), uploaded in advance; a missing artifact is acquired only from its pinned source and only when the task permits a download. Each model has a manifest entry verified at load time: repository, revision, filenames, sizes, SHA-256, licence. A quantised model and its projector file have entries with the same fields. Never substitute a model, quantisation or path silently, because a changed file changes every artifact derived from it ([K0-sync](stages/K0-sync.md), R-017).
 
+### Manifest format (`model_manifest.v0`)
+
+The runtime record is `models/manifest.json` (Git-ignored with the weights, never moved): `{"schema": "model_manifest.v0", "entries": [...]}`, one entry per file with `repository`, `revision` (a 40-hex commit), `file`, `size`, `sha256`, `licence`, `path` (`models/<owner>--<name>/<revision>/<file>`) and an optional `gated` flag. The schema is [model_manifest.v0.schema.json](../contracts/schemas/model_manifest.v0.schema.json); [configs/model_manifest.example.json](../configs/model_manifest.example.json) lists the planned entries of the three embedding models (EmbeddingGemma 2, Qwen3-VL-Embedding-2B and -8B; sizes and LFS SHA-256 read from the Hub on 2026-11-16, small files `pin_required` until downloaded, because a figure from a summarising fetch stays a lead until the bytes are hashed, R-021). A `pin_required` value is valid in the example and refused at verification. The embedding server ([K1-embed](stages/K1-embed.md)) verifies size and SHA-256 of every listed file of its model, the layout path, that no link is crossed and that no unlisted file lies in the model directory, before it loads anything.
+
 ## Data volume
 
 Working data lives under `data_root` (profile value `storage.data_root`), by default `data/` in the repository (Git-ignored); it may be an absolute path validated for containment. The source knowledge base is read only and only by `kb sync` (R-014): the request path reads `kb_store/` and never the source tree.
