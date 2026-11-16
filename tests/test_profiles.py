@@ -4,9 +4,11 @@ import asyncio
 import errno
 import json
 import os
+import re
 import shutil
 import time
 
+from hypothesis import given, settings, strategies as st
 import pytest
 import yaml
 
@@ -1010,3 +1012,101 @@ def test_bundle_lock_refusal(tmp_path, project_root, writer):
     data['storage']['lock']['timeout_s'] = 'deploy_required'
     with pytest.raises(ConfigurationError, match='storage.lock'):
         load(tmp_path, project_root, data, 'profile register')
+
+
+# --- T-012-fp (decision 124): the fingerprint hashes the normalized AST of config.py ---
+
+_SYNTHETIC = '''"""Module doc."""
+import os
+
+
+class Box:
+    """Class doc."""
+
+    def get(self, value):
+        """Function doc."""
+        return value + 1  # trailing comment
+
+
+def top(x):
+    return x * 2
+'''
+
+
+def _config_source():
+    from prompt_enhancer import config
+    return config.__spec__.loader.get_data(config.__file__)
+
+
+def _digest(text):
+    return profiles._ast_digest(text.encode('utf-8'))
+
+
+def test_fingerprint_hashes_config_ast_digest(monkeypatch):
+    """The call site feeds `config.py` through the AST digest, not through a byte hash."""
+    seen = []
+    monkeypatch.setattr(profiles, '_ast_digest', lambda source: seen.append(source) or 'sha256:x')
+    profiles._code_fingerprint()
+    assert seen == [_config_source()]
+
+
+def test_ast_digest_ignores_docstring_edit_of_config():
+    source = _config_source().decode('utf-8').replace('\r\n', '\n')
+    assert source.startswith('"""')
+    edited = '"""A different module docstring."""' + source[source.index('"""', 3) + 3:]
+    assert edited != source
+    assert _digest(edited) == _digest(source)
+
+
+def test_ast_digest_ignores_comment_edit_of_config():
+    source = _config_source().decode('utf-8')
+    assert _digest('# a new comment\n' + source + '\n# another comment\n') == _digest(source)
+
+
+def test_ast_digest_ignores_whitespace_edit_of_config():
+    source = _config_source().decode('utf-8').replace('\r\n', '\n')
+    assert _digest('\n\n' + source.replace('\n', '\n\n\n', 1) + '\n\n') == _digest(source)
+
+
+def test_ast_digest_sees_one_token_code_edit_of_config():
+    source = _config_source().decode('utf-8')
+    body = source.index('\nimport')  # past the module docstring
+    match = re.search(r'\b\d+\b', source[body:])  # first integer literal in code
+    edited = source[:body + match.start()] + str(int(match.group()) + 1) + source[body + match.end():]
+    assert _digest(edited) != _digest(source)
+
+
+@pytest.mark.parametrize('old, new', [('value + 1', 'value - 1'), ('x * 2', 'x * 3'), ('def top(', 'def top2('),
+                                      ('import os', 'import sys')])
+def test_ast_digest_sees_code_edits(old, new):
+    assert _digest(_SYNTHETIC.replace(old, new, 1)) != _digest(_SYNTHETIC)
+
+
+def test_ast_digest_ignores_class_and_function_docstring_edits():
+    edited = _SYNTHETIC.replace('Class doc.', 'Other class doc.').replace('Function doc.', 'Other function doc.')
+    assert _digest(edited) == _digest(_SYNTHETIC)
+
+
+def test_ast_digest_keeps_non_string_leading_expression():
+    """Only a string constant is a docstring; a leading number is code."""
+    source = 'def f():\n    {}\n    return 1\n'
+    assert _digest(source.format('5')) != _digest(source.format('6'))
+
+
+def test_ast_digest_sees_docstring_replaced_by_code():
+    assert _digest(_SYNTHETIC.replace('"""Function doc."""', 'print("Function doc.")')) != _digest(_SYNTHETIC)
+
+
+@settings(max_examples=60, deadline=None)
+@given(doc=st.text(alphabet=st.characters(blacklist_categories=('Cs', 'Cc'), blacklist_characters='"\\'), max_size=30),
+       comment=st.text(alphabet=st.characters(blacklist_categories=('Cs', 'Cc')), max_size=20),
+       blanks=st.integers(0, 3), literal=st.integers(1, 99), operator=st.sampled_from(['+', '-', '*']))
+def test_ast_digest_property(doc, comment, blanks, literal, operator):
+    """Comment, docstring and blank-line edits keep the digest; a changed literal or operator moves it."""
+    base = f'"""d"""\n\ndef f(a):\n    """x"""\n    return a {operator} {literal}\n'
+    noisy = (f'"""{doc}"""\n' + '\n' * blanks + f'# {comment}\ndef f(a):\n    """{doc}"""\n'
+             f'    return a {operator} {literal}  # {comment}\n')
+    assert _digest(noisy) == _digest(base)
+    assert _digest(base.replace(f'{operator} {literal}', f'{operator} {literal + 100}')) != _digest(base)
+    other = {'+': '-', '-': '*', '*': '+'}[operator]
+    assert _digest(base.replace(f'a {operator} ', f'a {other} ')) != _digest(base)

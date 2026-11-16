@@ -18,6 +18,7 @@ Known limit: an external editor takes no lock, so an edit of `manifest.yaml` tha
 comparison and its atomic replace is lost; a check in the same window fails closed (resolve refuses).
 """
 
+import ast
 import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
@@ -133,12 +134,28 @@ def _schema_hashes(root):
     return {schema_id: sha256_tag(_schema_bytes(root, schema_id)[1]) for schema_id in CHECK_SCHEMAS}
 
 
+def _ast_digest(source):
+    """Hash of the normalized AST of Python `source` (decision 124): docstrings are dropped and no line or column
+    attribute is dumped, so a comment, docstring or whitespace edit keeps the hash and any code change moves it.
+    The dump format can change with Python, which the fingerprint already records."""
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            first = node.body[0] if node.body else None
+            if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                    and isinstance(first.value.value, str)):
+                del node.body[0]
+    return sha256_tag(ast.dump(tree, include_attributes=False).encode('utf-8'))
+
+
 def _code_fingerprint():
-    """Hash of the code a verdict depends on: the bytes of the modules that run the check (as imported) and the
-    versions of its libraries and of Python, whose Unicode tables decide `str.isidentifier` (RT4 class)."""
+    """Hash of the code a verdict depends on: the normalized AST of `config.py`, the bytes of the other modules
+    that run the check (as imported), and the versions of its libraries and of Python, whose Unicode tables decide
+    `str.isidentifier` (RT4 class)."""
     from . import config, profile_lint, profile_prompt
-    entries = [[module.__name__, sha256_tag(module.__spec__.loader.get_data(module.__file__))]
-               for module in (config, profile_prompt, profile_lint, sys.modules[__name__])]
+    entries = [[config.__name__, _ast_digest(config.__spec__.loader.get_data(config.__file__))]]
+    entries += [[module.__name__, sha256_tag(module.__spec__.loader.get_data(module.__file__))]
+                for module in (profile_prompt, profile_lint, sys.modules[__name__])]
     entries += [[name, metadata.version(name)] for name in CHECK_LIBRARIES]
     entries.append(['python', platform.python_version()])
     return sha256_tag(json.dumps(entries, separators=(',', ':')).encode('utf-8'))
