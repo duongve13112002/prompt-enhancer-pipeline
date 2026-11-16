@@ -2,10 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "image_observation.v0",
   "title": "Image observation",
-  "$comment": "Draft v0. Follows docs/stages/K2-observe.md. One observer call reads one image and returns this object; the observations table holds one row per item with the image-level fields repeated.",
+  "$comment": "Stored document assembled by K2 from observer_reply.v0 and caller-owned identities/provenance. One context is one image-call bundle; the observations table repeats context_key and image-level fields per item.",
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "context_key",
     "image_id",
     "view",
     "quality",
@@ -13,6 +14,10 @@
     "observations"
   ],
   "properties": {
+    "context_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
     "image_id": {
       "type": "string",
       "minLength": 1

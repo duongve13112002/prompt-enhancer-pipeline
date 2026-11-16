@@ -61,6 +61,7 @@ def dataset(tag='1', dim=DIM, revision='emb-r1'):
         rows['image_embeddings'].append({'image_id': image, 'embedder_revision': revision, 'dim': dim,
                                          'vector': vector})
         rows['observations'].append({
+            'context_key': _hex('observation context ' + image),
             'image_id': image, 'concept_id': concept_id('kimono'), 'facet': 'apparel.color',
             'model_revision': 'obs-r1', 'prompt_id': 'observer_v0', 'facet_schema_version': 'f1',
             'facet_group': 'apparel', 'value': 'đỏ', 'visibility': 'clear',

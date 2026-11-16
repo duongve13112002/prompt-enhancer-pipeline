@@ -6,6 +6,9 @@ extends: enhancer.example.yaml
 status: template
 purpose: smoke
 
+observe:
+  near_duplicate_cosine_distance: fit_from_gt   # E14; a smoke run never fits this value
+
 knowledge:
   root: database                         # the dev machine's knowledge base (decision 61): Git-ignored, read only
 

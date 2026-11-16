@@ -1,0 +1,320 @@
+"""Unpublished, single-image K2 observations over named folders and current K1 vectors (R-010/R-017)."""
+
+from copy import deepcopy
+import asyncio
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+
+import PIL
+import pyarrow as pa
+
+from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_observation_reads
+from .k1_embed import _read_verified
+from .k2_naming import _digest, _validate_reply
+from .model_client import ModelCallError, ModelClientRun
+from .profile_prompt import load_prompt
+from .storage import StorageError, artifact_key, concept_id
+from .storage.identity import canonical_json, check_artifact_key, is_image_id
+
+
+# Artifact-bound stage/layout/algorithm identities; no measured operating value is embedded here.
+STAGE = 'k2_observation'
+LAYOUT = 1
+GROUPING = 'cosine-components-v1'
+STORED_SCHEMA = 'image_observation.v0'
+REPLY_SCHEMA = 'observer_reply.v0'
+
+
+def group_images(images, vectors, distance, *, revision, dim):
+    """Exact single-link components, O(n^2) CPU and O(n*d) memory; no pairwise matrix."""
+    if type(distance) not in (int, float) or not math.isfinite(distance) or not 0 <= distance <= 2:
+        raise ValueError('near_duplicate_cosine_distance must be finite and in [0, 2]')
+    if type(dim) is not int or dim <= 0 or not isinstance(revision, str) or not revision:
+        raise ValueError('current K1 dimension and embedder revision are required')
+    by_image = {row['image_id']: row for row in images}
+    if len(by_image) != len(images) or any(not is_image_id(key) for key in by_image):
+        raise ValueError('K1 images must have unique valid image_id values')
+    unit = {}
+    for row in vectors:
+        identity = row['image_id']
+        if identity not in by_image or identity in unit:
+            raise ValueError('K1 vector references an unknown or repeated image')
+        if row['embedder_revision'] != revision or row['dim'] != dim:
+            raise ValueError('K1 vectors must share the current revision and dimension')
+        values = row['vector']
+        if len(values) != dim or any(type(v) not in (int, float) or not math.isfinite(v) for v in values):
+            raise ValueError('K1 vector must have finite values and the current dimension')
+        scale = max(abs(value) for value in values)
+        if scale == 0:
+            raise ValueError('K1 vector must be nonzero')
+        if by_image[identity]['decode_status'] != 'ok':
+            continue
+        scaled = [value / scale for value in values]
+        norm = math.sqrt(math.fsum(value * value for value in scaled))
+        unit[identity] = [value / norm for value in scaled]
+    ids = sorted(unit)
+    parents = {identity: identity for identity in ids}
+
+    def find(identity):
+        while parents[identity] != identity:
+            parents[identity] = parents[parents[identity]]
+            identity = parents[identity]
+        return identity
+
+    for index, left in enumerate(ids):
+        for right in ids[index + 1:]:
+            # Identical normalized vectors have exact zero distance; do not invent an epsilon for roundoff.
+            cosine_distance = (0.0 if unit[left] == unit[right] else
+                               max(0.0, min(2.0, 1.0 - math.fsum(a * b for a, b in zip(unit[left], unit[right])))))
+            if cosine_distance <= distance:
+                first, second = sorted((find(left), find(right)))
+                parents[second] = first
+    components = {}
+    for identity in ids:
+        components.setdefault(find(identity), []).append(identity)
+    return {identity: 'nd-' + _digest({'algorithm': GROUPING, 'revision': revision, 'images': members})
+            for members in components.values() for identity in members}
+
+
+def choose_representatives(image_ids, groups, quota):
+    """One least-ID member per group, then sorted remaining IDs until the positive quota is filled."""
+    if type(quota) is not int or quota <= 0:
+        raise ValueError('representatives_per_folder must be positive')
+    ids = sorted(set(image_ids))
+    by_group = {}
+    for identity in ids:
+        by_group.setdefault(groups[identity], []).append(identity)
+    first = sorted(members[0] for members in by_group.values())
+    first_set = set(first)
+    selected = (first + [identity for identity in ids if identity not in first_set])[:quota]
+    selected_set = set(selected)
+    return selected, [identity for identity in ids if identity not in selected_set]
+
+
+def parse_observation(value, *, image_id, concepts, context_key, model_revision, prompt_id,
+                      facet_schema_version, project_root):
+    """Validate untrusted model positions, then construct and validate the code-owned stored document."""
+    _validate_reply(project_root, REPLY_SCHEMA, value)
+    try:
+        canonical_json(value).encode('utf-8')  # refuse NaN/Infinity and unencodable strings before any commit
+    except (StorageError, UnicodeError) as error:
+        raise ValueError(f'invalid observation JSON: {error}') from error
+    check_artifact_key(context_key)
+    try:
+        finite_quality = math.isfinite(value['quality'])
+    except OverflowError:
+        finite_quality = False
+    if not finite_quality:
+        raise ValueError('quality must be finite')
+    seen, observations = set(), []
+    for item in value['observations']:
+        position = item['concept_position']
+        if type(position) is not int or not 0 <= position < len(concepts):
+            raise ValueError('concept_position is outside the supplied positions')
+        identity = concepts[position]['concept_id']
+        key = (identity, item['facet'])
+        if key in seen:
+            raise ValueError('duplicate facet for one concept')
+        seen.add(key)
+        if not item['facet'].startswith(item['facet_group'] + '.') or item['facet'] == item['facet_group'] + '.':
+            raise ValueError('facet must be <facet_group>.<facet>')
+        observations.append({**{k: deepcopy(v) for k, v in item.items() if k != 'concept_position'},
+                             'concept_id': identity})
+    document = {'context_key': context_key, 'image_id': image_id, 'view': value['view'],
+                'quality': value['quality'], 'origin': {'origin': 'generated', 'model_revision': model_revision,
+                'prompt_id': prompt_id, 'facet_schema_version': facet_schema_version}, 'observations': observations}
+    _validate_reply(project_root, STORED_SCHEMA, document)
+    return document
+
+
+def observation_revisions(config, prompt, root):
+    role = config['vlm']['roles']['observer']
+    backends = config['vlm']['backends']
+    return {'model': _digest({'role': role, 'backends': {name: backends[name]
+                             for name in {role['backend'], config['vlm']['default_backend']}}}),
+            'prompt': _digest({'id': role['prompt_id'], 'bytes': hashlib.sha256(prompt).hexdigest()}),
+            'schema': _digest({'layout': LAYOUT, 'reply': _schema(root, REPLY_SCHEMA),
+                              'stored': _schema(root, STORED_SCHEMA),
+                              'configured': _schema(root, role['output']['schema_id']),
+                              'facet_schema_version': config['observe']['facet_schema_version'],
+                              'vision': config['vision'], 'processor': PIL.__version__})}
+
+
+def observation_key(image_id, names, revisions):
+    return artifact_key(STAGE, _digest({'image_id': image_id, 'concept_names': sorted(set(names))}), revisions)
+
+
+def _rows(document):
+    return [{'context_key': document['context_key'], 'image_id': document['image_id'],
+             'view': document['view'], 'quality': document['quality'], **document['origin'], **item}
+            for item in document['observations']]
+
+
+async def observe_images(store, config, handoff, *, images, folder_images, image_embeddings,
+                         embedder_revision, dim, knowledge_root, client=None, probe_cases=None, local_probe_plans=None):
+    """Consume P1 naming rows and K1 part-1 tables; return rows/report/artifacts, never publish.
+
+    An injected BoundModelClient is caller-owned. A lazy run created here is always closed. A completed
+    image-call bundle, including an empty reply, is the one checkpoint for its exact concept-name set.
+    """
+    root = store.catalog.root
+    validate_observation_reads(config, project_root=root)
+    forbidden = {os.path.normcase(name) for name in ('.secrets', 'models', '.git', '.venv')}
+
+    def resolved(key, value):
+        return _resolve_within(_lexical_path(value, root, root, key), root, forbidden, root, key)
+
+    source = resolved('knowledge.root', config['knowledge']['root'])
+    if Path(knowledge_root).resolve() != source:
+        raise ConfigurationError('knowledge.root: stage argument does not match configured root')
+    target = resolved('storage.kb_store', config['storage']['kb_store'])
+    if Path(store.root).resolve() != target:
+        raise ConfigurationError('storage.kb_store: stage store does not match configured root')
+    for target in (target, resolved('storage.data_root', config['storage']['data_root'])):
+        if target == source or target in source.parents or source in target.parents:
+            raise ConfigurationError('storage path overlaps knowledge.root')
+    for table in ('folders', 'concepts', 'folder_concepts'):
+        store.catalog.build(table, handoff[table])
+    store.catalog.build('images', images)
+    store.catalog.build('folder_images', folder_images)
+    if isinstance(image_embeddings, pa.Table):
+        store.catalog.validate('image_embeddings', image_embeddings)
+        vector_rows = image_embeddings.to_pylist()
+    else:
+        vector_rows = store.catalog.build('image_embeddings', image_embeddings, dim).to_pylist()
+    groups = group_images(images, vector_rows, config['observe']['near_duplicate_cosine_distance'],
+                          revision=embedder_revision, dim=dim)
+    updated_images = [dict(row, near_duplicate_group=groups.get(row['image_id'])) for row in images]
+    folders = {row['folder_id']: row for row in handoff['folders']}
+    concepts = {row['concept_id']: row for row in handoff['concepts']}
+    members, locations = {}, {}
+    for row in handoff['folder_concepts']:
+        if row['folder_id'] not in folders or row['concept_id'] not in concepts:
+            raise ValueError('folder concept references an unknown folder or concept')
+        if concept_id(row['name_as_written']) != row['concept_id']:
+            raise ValueError('folder concept name disagrees with its concept identity')
+        members.setdefault(row['folder_id'], []).append({'name': row['name_as_written'], 'concept_id': row['concept_id']})
+    all_images = {row['image_id'] for row in images}
+    for row in folder_images:
+        if row['folder_id'] not in folders or row['image_id'] not in all_images:
+            raise ValueError('image membership references an unknown folder or image')
+        locations.setdefault(row['folder_id'], {}).setdefault(row['image_id'], []).append(
+            (row['folder_id'], row['relative_path']))
+    role = config['vlm']['roles']['observer']
+    prompt = load_prompt(root, role['prompt_id'])
+    revisions = observation_revisions(config, prompt, root)
+    report = {'observed': 0, 'skipped_done': 0, 'reused_referenced': [], 'queued': [], 'failed': {},
+              'skipped_folders': [], 'ineligible_images': sorted(all_images - set(groups)), 'representatives': {}}
+    tasks = {}
+    for folder_id, folder in sorted(folders.items()):
+        declared = sorted(members.get(folder_id, []), key=lambda row: row['name'])
+        if folder['error'] or folder['name_source'] is None or not declared:
+            report['skipped_folders'].append(folder_id)
+            continue
+        selected, rest = choose_representatives(set(locations.get(folder_id, {})) & set(groups), groups,
+                                                config['observe']['representatives_per_folder'])
+        report['representatives'][folder_id] = selected
+        names = [item['name'] for item in declared]
+        for identity in selected + rest:
+            key = observation_key(identity, names, revisions)
+            task = tasks.setdefault(key, {'image_id': identity, 'concepts': declared, 'selected': False, 'locations': []})
+            task['selected'] |= identity in selected
+            task['locations'].extend(locations[folder_id][identity])
+    observations, artifacts, owned_run = [], [], None
+    try:
+        with store.writer() as writer:
+            checkpoints = writer.checkpoints(STAGE)
+
+            async def evaluate(key, task):
+                nonlocal owned_run
+                identity, declared = task['image_id'], task['concepts']
+                done = checkpoints.done(key)
+                reusable = None if done else checkpoints.reusable(key)
+                if done or reusable:
+                    try:
+                        bundle = json.loads(checkpoints.load(key))
+                        if (bundle['version'] != LAYOUT or bundle['revisions'] != revisions
+                                or bundle['concepts'] != declared or bundle['document']['image_id'] != identity
+                                or bundle['document']['context_key'] != key):
+                            raise ValueError('observation artifact does not match its cache key')
+                        document = parse_observation(bundle['reply'], image_id=identity, concepts=declared,
+                            context_key=key, model_revision=bundle['document']['origin']['model_revision'],
+                            prompt_id=role['prompt_id'], facet_schema_version=config['observe']['facet_schema_version'],
+                            project_root=root)
+                        if document != bundle['document']:
+                            raise ValueError('stored observation document disagrees with its reply')
+                    except (ValueError, KeyError, TypeError, UnicodeError) as error:
+                        raise StorageError(f'{STAGE}: invalid completed bundle {key}: {error}') from error
+                    observations.extend(_rows(document))
+                    artifacts.append(checkpoints.state(key)['output_key'])
+                    report['skipped_done'] += 1
+                    if reusable:
+                        report['reused_referenced'].append(key)
+                    return
+                if not task['selected']:
+                    if checkpoints.state(key) is None or checkpoints.state(key)['state'] != 'queued':
+                        checkpoints.queue(key, revisions=revisions)
+                    report['queued'].append(key)
+                    return
+                try:
+                    data = _read_verified(source, task['locations'], identity)
+                    if data is None:
+                        raise ValueError('SOURCE_CHANGED: image no longer matches K1 content')
+                    if client is None:
+                        if owned_run is None:
+                            owned_run = ModelClientRun(config, root, probe_cases=probe_cases or {},
+                                                       local_probe_plans=local_probe_plans or {})
+                        bound = await owned_run.for_role('observer')
+                    else:
+                        bound = await client.for_role('observer')
+                    payload = {'concept_names': [{'concept_position': index, 'name': item['name']}
+                                                for index, item in enumerate(declared)],
+                               'facet_schema': {'version': config['observe']['facet_schema_version'],
+                                   'groups': _schema(root, STORED_SCHEMA)['properties']['observations']['items']
+                                             ['properties']['facet_group']['enum']}}
+                    value, record = await bound.call(prompt, canonical_json(payload),
+                                                     images=[('knowledge_reference', data)])
+                    if value is None:
+                        raise ValueError(record['status'])
+                    document = parse_observation(value, image_id=identity, concepts=declared, context_key=key,
+                        model_revision=record['model_revision'], prompt_id=role['prompt_id'],
+                        facet_schema_version=config['observe']['facet_schema_version'], project_root=root)
+                    rows = _rows(document)
+                    store.catalog.build('observations', rows)
+                except (ValueError, TypeError, OverflowError, UnicodeError, ModelCallError) as error:
+                    checkpoints.fail(key, str(error), revisions=revisions)
+                    report['failed'][key] = str(error)
+                    return
+                bundle = {'version': LAYOUT, 'revisions': revisions, 'concepts': declared,
+                          'reply': value, 'document': document}
+                artifact = checkpoints.commit(key, STAGE, canonical_json(bundle).encode('utf-8'),
+                                               revisions=revisions, call_records=[record])
+                artifacts.append(artifact)
+                observations.extend(rows)
+                report['observed'] += 1
+            # Configured backend concurrency bounds both queued coroutine work and prepared image bodies.
+            workers = config['vlm']['backends'][role['backend']]['max_concurrency']
+            ordered = sorted(tasks.items())
+            for start in range(0, len(ordered), workers):
+                batch = ordered[start:start + workers]
+                if workers == 1:
+                    await evaluate(*batch[0])
+                    continue
+                pending = [asyncio.create_task(evaluate(key, task)) for key, task in batch]
+                try:
+                    await asyncio.gather(*pending)
+                except BaseException:
+                    for task in pending:
+                        task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    raise
+    finally:
+        if owned_run is not None:
+            await owned_run.close()
+    observations.sort(key=lambda row: (row['context_key'], row['concept_id'], row['facet']))
+    store.catalog.build('observations', observations)
+    return {'rows': {'images': updated_images, 'observations': observations}, 'report': report,
+            'artifacts': sorted(set(artifacts))}

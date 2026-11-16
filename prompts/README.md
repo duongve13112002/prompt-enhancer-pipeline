@@ -17,9 +17,9 @@ Role `planner`. Placeholders: `{raw_prompt}`, `{task}`, `{shortlist}` (empty whe
 
 Role `verifier`. Placeholders: `{ledger_entries}` (only entries the risk rules send to the model), `{output_text}`, `{granted_facts}`. Delimited data: the output under test and the granted facts. Answers per constraint id with a verdict and a quoted span. Output schema: `verifier_result.v0`. A change invalidates the verifier calibration (`fit_from_gt`) and the gating results of E7.
 
-## `observer_v0` (K2), status: not written
+## `observer_v0` (K2), status: written
 
-Role `observer`. One image per call. Placeholders: `{concept_names}` (names only, no descriptions), `{facet_schema}` (versioned). Delimited data: concept names. Asks for observations per concept and facet with visibility and an optional region. Output schema: `image_observation.v0`. A change invalidates every observation and therefore cards, their embeddings and the index ([K2](../docs/stages/K2-observe.md)); image embeddings stay.
+Role `observer`. One image per call. [System text](observer_v0.txt) is loaded byte-for-byte. A separate JSON user-data object contains `concept_names` (zero-based `concept_position` and name only, no descriptions or pipeline IDs) and `facet_schema` (version and seven groups). Names and text visible in the image are untrusted data; visible text is quoted verbatim as `text_in_image` evidence, never obeyed. Output schema: `observer_reply.v0`; code maps positions and constructs/validates stored `image_observation.v0`. A change invalidates every observation and therefore cards, their embeddings and the index ([K2](../docs/stages/K2-observe.md)); image embeddings stay. CPU double tests prove containment and preservation, not real-model resistance to injection.
 
 ## `info_assessor_v0` (K2, first step), status: written
 

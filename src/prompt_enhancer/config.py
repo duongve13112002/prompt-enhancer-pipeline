@@ -1018,6 +1018,75 @@ def validate_naming_reads(config, path='configuration', sources=None, project_ro
     _validate_configured_paths(config, root, path, sources)
 
 
+def validate_observation_reads(config, path='configuration', sources=None, project_root=None):
+    """Validate the standalone/command observer read set before reads, checkpoints or model activity."""
+    sources = sources or {}
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    schema = _schema(root, 'enhancer_config.v0')
+
+    def checked(key, node=None):
+        value = _get(config, key, path)
+        _sentinel(value, path, key, sources)
+        _validate(value, node or _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
+        _require_finite(value, path, key, sources)
+        return value
+
+    def refuse(key, message):
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {message}')
+
+    observe = checked('observe')
+    # Protocol-bound single-behavior policies: false/unknown values cannot silently select another mode.
+    for field, supported in {'one_image_per_call': True, 'lazy_observation_of_rest': True,
+                             'region_output': 'optional', 'facet_schema_version': 'image_observation.v0'}.items():
+        if observe[field] != supported:
+            refuse('observe.' + field, f'expected {supported!r}')
+    if observe['representatives_per_folder'] == 0:
+        refuse('observe.representatives_per_folder', 'must be positive for observation')
+    checked('vision')
+    checked('knowledge.root')
+    checked('storage.kb_store')
+    checked('storage.data_root')
+    default = checked('vlm.default_backend')
+    key = 'vlm.roles.observer'
+    role = checked(key, _schema(root, 'vlm_role.v0'))
+    image, output = role['image'], role['output']
+    if not isinstance(image, dict) or image['source'] != 'knowledge_reference':
+        refuse(key + '.image.source', 'observer requires knowledge_reference images')
+    if image['transport'] != 'data_uri':
+        refuse(key + '.image.transport', 'expected data_uri')
+    _get(config, key + '.image.max_side', path)
+    fmt = config['vision']['format'] if image['format'] == 'from_vision' else image['format']
+    if not installed_encoder(fmt) or image_media_type(fmt) is None:
+        refuse(key + '.image.format', 'expected an installed encoder with an image/ media type')
+    if output['format'] not in ('json_schema', 'json_object'):
+        refuse(key + '.output.format', 'observer requires structured JSON')
+    if output['transport'] != 'response_format':
+        refuse(key + '.output.transport', 'expected response_format')
+    if output['validate_response'] is not True:
+        refuse(key + '.output.validate_response', 'observer requires response validation')
+    try:
+        _schema(root, output['schema_id'])
+    except ConfigurationError as error:
+        refuse(key + '.output.schema_id', str(error))
+    backends = {}
+    for name in sorted({role['backend'], default}):
+        backend_key = 'vlm.backends.' + name
+        backend = checked(backend_key)
+        backends[name] = backend
+        resolve_backend_engine(backend, backend_key)
+        _check_backoff_order(backend['http'], path, backend_key + '.http', sources)
+        for section in ('http', 'probe'):
+            for field in backend[section]:
+                dotted = f'{backend_key}.{section}.{field}'
+                if 'number' in _schema_types(_schema_at(schema, dotted)):
+                    _require_float_seconds(backend[section][field], path, dotted, sources)
+    scoped = {'vlm': {'roles': {'observer': role}, 'backends': backends, 'default_backend': default},
+              'vision': config['vision'], 'knowledge': {'root': config['knowledge']['root']},
+              'storage': {field: config['storage'][field] for field in ('kb_store', 'data_root')}}
+    _validate_model_bindings(scoped, path)
+    _validate_configured_paths(scoped, root, path, sources)
+
+
 def _validate_embedding(config, path, sources):
     """Cross-field rules of the embedder settings; sentinel values are checked when a command reads them."""
     embedding = config['embedding']
@@ -1151,6 +1220,7 @@ def load_config(path, command, *, overlay=None, project_root=None):
     if command == 'kb sync':
         validate_embedder_reads(config, path, sources, root)  # K1 is part of kb sync; the same check K1 runs
         validate_naming_reads(config, path, sources, root)
+        validate_observation_reads(config, path, sources, root)
         source = _resolve_within(_lexical_path(config['knowledge']['root'], root, path, 'knowledge.root'), root,
                                  {os.path.normcase('.secrets'), os.path.normcase('models')}, path, 'knowledge.root')
         for key in ('storage.kb_store', 'storage.data_root'):

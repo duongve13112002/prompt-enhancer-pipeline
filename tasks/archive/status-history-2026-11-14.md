@@ -148,3 +148,7 @@
       - Pixel size is stored before EXIF orientation.
       - A referenced artifact is reused.
     - The dev pairing, EmbeddingGemma 2 on llama.cpp, has no primary confirmation. Qwen3-VL-Embedding-2B on vLLM has an official example. This goes to you with E5.
+
+## Row moved from STATUS 2026-11-16 09:28 (T-006 accepted row, budget)
+
+  - **T-006 race follow-up and T-006-int: accepted 2026-11-16 00:1x.** Every file mutation in `src/` goes through the anchored layer `storage/_anchored.py` (decision 123 store lock on release; profile bundles anchored at the project root; `publish_new_bytes` no-replace). Reviews: race retest 3 Sonnet PASS and Gemini PASS; T-006-int Sonnet PASS (31 own junction probes refused) and Gemini PASS. Task files: [T-006-race-followup](archive/T-006-race-followup.md), [T-006-int](archive/T-006-int.md); history in the status archive. P3 follow-ups: the AST guard misses `builtins.open`, `io.FileIO`, numeric `os.open` flags, `.save(path)`, nested pyarrow writers and non-literal `.open(mode)` (no such code today); `_ensure_root` in `_write_bytes` untested; the segment refusal reaches `resolve_profile` as a raw `StorageError`, to map when the profile commands are wired; POSIX `linkat` branches run only on Linux CI. **PM decisions pending user review:** round 3 covers the whole class; a failed `release()` becomes a note or `StorageWarning`; profile folder names failing `check_segment` are refused.

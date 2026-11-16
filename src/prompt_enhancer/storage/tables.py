@@ -17,7 +17,7 @@ from referencing import Registry, Resource
 
 from ..config import ConfigurationError, _schema
 from ._fs import StorageError
-from .identity import PHYSICAL_VERSION, check_folder_id, concept_id, is_concept_id, is_image_id, normalise_name
+from .identity import PHYSICAL_VERSION, check_artifact_key, check_folder_id, concept_id, is_concept_id, is_image_id, normalise_name
 
 # A fixed offset, not the zone name 'UTC': converting a named zone back to Python needs tzdata on Windows.
 S, I, F, TS = pa.large_string(), pa.int64(), pa.float64(), pa.timestamp('us', tz='+00:00')
@@ -98,8 +98,8 @@ SPECS = {spec.name: spec for spec in (
         _c('concept_id', S), _c('text_kind', S, False, TEXT_KIND), _c('embedder_revision', S),
         _c('text_hash', S), _c('dim', I)), vector=True,
         references=((('concept_id',), 'concepts', ('concept_id',)),)),
-    Spec('observations', ('image_id', 'concept_id', 'facet', 'model_revision', 'prompt_id', 'facet_schema_version'), (
-        _c('image_id', S), _c('concept_id', S), _c('facet', S), _c('model_revision', S), _c('prompt_id', S),
+    Spec('observations', ('context_key', 'image_id', 'concept_id', 'facet', 'model_revision', 'prompt_id', 'facet_schema_version'), (
+        _c('context_key', S), _c('image_id', S), _c('concept_id', S), _c('facet', S), _c('model_revision', S), _c('prompt_id', S),
         _c('facet_schema_version', S), _c('facet_group', S, False, Ref(OBS, OBS_ITEM + '/facet_group/enum')),
         _c('value', S), _c('visibility', S, False, Ref(OBS, OBS_ITEM + '/visibility/enum')),
         _c('region', JSON, subschema=Ref(OBS, OBS_ITEM + '/region')), _c('view', S), _c('quality', F),
@@ -371,6 +371,12 @@ def _non_negative(*columns):
 
 
 def _facet(row, where, dim):
+    try:
+        check_artifact_key(row['context_key'])
+    except StorageError as error:
+        raise StorageError(f'{where}: context_key: {error}') from error
+    if not math.isfinite(row['quality']):
+        raise StorageError(f'{where}: quality must be finite')
     if not row['facet'].startswith(row['facet_group'] + '.') or row['facet'] == row['facet_group'] + '.':
         raise StorageError(f'{where}: facet {row["facet"]!r} is not <facet_group>.<facet>')
 

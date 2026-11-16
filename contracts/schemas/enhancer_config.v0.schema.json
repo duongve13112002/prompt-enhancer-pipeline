@@ -844,6 +844,12 @@
         {
           "type": "object",
           "properties": {
+            "near_duplicate_cosine_distance": {
+              "anyOf": [
+                {"type": "number", "minimum": 0, "maximum": 2},
+                {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}
+              ]
+            },
             "one_image_per_call": {
               "anyOf": [
                 {
@@ -937,6 +943,7 @@
             }
           },
           "required": [
+            "near_duplicate_cosine_distance",
             "one_image_per_call",
             "lazy_observation_of_rest",
             "representatives_per_folder",

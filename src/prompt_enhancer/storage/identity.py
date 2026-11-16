@@ -103,6 +103,9 @@ def check_artifact_path(value):
     if match is None or match.group(2) != match.group(3)[:2]:
         raise StorageError(f'{value!r} is not a stored artifact path in its generated form')
     check_kind(match.group(1))
+    # Artifact-bound: persisted naming draws are JSON blobs, never table artifacts.
+    if match.group(1) == 'k2_draw' and match.group(4) != 'bin':
+        raise StorageError(f'{value!r}: k2_draw requires the .bin suffix')
     return value
 
 

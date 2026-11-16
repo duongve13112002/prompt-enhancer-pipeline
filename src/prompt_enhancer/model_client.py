@@ -27,6 +27,23 @@ class ModelCallError(RuntimeError):
     """A request could not be completed safely."""
 
 
+# Protocol-bound capability names consumed by the client and generation mapper.
+CAPABILITIES = frozenset(('text', 'image', 'multiple_images', 'json_object', 'json_schema',
+                          'reasoning.mode', 'reasoning.effort', 'reasoning.budget_tokens',
+                          *(f'sampling.{name}' for name in ('temperature', 'top_p', 'top_k', 'min_p',
+                            'frequency_penalty', 'presence_penalty', 'repetition_penalty', 'seed', 'stop'))))
+
+
+def validate_require(require):
+    """Caller demands are exact known names, never substring matches or ignored typos."""
+    if not isinstance(require, (tuple, frozenset)) or any(type(name) is not str for name in require):
+        raise ValueError('require must be a tuple or frozenset of capability names')
+    unknown = set(require) - CAPABILITIES
+    if unknown:
+        raise ValueError('require: unknown capability names: ' + ', '.join(sorted(unknown)))
+    return require
+
+
 class ModelClientRun:
     """Own the shared budgets, concurrency and transports for one run."""
 
@@ -50,6 +67,7 @@ class ModelClientRun:
                                  local_probe_plans=local_probe_plans)
 
     async def for_role(self, role_name, *, require=()):
+        validate_require(require)
         role = self.config['vlm']['roles'][role_name]
         _sentinel(role, self.project_root, f'vlm.roles.{role_name}', {})
         image = role['image']
@@ -91,6 +109,7 @@ class BoundModelClient:
         return await self.run.client.call(self.role_name, system_prompt, user_text, manifest=manifest, images=images)
 
     async def for_role(self, role_name, *, require=()):
+        validate_require(require)
         return await self.run.for_role(role_name, require=require)
 
     async def close(self):
@@ -139,6 +158,7 @@ class RoleClient:
         self._multiple_attempted = set()
 
     def _multiple_images_pair(self, backend_name, role_name, *, require=()):
+        validate_require(require)
         if 'multiple_images' not in require:
             return None
         backend = self.config['vlm']['backends'][backend_name]
@@ -175,10 +195,12 @@ class RoleClient:
         return result
 
     async def start_backend(self, backend_name, *, role_name=None, require=()):
+        validate_require(require)
         async with self._probe_locks.setdefault(backend_name, asyncio.Lock()):
             return await self._start_backend(backend_name, role_name=role_name, require=require)
 
     async def ensure_role_capabilities(self, backend_name, role_name, *, require=()):
+        validate_require(require)
         async with self._probe_locks.setdefault(backend_name, asyncio.Lock()):
             if backend_name not in self.probes:
                 return await self._start_backend(backend_name, role_name=role_name, require=require)

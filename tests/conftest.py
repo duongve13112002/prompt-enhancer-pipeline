@@ -33,6 +33,8 @@ def model_test_profile():
         if isinstance(role['image'], dict):
             role['image'].update(source='source_image', quality=80)
     profile['vlm']['roles']['folder_namer']['image']['source'] = 'knowledge_reference'
+    profile['vlm']['roles']['observer']['image']['source'] = 'knowledge_reference'
+    profile['observe']['near_duplicate_cosine_distance'] = 0.01  # labelled test-only grouping threshold
     profile['vision']['quality'] = 80
     # T-008: kb sync reads the embedder; a synthetic local embedding backend with every K1 field resolved.
     embedder = deepcopy(backend)

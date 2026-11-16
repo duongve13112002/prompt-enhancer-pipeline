@@ -60,6 +60,7 @@ embedding:                               # K1, experiment E5
   # Devices are not a client setting: the embedding server's launch places the model (runtime.gpus, vram_budget_gb, gpu-live-run).
 
 observe:                                 # K2
+  near_duplicate_cosine_distance: fit_from_gt   # E14: connected components at or below this cosine distance
   one_image_per_call: true               # R-010, N107, N108: models mix up several images in one call
   representatives_per_folder: fit_from_gt   # experiment E14
   lazy_observation_of_rest: true         # images not yet read are read on demand at the next sync
@@ -278,7 +279,7 @@ vlm:                                     # R-018: rules name no model; models ar
       max_tokens: design_required
       sampling: *sampling_default
       reasoning: {mode: design_required, effort: design_required, budget_tokens: design_required, template_kwargs_key: enable_thinking}
-      output: {format: json_schema, schema_id: image_observation.v0, strict: true, transport: response_format, validate_response: true}
+      output: {format: json_schema, schema_id: observer_reply.v0, strict: true, transport: response_format, validate_response: true}
     info_assessor:                       # K2 first step, offline, text only: is this info file usable? (decision 40)
       backend: main
       mode: generate
