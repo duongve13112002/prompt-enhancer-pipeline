@@ -50,6 +50,7 @@ Windows (T-006 probe 3); a foreign handle makes os.replace fail as a whole and t
 """
 
 from contextlib import ExitStack
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import functools
@@ -736,6 +737,9 @@ class Writer:
         self._built = set()  # validated snapshots of this session, not yet published: GC skips them (G4)
         self._builders = []
         self._references = None  # cache of _referenced(); reset whenever a reference is added or dropped
+        self._latest = None  # authoritative sync_state view for this WRITER-locked session
+        self._state_tail = None
+        self._checkpoints = {}
 
     def __enter__(self):
         with self._mutex:
@@ -758,6 +762,7 @@ class Writer:
                 if exc_type is None:
                     self._compact_state()
             finally:
+                self._invalidate_state()
                 if self._lock is not None:
                     self._lock.release()
 
@@ -790,10 +795,10 @@ class Writer:
         return [(f'registry/sync_state/{name}', path) for name, path in self.store._children('registry/sync_state')
                 if not name.startswith('.') and path.is_file()]
 
-    def _state_rows(self):
-        """Latest row per (stage, input_key); segment names sort in write order."""
+    def _state_rows(self, segments=None):
+        """Fresh disk merge, independent of the session view; segment names sort in write order."""
         latest = {}
-        for _, path in self._state_segments():
+        for _, path in self._state_segments() if segments is None else segments:
             table = read_table_file(path)
             self.store.catalog.validate('sync_state', table)
             for row in self.store.catalog.rows('sync_state', table):
@@ -805,26 +810,68 @@ class Writer:
                 latest[(row['stage'], row['input_key'])] = row
         return latest
 
+    def _invalidate_state(self):
+        self._latest = None
+        self._state_tail = None
+        self._checkpoints.clear()
+
+    def _latest_rows(self):
+        """Called under the writer mutex: no other Writer can change state while WRITER is held."""
+        self.require()
+        if self._latest is None:
+            segments = self._state_segments()
+            latest = self._state_rows(segments)
+            self._state_tail = segments[-1][0] if segments else None
+            self._latest = latest
+        return self._latest
+
     def _append_state(self, rows):
         self.require()
         fmt = self.store.table_format
         table = self.store.catalog.build('sync_state', rows)
-        self.store._write_table(f'registry/sync_state/{_segment_name(SUFFIX[fmt])}', table, fmt)
+        relative = f'registry/sync_state/{_segment_name(SUFFIX[fmt])}'
+        try:
+            self.store._write_table(relative, table, fmt)
+            if self._latest is not None:
+                if self._state_tail is not None and relative <= self._state_tail:
+                    self._invalidate_state()  # A backwards clock must still follow disk merge precedence.
+                else:
+                    for row in self.store.catalog.rows('sync_state', table):
+                        if row['output_key'] is not None:
+                            check_artifact_path(row['output_key'])
+                        if row['stage'] == GC_STAGE:
+                            check_artifact_path(row['input_key'])
+                        self._latest[(row['stage'], row['input_key'])] = row
+                    self._state_tail = relative
+        except BaseException:
+            self._invalidate_state()  # Publication may have happened before an I/O error was reported.
+            raise
 
     def _rewrite_state(self, rows):
-        old = self._state_segments()
-        if rows:
-            self._append_state(list(rows.values()))
-        for relative, _ in old:
-            self.store._discard(relative)
+        self._invalidate_state()
+        try:
+            old = self._state_segments()
+            if rows:
+                self._append_state(list(rows.values()))
+            for relative, _ in old:
+                self.store._discard(relative)
+        finally:
+            self._invalidate_state()  # Empty and interrupted rewrites must also drop removed keys.
 
     def _compact_state(self):
-        if len(self._state_segments()) > 1:
-            self._rewrite_state(self._state_rows())
+        try:
+            if len(self._state_segments()) > 1:
+                self._rewrite_state(self._latest_rows())
+        finally:
+            self._invalidate_state()
 
     @_writer_operation
     def checkpoints(self, stage):
-        return Checkpoints(self, stage)
+        helper = self._checkpoints.get(stage) if isinstance(stage, str) else None
+        if helper is None:
+            helper = Checkpoints(self, stage)
+            self._checkpoints[stage] = helper
+        return helper
 
     # -- snapshots
 
@@ -923,6 +970,7 @@ class Writer:
         read refuses the whole GC with the registry unchanged (`_live_manifest`; stale leases and expired holds
         found on the way are still removed). A candidate needs no manifest, since its references protect nothing:
         one whose manifest cannot be read is collected and listed in `report.damaged`, never a reason to stop."""
+        self._invalidate_state()
         keep = self.store._setting('_keep', 'sync.snapshots.keep')
         retention = self.store._setting('_retention_s', 'sync.gc.retention')
         now = _now(self.store.clock)
@@ -976,7 +1024,10 @@ class Writer:
             self.store._write_registry(rows)
         report.collected = removed
         self._references = None  # collected snapshots no longer protect their artifacts
-        self._gc_artifacts(artifact_files, now, retention, report)
+        try:
+            self._gc_artifacts(artifact_files, now, retention, report)
+        finally:
+            self._invalidate_state()
         return report
 
     def _referenced(self):
@@ -1016,7 +1067,7 @@ class Writer:
 
     def _gc_artifacts(self, artifact_files, now, retention, report):
         referenced = self._referenced()
-        state = self._state_rows()
+        state = dict(self._latest_rows())  # GC edits a working copy until the rewrite is durable.
         present = set()
         for relative, _ in artifact_files:  # listed when GC began: each delete takes its path again, now
             name = relative.rsplit('/', 1)[1]
@@ -1066,7 +1117,7 @@ class Checkpoints:
         if not isinstance(stage, str) or not stage or stage == GC_STAGE:
             raise StorageError(f'invalid stage {stage!r}')
         self.writer, self.stage = writer, stage
-        self._rows = {key[1]: row for key, row in writer._state_rows().items() if key[0] == stage}
+        self._rows = {key[1]: deepcopy(row) for key, row in writer._latest_rows().items() if key[0] == stage}
 
     @_writer_operation
     def state(self, input_key):
@@ -1145,14 +1196,20 @@ class Checkpoints:
 
     @_writer_operation
     def queue(self, input_key, *, revisions=None):
-        row = self.writer._row(self.stage, check_artifact_key(input_key), 'queued', revisions=revisions)
-        self.writer._append_state([row])
-        self._rows[input_key] = row
+        self._transition(input_key, 'queued', revisions=revisions)
 
     @_writer_operation
     def fail(self, input_key, error, *, revisions=None):
-        row = self.writer._row(self.stage, check_artifact_key(input_key), 'failed', revisions=revisions,
-                               error=str(error))
+        self._transition(input_key, 'failed', revisions=revisions, error=str(error))
+
+    def _transition(self, input_key, state, *, revisions, error=None):
+        # Called under the writer mutex: another helper may have committed since this helper was made.
+        input_key = check_artifact_key(input_key)
+        previous = self.writer._latest_rows().get((self.stage, input_key))
+        if previous is not None and previous['state'] == 'done':
+            self._rows[input_key] = deepcopy(previous)
+            return  # A failed or deferred attempt cannot erase completion, regardless of skip eligibility.
+        row = self.writer._row(self.stage, input_key, state, revisions=revisions, error=error)
         self.writer._append_state([row])
         self._rows[input_key] = row
 

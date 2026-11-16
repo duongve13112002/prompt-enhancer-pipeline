@@ -1087,6 +1087,85 @@ def validate_observation_reads(config, path='configuration', sources=None, proje
     _validate_configured_paths(scoped, root, path, sources)
 
 
+# Protocol/artifact-bound policy vocabulary; semantic facet/value vocabularies remain open.
+CARD_LABELS = ('curated', 'stable', 'stable_low_diversity', 'varies', 'single_observation')
+CARD_POLICY_VERSION = 'invariance_v0'
+
+
+def validate_card_reads(config, path='configuration', sources=None, project_root=None):
+    """Validate K3's complete read set before opening a writer or composing a model client."""
+    sources = sources or {}
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    schema = _schema(root, 'enhancer_config.v0')
+
+    def checked(key, node=None):
+        value = _get(config, key, path)
+        _sentinel(value, path, key, sources)
+        _validate(value, node or _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
+        _require_finite(value, path, key, sources)
+        return value
+
+    def refuse(key, message):
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {message}')
+
+    cards = checked('cards')
+    labels = cards['stability_policy']['labels']
+    if sorted(labels) != sorted(CARD_LABELS):
+        refuse('cards.stability_policy.labels', 'expected each supported stability label exactly once')
+    if cards['stability_policy']['version'] != CARD_POLICY_VERSION:
+        refuse('cards.stability_policy.version', f'expected {CARD_POLICY_VERSION}')
+    if cards['min_visible_images'] <= 0:
+        refuse('cards.min_visible_images', 'must be positive')
+    if cards['low_diversity'] != 'mark_stable_low_diversity':
+        refuse('cards.low_diversity', 'expected mark_stable_low_diversity')
+    if checked('observe.facet_schema_version') != 'image_observation.v0':
+        refuse('observe.facet_schema_version', 'expected image_observation.v0')
+    for key in ('storage.kb_store', 'storage.data_root', 'storage.lock', 'storage.table_format',
+                'sync.resume', 'knowledge.root'):
+        checked(key)
+    default = checked('vlm.default_backend')
+    key = 'vlm.roles.card_builder'
+    role = checked(key, _schema(root, 'vlm_role.v0'))
+    for field, supported in {'mode': 'generate', 'image': 'none'}.items():
+        if role[field] != supported:
+            refuse(key + '.' + field, f'expected {supported}')
+    load_id = role['prompt_id']
+    # Match pipeline prompt IDs structurally, without reading the prompt before preflight completes.
+    if (not load_id or not set(load_id) <= set('abcdefghijklmnopqrstuvwxyz0123456789_.')
+            or load_id.strip('.') != load_id or '..' in load_id):
+        refuse(key + '.prompt_id', 'invalid prompt id')
+    output = role['output']
+    if output['format'] not in ('json_schema', 'json_object'):
+        refuse(key + '.output.format', 'card builder requires structured JSON')
+    if output['transport'] != 'response_format':
+        refuse(key + '.output.transport', 'expected response_format')
+    if output['validate_response'] is not True:
+        refuse(key + '.output.validate_response', 'expected true')
+    configured_schema = _schema(root, output['schema_id'])
+    reply_schema = _schema(root, 'card_builder_reply.v0')
+    metadata = ('$id', 'title', '$comment')
+    if ({key: value for key, value in configured_schema.items() if key not in metadata}
+            != {key: value for key, value in reply_schema.items() if key not in metadata}):
+        refuse(key + '.output.schema_id', 'expected card_builder_reply.v0 or an equivalent local schema')
+    backends = {}
+    for name in sorted({role['backend'], default}):
+        backend_key = 'vlm.backends.' + name
+        backend = checked(backend_key)
+        backends[name] = backend
+        resolve_backend_engine(backend, backend_key)
+        _check_backoff_order(backend['http'], path, backend_key + '.http', sources)
+        for section in ('http', 'probe'):
+            for field in backend[section]:
+                dotted = f'{backend_key}.{section}.{field}'
+                if 'number' in _schema_types(_schema_at(schema, dotted)):
+                    _require_float_seconds(backend[section][field], path, dotted, sources)
+    scoped = {'vlm': {'roles': {'card_builder': role}, 'backends': backends, 'default_backend': default},
+              'knowledge': {'root': config['knowledge']['root']},
+              'storage': {field: config['storage'][field] for field in ('kb_store', 'data_root')}}
+    _validate_model_bindings(scoped, path)
+    _validate_configured_paths(scoped, root, path, sources)
+
+
 def _validate_embedding(config, path, sources):
     """Cross-field rules of the embedder settings; sentinel values are checked when a command reads them."""
     embedding = config['embedding']
@@ -1221,6 +1300,7 @@ def load_config(path, command, *, overlay=None, project_root=None):
         validate_embedder_reads(config, path, sources, root)  # K1 is part of kb sync; the same check K1 runs
         validate_naming_reads(config, path, sources, root)
         validate_observation_reads(config, path, sources, root)
+        validate_card_reads(config, path, sources, root)
         source = _resolve_within(_lexical_path(config['knowledge']['root'], root, path, 'knowledge.root'), root,
                                  {os.path.normcase('.secrets'), os.path.normcase('models')}, path, 'knowledge.root')
         for key in ('storage.kb_store', 'storage.data_root'):

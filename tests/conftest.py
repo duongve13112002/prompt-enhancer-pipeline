@@ -35,6 +35,7 @@ def model_test_profile():
     profile['vlm']['roles']['folder_namer']['image']['source'] = 'knowledge_reference'
     profile['vlm']['roles']['observer']['image']['source'] = 'knowledge_reference'
     profile['observe']['near_duplicate_cosine_distance'] = 0.01  # labelled test-only grouping threshold
+    profile['cards']['low_diversity_max_group_ratio'] = 0.5  # labelled test-only independence threshold
     profile['vision']['quality'] = 80
     # T-008: kb sync reads the embedder; a synthetic local embedding backend with every K1 field resolved.
     embedder = deepcopy(backend)

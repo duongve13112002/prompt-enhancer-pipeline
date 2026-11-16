@@ -67,7 +67,7 @@ Cards are recomputed from the current image list, never accumulated, because row
 
 - **Artifact key** = hash of the input content plus the revisions of the model, prompt and schema that produce it ([N126](note/N126-content-addressed-caches.md)). A rename keeps the content and so the key; a new model, prompt or facet schema changes the key and the old artifact simply stops matching. Examples: an observation is keyed by `image_id`, concept, observer model and processor revision, prompt revision and facet schema version; a card by its observation keys, the info-file and override hashes, the card builder revision and the stability policy version.
 - **Stage hash** = hash of the configuration keys a stage declares it reads, the model revisions it uses and its code version. Changing a policy key reruns only the stages that read it.
-- **Resume:** progress lives in `sync_state`, written after each artifact's output (commit last). A rerun skips every artifact whose key exists and redoes the rest; a half-written artifact has no state row and is redone.
+- **Resume:** progress lives in `sync_state`, written after each artifact's output (commit last). Intact completed artifacts are skipped when resume permits it; referenced artifacts remain reusable when resume is off. A half-written artifact has no state row and is redone. Failed or deferred attempts never replace a durable done checkpoint, including one from another run or helper; the current item error or deferral stays in the stage report. This preservation rule does not make a corrupt artifact reusable, change skip eligibility, or prevent a successful recomputation from committing its result.
 
 ## Snapshots, publish, rollback, garbage collection
 

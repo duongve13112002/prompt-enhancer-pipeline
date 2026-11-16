@@ -48,7 +48,8 @@ def environment(project_root, tmp_path, profile):
                              lock={'timeout_s': 5, 'poll_s': 0.01})
     config['vlm']['backends']['main']['image']['max_decode_pixels'] = 20_000_000
     shutil.copytree(REPO / 'prompts', project_root / 'prompts', dirs_exist_ok=True)
-    store = make_store(project_root, store_path)
+    store = make_store(project_root, store_path, timeout_s=config['storage']['lock']['timeout_s'],
+                       poll_s=config['storage']['lock']['poll_s'])
     return SimpleNamespace(config=config, root=project_root, source=source, store=store)
 
 
@@ -75,6 +76,18 @@ def naming(names=('Generated',), *, folder_fits=False, info_fits=None, consisten
     return {'folder_name_fits': folder_fits, 'info_file_fits': info_fits, 'images_consistent': consistent,
             'concepts': [{'name': name, 'description': f'Double description of {name}'} for name in names],
             'reason': 'Labelled naming double'}
+
+
+class FixedDraw:
+    """Labelled ordered-sampling double; requested content must exist in the candidate set."""
+
+    def __init__(self, image_ids):
+        self.image_ids = list(image_ids)
+
+    def sample(self, candidates, size):
+        assert len(self.image_ids) == size
+        assert len(set(self.image_ids)) == size and set(self.image_ids) <= set(candidates)
+        return list(self.image_ids)
 
 
 class NamingServer:

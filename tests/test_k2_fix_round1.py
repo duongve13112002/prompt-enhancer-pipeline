@@ -9,9 +9,9 @@ import pytest
 
 from prompt_enhancer.config import ConfigurationError
 from prompt_enhancer.k2_naming import DRAW_REVISION, _key, _load, name_folders, parse_naming
-from prompt_enhancer.storage import SPECS, StorageError
+from prompt_enhancer.storage import SPECS, StorageError, image_id
 from prompt_enhancer.storage.store import Checkpoints
-from k2_fixtures import NamingServer, assessment, folder, image_bytes, invoke, naming, scan, source_tree
+from k2_fixtures import FixedDraw, NamingServer, assessment, folder, image_bytes, invoke, naming, scan, source_tree
 from storage_fixtures import dataset
 
 
@@ -72,12 +72,16 @@ def test_missing_baseline_has_distinct_durable_cause(k2_env):
     assert any('/k2_redraw/' in path for path in result['artifacts'])
 
 
-def test_redraw_event_survives_resume(k2_env, monkeypatch):
+@pytest.mark.parametrize('changed_input', [False, True])
+def test_redraw_event_survives_resume(k2_env, monkeypatch, changed_input):
     path = folder(k2_env, 'f', count=2)
     server = NamingServer()
-    invoke(k2_env, server)
+    first = invoke(k2_env, server, rng=Random(1))
+    original = first['report']['model_named_folders'][0]['sampled_image_ids']
     k2_env.config['knowledge']['naming']['rename_on_change'] = 0.25
-    (path / 'new.png').write_bytes(image_bytes((200, 100, 20)))
+    payload = image_bytes((200, 100, 20))
+    (path / 'new.png').write_bytes(payload)
+    selected = [image_id(payload), original[0]] if changed_input else original
     commit = Checkpoints.commit
 
     class Interrupted(BaseException):
@@ -92,12 +96,17 @@ def test_redraw_event_survives_resume(k2_env, monkeypatch):
     with monkeypatch.context() as patch:
         patch.setattr(Checkpoints, 'commit', interrupted)
         with pytest.raises(Interrupted):
-            invoke(k2_env, server)
-    result = invoke(k2_env, server)
+            invoke(k2_env, server, rng=FixedDraw(selected))
+    result = invoke(k2_env, server, rng=Random(99))
     assert result['report']['redraws'][0]['reason'] == 'image_set_change'
-    again = invoke(k2_env, server)
+    assert result['report']['model_named_folders'][0]['sampled_image_ids'] == selected
+    assert (selected != original) == changed_input
+    again = invoke(k2_env, server, rng=Random(123))
     assert again['report']['redraws'] == result['report']['redraws']
-    assert len(server.requests) == 2
+    assert again['report']['model_named_folders'][0]['sampled_image_ids'] == selected
+    assert len(server.requests) == (2 if changed_input else 1)
+    if changed_input:
+        assert server.requests[-1]['messages'][1]['content'] != server.requests[0]['messages'][1]['content']
 
 
 def test_unclear_no_images_keeps_declared_names(k2_env):
@@ -189,8 +198,10 @@ def test_latest_referenced_compatible_draw_uses_stored_snapshot_order(k2_env):
     with k2_env.store.writer() as writer:
         writer.gc()
     (path / 'extra.png').write_bytes(image_bytes((40, 220, 90)))
+    calls = len(server.requests)
     resumed = invoke(k2_env, server, rng=Random(99))
-    assert len(server.requests) == 2  # The older 4-image baseline would require a third call.
+    assert len(server.requests) == calls
+    assert [event['reason'] for event in resumed['report']['redraws']] == ['baseline_recovered']
     assert resumed['report']['model_named_folders'][0]['sampled_image_ids'] == latest['report']['model_named_folders'][0]['sampled_image_ids']
 
 

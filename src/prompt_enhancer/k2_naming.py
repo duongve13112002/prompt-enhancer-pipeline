@@ -14,7 +14,7 @@ from .config import (ConfigurationError, _EXACT_INTEGERS, _StrictSafeLoader, _le
 from .k0 import parse_info, trim_info_token
 from .k0_scan import decode_info, read_source_file
 from .k1_embed import _read_verified
-from .model_client import ModelCallError, ModelClientRun
+from .model_client import ModelCallError, ModelClientRun, semantic_role_settings
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id, normalise_name
 from .storage.identity import canonical_json, check_folder_id, is_image_id
@@ -92,18 +92,141 @@ def parse_naming(value, folder_name, parsed, *, project_root, separator):
     return source
 
 
+def _override_selectors(value):
+    # Protocol-bound: array-valued folders distinguishes the explicit form from every legacy concept name.
+    return (value['concepts'], value['folders']) if isinstance(value.get('folders'), list) else (value, [])
+
+
 def parse_overrides(raw, *, project_root):
-    """Read only the four approved curated keys, without executing YAML or guessing a fact's facet."""
+    """Read the approved curated keys without executing YAML or guessing a fact's facet."""
     value = _load_yaml(raw, _StrictSafeLoader, 'knowledge.overrides_file')
     try:
         _validate_reply(project_root, 'kb_overrides.v0', value)
         canonical_json(value).encode('utf-8')  # YAML may accept surrogate escapes that cannot be stored as UTF-8.
     except (ValueError, RecursionError) as error:
         raise ConfigurationError(f'knowledge.overrides_file: {error}') from error
-    normalized = [normalise_name(name) for name in value]
+    concepts, folders = _override_selectors(value)
+    normalized = [normalise_name(name) for name in concepts]
     if len(set(normalized)) != len(normalized):
         raise ConfigurationError('knowledge.overrides_file: normalized concept-name collision')
+    selected = {}
+    for data in folders:
+        try:
+            path = check_folder_id(data['folder_id'])
+        except StorageError as error:
+            raise ConfigurationError(f'knowledge.overrides_file.folders: {error}') from error
+        if path in selected and selected[path] != data['name']:
+            raise ConfigurationError('knowledge.overrides_file.folders: conflicting names for one folder')
+        selected[path] = data['name']
+    for data in [*concepts.values(), *folders]:
+        if 'name' in data:
+            name = data['name']
+            if not trim_info_token(name) or trim_info_token(name) != name or '\r' in name or '\n' in name:
+                raise ConfigurationError('knowledge.overrides_file.name: expected a nonblank trimmed single name')
+    renames = {concept_id(name): concept_id(data['name']) for name, data in concepts.items() if 'name' in data}
+    for source, target in renames.items():
+        if target != source and target in {concept_id(name) for name in concepts}:
+            raise ConfigurationError('knowledge.overrides_file.name: chained or ambiguous rename')
     return value
+
+
+def apply_name_overrides(rows, overrides, *, separator):
+    """Apply to raw naming rows only: a rename is an identity replacement, never a concept merge."""
+    concepts = {row['concept_id']: row for row in rows['concepts']}
+    raw_names = {}
+    for member in rows['folder_concepts']:
+        if member['concept_id'] not in concepts:
+            raise ValueError('raw naming membership references an unknown concept')
+        raw_names.setdefault(member['concept_id'], member['name_as_written'])
+    # K0 may retain old display metadata for the same normalized ID; raw memberships own the spelling.
+    for identity, name in raw_names.items():
+        concepts[identity]['display_name'] = name
+    directives, folder_entries = _override_selectors(overrides['data'])
+    by_source = {concept_id(name): data for name, data in directives.items()}
+    folders = {row['folder_id']: row for row in rows['folders']}
+    selected = {entry['folder_id']: entry['name'] for entry in folder_entries}
+    unmatched_folders = sorted(set(selected) - set(folders))
+    members = {}
+    for member in rows['folder_concepts']:
+        members.setdefault(member['folder_id'], []).append(member)
+    wanted = set(raw_names)
+    targets, updated, source_targets, events = {}, {}, {}, []
+    output, findings = [], []
+    for folder_id in sorted(folders):
+        current = members.get(folder_id, [])
+        if folder_id in selected:
+            if len(current) > 1:
+                raise ConfigurationError('knowledge.overrides_file.folders: ambiguous multi-concept folder')
+            if not current:
+                current = [{'folder_id': folder_id, 'concept_id': None, 'position': 0,
+                            'name_as_written': selected[folder_id], 'description': None,
+                            'description_origin': None, 'description_revision': None}]
+        for member in current:
+            source = member['concept_id']
+            data = by_source.get(source, {})
+            name = selected.get(folder_id, data.get('name', concepts[source]['display_name'] if source else ''))
+            if folder_id in selected and 'name' in data and data['name'] != name:
+                findings.append({'code': 'SHADOWED_NAME_OVERRIDE',
+                                 'message': canonical_json({'folder_id': folder_id, 'source_concept_id': source,
+                                     'ignored_name': data['name'], 'selected_name': name}),
+                                 'refs': [folder_id, source]})
+            if separator in name:
+                raise ConfigurationError('knowledge.overrides_file.name: contains concept separator')
+            target = concept_id(name)
+            owner = source if source is not None else ('folder', folder_id)
+            if folder_id in selected and target in wanted and target != source:
+                raise ConfigurationError('FOLDER_TARGET_OCCUPIED: folder selector cannot assign a nameless or '
+                                         'different-source folder to an occupied concept; normalized target collision')
+            if ((target in wanted and target != source) or
+                    (target in targets and targets[target] != owner)):
+                raise ConfigurationError('knowledge.overrides_file.name: normalized target collision; merging is forbidden')
+            targets[target] = owner
+            original = concepts[source] if source else {'kind': None, 'kind_origin': None}
+            display = concepts[target]['display_name'] if folder_id in selected and target in concepts else name
+            replacement = dict(original, concept_id=target, normalised_name=normalise_name(name), display_name=display)
+            if folder_id not in selected and 'name' in data:
+                updated[target] = replacement
+            else:
+                updated.setdefault(target, replacement)
+            if source is not None:
+                source_targets.setdefault(source, set()).add(name)
+            origin = 'folder_override' if folder_id in selected else ('override' if 'name' in data else None)
+            if origin is not None:
+                member.update(concept_id=target, name_as_written=name)
+                events.append({'folder_id': folder_id, 'source_concept_id': source,
+                               'concept_id': target, 'name': name, 'origin': origin})
+                folders[folder_id]['name_source'] = origin
+                # A human name resolves K0 naming statuses, never source or scan errors.
+                if folders[folder_id]['error'] in ('pending_naming', 'duplicate_names'):
+                    folders[folder_id]['error'] = ''
+            output.append(member)
+    for event in events:
+        if event['origin'] == 'folder_override' and event['name'] != updated[event['concept_id']]['display_name']:
+            findings.append({'code': 'FOLDER_NAME_SPELLING_DIFFERENCE',
+                             'message': canonical_json({'folder_id': event['folder_id'], 'name': event['name'],
+                                 'canonical_name': updated[event['concept_id']]['display_name']}),
+                             'refs': [event['folder_id'], event['concept_id']]})
+    effective, unmatched, curated_sources = {}, [], {}
+    for source_name, data in directives.items():
+        source = concept_id(source_name)
+        names = {updated[concept_id(name)]['display_name'] for name in source_targets.get(source, set())}
+        if not names and source in updated:
+            names = {updated[source]['display_name']}
+        if not names:
+            unmatched.append(source_name)
+            names = {source_name}
+        for name in sorted(names):
+            target = concept_id(name)
+            if target in curated_sources and curated_sources[target] != source:
+                raise ConfigurationError('knowledge.overrides_file: ambiguous curated selectors for one target')
+            curated_sources[target] = source
+            effective[name] = deepcopy(data)
+            if 'name' in data and source_name not in unmatched:
+                effective[name]['name'] = name
+    rows['folder_concepts'] = sorted(output, key=lambda row: (row['folder_id'], row['position']))
+    rows['concepts'] = [updated[key] for key in sorted(updated)]
+    return {'data': effective, 'file_hash': overrides['file_hash'],
+            'unmatched_folders': unmatched_folders, 'lint_findings': sorted(findings, key=canonical_json)}, events, sorted(unmatched)
 
 
 def uniform_draw(image_ids, sample_size, rng):
@@ -134,13 +257,25 @@ def _save(checkpoints, key, value, revisions, call_records=()):
 
 def _role_revisions(config, name, prompt, root):
     role = config['vlm']['roles'][name]
-    backends = config['vlm']['backends']
-    identities = {backend: backends[backend] for backend in {role['backend'], config['vlm']['default_backend']}}
-    return {'model': _digest({'role': role, 'backends': identities}),
+    processor = PIL.__version__ if isinstance(role['image'], dict) else None
+    return {'model': _digest(semantic_role_settings(config, name)),
             'prompt': _digest({'id': role['prompt_id'], 'sha256': hashlib.sha256(prompt).hexdigest()}),
             'schema': _digest({'layout': LAYOUT, 'contract': _schema(root, ROLE_SCHEMAS[name]),
                                'configured': _schema(root, role['output']['schema_id']),
-                               'vision': config['vision'], 'pillow': PIL.__version__})}
+                               'pillow': processor})}
+
+
+def _naming_payload(context):
+    payload = {key: value for key, value in context.items() if key not in ('folder_id', 'sampled_image_ids')}
+    if 'sampled_image_ids' in context:
+        payload['image_labels'] = list(range(len(context['sampled_image_ids'])))
+    return payload
+
+
+def _naming_key(stage, context, revisions):
+    # Artifact-bound v1: raw replies bind semantic content/order, not draw/folder provenance.
+    return _key(stage, {'identity': 'naming_payload_v1', 'payload': _naming_payload(context),
+                        'images': context.get('sampled_image_ids', [])}, revisions)
 
 
 def _read_info(folder, knowledge, root):
@@ -313,6 +448,10 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
         store.catalog.build(table, rows[table])
     knowledge, naming = config['knowledge'], config['knowledge']['naming']
     overrides = _read_overrides(knowledge, source, root)  # malformed overrides refuse before all client activity
+    concept_overrides, folder_overrides = _override_selectors(overrides['data'])
+    for data in [*concept_overrides.values(), *folder_overrides]:
+        if 'name' in data and knowledge['concept_separator'] in data['name']:
+            raise ConfigurationError('knowledge.overrides_file.name: contains concept separator')
     inputs = {}
     source_failures = {}
     for folder in rows['folders']:
@@ -347,7 +486,7 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
     report = {'model_named_folders': [], 'assessed_folders': [], 'description_assignments': [],
               'skipped_folders': [], 'refused_folders': [], 'inconsistent_folders': [], 'unclear_folders': [],
               'redraws': [], 'retained_declared_folders': [], 'failed': dict(source_failures), 'unmatched_overrides': [],
-              'override_renaming_supported': False, 'skipped_done': 0}
+              'override_renaming_supported': True, 'renamed_concepts': [], 'skipped_done': 0}
     artifacts = []
     owned_run = None
     random = rng if rng is not None else SystemRandom()
@@ -362,10 +501,7 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
                 owned_run = ModelClientRun(config, root, probe_cases=probe_cases or {},
                                            local_probe_plans=local_probe_plans or {})
             bound = await owned_run.for_role(name, require=required)
-        payload = {key: value for key, value in text.items() if key not in ('folder_id', 'sampled_image_ids')}
-        if 'sampled_image_ids' in text:
-            payload['image_labels'] = list(range(len(text['sampled_image_ids'])))
-        return await bound.call(prompts[name], canonical_json(payload), images=attachments)
+        return await bound.call(prompts[name], canonical_json(_naming_payload(text)), images=attachments)
 
     async def evaluate(writer, stage, key, name, text, attachments, validate):
         checkpoints = writer.checkpoints(stage)
@@ -386,7 +522,7 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
             diagnostic = writer.checkpoints('k2_call_failure')
             _save(diagnostic, key, {'status': 'SCHEMA_INVALID'}, revisions[name], [dict(record, status='SCHEMA_INVALID')])
             raise
-        result = {'reply': value, 'folder_id': text['folder_id'], 'origin': 'generated',
+        result = {'reply': value, 'origin': 'generated',
                   'model_revision': record['model_revision'], 'sampled_image_ids': text.get('sampled_image_ids', [])}
         artifacts.append(_save(checkpoints, key, result, revisions[name], [record]))
         return result
@@ -416,7 +552,7 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
                     usable = parsed is not None and parsed['status'] in ('parsed', 'description_mismatch')
                     if usable and naming['assess_info_file']:
                         context['assignment_required'] = parsed['status'] == 'description_mismatch' and bool(parsed['line2'])
-                        key = _key(stage, context, revisions['info_assessor'])
+                        key = _naming_key(stage, context, revisions['info_assessor'])
                         assessed = await evaluate(writer, stage, key, 'info_assessor', context, (),
                                                   lambda value: parse_assessment(value, parsed, project_root=root))
                         usable = assessed['reply']['usable']
@@ -447,7 +583,7 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
                     artifacts.append(writer.checkpoints('k2_draw').state(draw_key)['output_key'])
                     stage = 'k2_naming'
                     context['sampled_image_ids'] = draw['sampled_image_ids']
-                    key = _key(stage, {'context': context, 'draw_key': draw_key}, revisions['folder_namer'])
+                    key = _naming_key(stage, context, revisions['folder_namer'])
                     checkpoints = writer.checkpoints(stage)
                     # A completed result needs no image read. New calls verify the exact persisted draw, never replace it.
                     attachments = []
@@ -483,13 +619,30 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
                                              key=lambda row: (row['folder_id'], row['position']))
             wanted = {row['concept_id'] for row in rows['folder_concepts']}
             rows['concepts'] = [concepts[key] for key in sorted(wanted)]
+            effective_overrides, renames, unmatched = apply_name_overrides(
+                rows, overrides, separator=knowledge['concept_separator'])
+            report['renamed_concepts'] = renames
+            report['unmatched_overrides'] = unmatched
+            report['lint_findings'] = effective_overrides['lint_findings'] + [
+                {'code': 'UNMATCHED_FOLDER_OVERRIDE', 'message': path, 'refs': []}
+                for path in effective_overrides['unmatched_folders']]
+            # Preserve raw model checkpoints; the applied mapping has its own immutable artifact.
+            applied = {'overrides': overrides, 'renames': renames, 'rows': rows,
+                       'lint_findings': report['lint_findings']}
+            applied_key = _key('k2_names_applied', applied, DRAW_REVISION)
+            applied_checkpoints = writer.checkpoints('k2_names_applied')
+            if _load(applied_checkpoints, applied_key) is None:
+                _save(applied_checkpoints, applied_key, applied, DRAW_REVISION)
+            artifacts.append(applied_checkpoints.state(applied_key)['output_key'])
+            concepts = {row['concept_id']: row for row in rows['concepts']}
+            wanted = set(concepts)
             for concept in rows['concepts']:
                 if concept['kind_origin'] == 'override':
                     concept.update(kind=None, kind_origin=None)  # a removed override must not survive as cached truth
-            for name, data in overrides['data'].items():
+            for name, data in effective_overrides['data'].items():
                 identity = concept_id(name)
                 if identity not in wanted:
-                    report['unmatched_overrides'].append(name)
+                    continue  # Unmatched sources were recorded before applying names.
                 elif 'concept_type' in data:
                     concepts[identity].update(kind=data['concept_type'], kind_origin='override')
             for table in TABLES:
@@ -497,4 +650,5 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
     finally:
         if owned_run is not None:
             await owned_run.close()
-    return {'rows': rows, 'report': report, 'overrides': overrides, 'artifacts': sorted(set(artifacts))}
+    return {'rows': rows, 'report': report, 'overrides': overrides, 'effective_overrides': effective_overrides,
+            'artifacts': sorted(set(artifacts))}

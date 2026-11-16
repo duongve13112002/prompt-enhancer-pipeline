@@ -6,9 +6,9 @@ from random import Random
 import pytest
 
 from prompt_enhancer.config import ConfigurationError
-from prompt_enhancer.storage import concept_id
+from prompt_enhancer.storage import concept_id, image_id
 from prompt_enhancer.storage.store import Checkpoints
-from k2_fixtures import NamingServer, assessment, folder, invoke, naming, scan, source_tree
+from k2_fixtures import FixedDraw, NamingServer, assessment, folder, invoke, naming, scan, source_tree
 
 
 def test_six_folder_kinds_end_to_end_with_transport_double(k2_env):
@@ -48,7 +48,7 @@ def test_six_folder_kinds_end_to_end_with_transport_double(k2_env):
     assert result['report']['skipped_folders'] == ['empty']
     assert result['report']['description_assignments'] == ['mismatch']
     assert result['report']['inconsistent_folders'] == ['unclear']
-    assert not result['report']['failed'] and not result['report']['override_renaming_supported']
+    assert not result['report']['failed'] and result['report']['override_renaming_supported']
     assert set(result['rows']) == {'folders', 'concepts', 'folder_concepts'}
     assert not (env.store.root / 'CURRENT').exists()
     with env.store.writer() as writer:
@@ -176,13 +176,19 @@ def test_rename_share_below_equal_and_above_threshold(k2_env):
     env = k2_env
     path = folder(env, 'f', count=2)
     server = NamingServer()
-    invoke(env, server)
+    first = invoke(env, server, rng=Random(1))
+    original = first['report']['model_named_folders'][0]['sampled_image_ids']
     from k2_fixtures import image_bytes
-    (path / 'new.png').write_bytes(image_bytes((200, 100, 20)))
-    invoke(env, server)  # one added / two baseline = threshold; do not rename
+    payload = image_bytes((200, 100, 20))
+    (path / 'new.png').write_bytes(payload)
+    unchanged = invoke(env, server, rng=Random(9))  # one added / two baseline = threshold; do not rename
+    assert unchanged['report']['model_named_folders'][0]['sampled_image_ids'] == original
     assert len(server.requests) == 1
     env.config['knowledge']['naming']['rename_on_change'] = 0.25
-    result = invoke(env, server)
+    selected = [image_id(payload), original[0]]
+    result = invoke(env, server, rng=FixedDraw(selected))
+    assert result['report']['model_named_folders'][0]['sampled_image_ids'] == selected != original
+    assert server.requests[-1]['messages'][1]['content'] != server.requests[0]['messages'][1]['content']
     assert len(server.requests) == 2 and result['report']['redraws'][0]['reason'] == 'image_set_change'
 
 

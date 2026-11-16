@@ -69,8 +69,10 @@ observe:                                 # K2
 
 cards:                                   # K3
   stability_policy:
+    version: invariance_v0
     labels: [curated, stable, stable_low_diversity, varies, single_observation]
   min_visible_images: fit_from_gt        # clear or partial views needed before a facet is stated
+  low_diversity_max_group_ratio: fit_from_gt  # independent near-duplicate groups / visible images; E16
   low_diversity: mark_stable_low_diversity   # never promoted to stable
   variant_groups: true                   # decision 16
   lint_report: true
@@ -306,7 +308,7 @@ vlm:                                     # R-018: rules name no model; models ar
       max_tokens: design_required
       sampling: *sampling_default
       reasoning: {mode: design_required, effort: design_required, budget_tokens: design_required, template_kwargs_key: enable_thinking}
-      output: {format: json_schema, schema_id: concept_card.v0, strict: true, transport: response_format, validate_response: true}
+      output: {format: json_schema, schema_id: card_builder_reply.v0, strict: true, transport: response_format, validate_response: true}
     alias_generator:
       backend: main
       mode: generate

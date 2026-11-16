@@ -179,3 +179,40 @@
     - **CI window 3 on `b2273d4`: RED; the repository is private again** ([run](https://github.com/duongve13112002/prompt-enhancer-pipeline/actions/runs/43764148659); report `runs/ci-window/20261115T220152449445Z-b2273d490ef1-33200.json`).
       - Three POSIX-only reds (Ubuntu); the detail moved verbatim to [status-history](archive/status-history-2026-11-14.md).
       - **S42-ci3, 2026-11-16 05:58:** round 1 fixed the three reds. L1 was a code defect: the capability check matched function identity, so a test double over `os.link` looked unsupported. L2 and L3 were test defects. Round 1 also fixed a P0-class `purge_tmp._on_error` that chmodded through links on POSIX. Gemini PASS; Sonnet PASS, plus P2-1 (security): the hook retried the removal by path string, so an ancestor junction redirected it outside the tree, and a probe deleted an outside file. Fix rounds closed it (accepted decisions in decision 128). **Integrated 2026-11-16 12:3x** (Gemini PASS, Sonnet PASS; the P3s, an `nlink>1` retry and RO3, go to the queue). CI window 4 follows.
+
+## Moved 2026-11-16 15:3x (verbatim): T-021 P1 and P2 accepted rows
+
+  - **T-021 (tooling): phase P1 (brief order) accepted 22:2x after fix round 2.** One shared block scanner reads every brief; quote, list and HTML containers are tracked. Codex retest 2 PASS (F4, F5 closed; 4368 legacy comparisons match the base; 102 CRLF/BOM variants match) and Gemini PASS. Applied to main: focused 674 passed. Known conservative limit: lazy continuation followed by `---` is refused as a Setext heading. **PM decision pending user review:** an HTML block is refused only when it holds a heading, underline or fence, so the wrapper's `<goal>` tag lines still pass; no new Markdown library; the new-order lint refuses HTML blocks and headings or fences inside containers instead of parsing them. P2 (report lint) and P3 (scope guard) each follow after their own review. **PM answers, pending user review:**
+    - **P2 (report lint):** the old scanner failed retest 4 (history in [status-history](archive/status-history-2026-11-14.md)). **Decision 127:** a rebuild on `markdown-it-py`, by a fresh Opus builder.
+      - Rebuild reviews: Gemini PASS. Codex FAIL 10:46, three P2 findings: P2R-F1, a container the parser drops passes silently; P2R-F2, the `reference` title rule is quadratic before the inline cap (2 MB over 55 s), with no turn-end deadline; P2R-F3, diagnostic bytes are unbounded.
+      - **Accepted and integrated 2026-11-16 12:3x after fix round 1:** Gemini PASS and Codex retest 1 PASS, with no findings. P2R-F1 to F3 are closed: 4 MB takes 20.7 s, the deadline overshoots by at most 0.38 s, records are about 455 bytes, and 10 of 10 mutants are killed. Its PM decisions (pin 4.2.0, bounds, deadline, exit 2) were accepted in decision 130.
+      - **PM integration fix:** `_PARSER_PROBLEM` is now bound once per branch, after the S42-ci3 redefinition scan flagged it. Behaviour is unchanged; another family reviews it with the next tooling review.
+      - Residuals: a private `_State` import, guarded by the pin and a test; the standalone CLI has no deadline (about 43 s at 2 MB).
+
+## Moved 2026-11-16 15:3x (verbatim): T-010 P1 row
+
+  - **Pipeline queue:** T-010 (K2 naming and observation, K3 cards, `kb audit`) in three phases; Codex builds P1 after two pre-mortems (Gemini, Claude Sonnet); the task file's PM decisions before P1 are pending user review. P1 Step 0 approved 2026-11-16 01:01. **P1 passed review at 05:5x, after three Codex fix rounds:** Gemini PASS with no findings; Sonnet retest 3 PASS with 4 P3s: `require` is unvalidated and matched by substring (`model_client.py:142`); dead cached-branch code; a late refusal of a wrong suffix; a supplied-plan proof without `require`. PM full suite on the worktree: `3397 passed, 42 skipped in 841.82s`. **P1 accepted and integrated 2026-11-16 06:1x.** **PM decisions pending user review:** the caller states the capability demand, and no generic module reads `knowledge.*`; the 4 P3s become the first items of the P2 builder (fresh Codex, fresh worktree from the P1 commit). **PM decisions pending user review** (answers to its Step 0 Q1-Q5, in `.tmp/T-010/p1-approve.md` and the task file): model-facing `info_assessment.v0` and `folder_naming.v0` without pipeline ids, with a positional `assigned_descriptions`; schema `kb_overrides.v0` for the four documented keys; assessment off plus a mismatched description line is refused; failed K1 decode statuses skipped, null passes; single-behaviour settings are audited as constrained exceptions. E12 live smoke after P3.
+
+## --help
+
+
+
+## S42 CI reds (moved 2026-11-16 17:5x)
+
+  - **S42 CI reds: accepted and integrated 2026-11-16 04:30.** Fix rounds 1 and 2 close the CI-red tool tests on both readings, under POSIX and Windows. Reviews: Sonnet review 3 PASS, Gemini fix 2 PASS.
+    - Suite counts and the CI window 3 detail (S42-ci3 closed it): moved verbatim to [status-history](archive/status-history-2026-11-14.md).
+    - **Residuals:**
+      - A command inside both bounds can outlast the hook timeout (24.9 s worker, 30.9 s PM mode): no whole-evaluate wall-clock budget.
+      - Hooks fail open on timeout; decision 126: each guard gets its own budget and denies when it is spent (S42 follow-up).
+      - A budget-per-target mutant survives.
+      - The bound 512 was calibrated on one machine.
+    - **PM decision pending user review:** both readings on POSIX; the bounds 64 and 512.
+
+## S42-statedir (moved 2026-11-16 20:0x)
+
+  - **S42-statedir: Codex retest 3 PASS 10:55; integrated 2026-11-16 12:3x with S42-ci3 and T-021 P2.** Main tool suite: `6342 passed, 15 skipped`, plus 1 failure, fixed by the PM integration fix under T-021 (337 passed on rerun); main pipeline suite `3856 passed, 43 skipped`. Every tool test gets its own state directory, so the tool suite runs in one pass. Fix round 3 normalizes Win32 spellings (`abspath` before `realpath`, with property tests); tool suite 5968 passed. Its earlier PM decisions were accepted in decision 128.
+    - **PM decisions pending user review:**
+      - fix round 3, one round past the limit;
+      - the guard covers accidental access in a stable layout, and races are out of scope;
+      - R3F1, the PM's own doc fix: `normpath` drops a trailing separator, so a distinct `\\?\` name ending in a space is refused (a conservative false refusal).
+    - **Deviation:** the builder fetched one public Microsoft documentation page for quotes despite "no network". It disclosed this and sent no data.

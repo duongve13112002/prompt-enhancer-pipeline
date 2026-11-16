@@ -13,7 +13,8 @@
     "variant_groups",
     "curated_statements",
     "lint_findings",
-    "revisions"
+    "revisions",
+    "summary"
   ],
   "properties": {
     "concept_id": {
@@ -34,6 +35,7 @@
       "properties": {
         "value": {
           "enum": [
+            null,
             "character",
             "clothing",
             "place",

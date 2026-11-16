@@ -8,6 +8,7 @@ import sys
 
 from .config import ConfigurationError, load_config
 from .k0_sync import sync_config
+from .kb_audit import audit_config
 from .storage import StorageError
 
 
@@ -21,13 +22,23 @@ def main(argv=None):
     sync.add_argument('--overlay')
     sync.add_argument('--plan', action='store_true')
     sync.add_argument('--force', action='store_true')
+    audit = actions.add_parser('audit')
+    audit.add_argument('--config', required=True)
+    audit.add_argument('--overlay')
+    audit.add_argument('--folder-count', type=int, required=True)
+    audit.add_argument('--card-count', type=int, required=True)
+    audit.add_argument('--seed', type=int, required=True)
     args = parser.parse_args(argv)
     root = Path(__file__).resolve().parents[2]
     try:
-        config = load_config(args.config, 'kb sync', overlay=args.overlay, project_root=root)
-        result = sync_config(config, project_root=root, plan=args.plan, force=args.force)
+        config = load_config(args.config, 'kb ' + args.action, overlay=args.overlay, project_root=root)
+        if args.action == 'audit':
+            result = audit_config(config, project_root=root, folder_count=args.folder_count,
+                                  card_count=args.card_count, seed=args.seed)
+        else:
+            result = sync_config(config, project_root=root, plan=args.plan, force=args.force)
         print(json.dumps(result, ensure_ascii=False, default=_json_default))
-        if args.plan and result['report']['guard']['exceeded'] and not args.force:
+        if args.action == 'sync' and args.plan and result['report']['guard']['exceeded'] and not args.force:
             return 1
     except (ConfigurationError, StorageError, OSError, ValueError) as error:
         print(str(error), file=sys.stderr)

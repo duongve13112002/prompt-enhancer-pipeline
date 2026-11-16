@@ -33,7 +33,7 @@ REFUSE_KEYS = [*OVERRIDES, B + 'provider', B + 'api_key_file', B + 'unsupported_
 
 
 @pytest.mark.parametrize(('key', 'value'), OVERRIDES.items())
-def test_shared_observer_override_changes_request_cache_identity(k2_env, key, value):
+def test_shared_observer_override_changes_only_semantic_cache_identity(k2_env, key, value):
     folder(k2_env, 'f', 'A')
     server = ObserverServer()
     first = invoke_observer(k2_env, server)
@@ -44,8 +44,9 @@ def test_shared_observer_override_changes_request_cache_identity(k2_env, key, va
         k2_env.config['vlm']['backends']['main']['http']['backoff_max_s'] = 0.5
     changed = invoke_observer(k2_env, server)
     assert not changed['report']['failed']
-    assert changed['rows']['observations'][0]['context_key'] != first['rows']['observations'][0]['context_key']
-    assert len(server.requests) == 2
+    semantic = key.startswith((B + 'engine.', B + 'model.')) or key.startswith('vision.alpha_policy') or key == 'vision.max_image_side'
+    assert (changed['rows']['observations'][0]['context_key'] != first['rows']['observations'][0]['context_key']) == semantic
+    assert len(server.requests) == (2 if semantic else 1)
     if key == B + 'model.id':
         assert server.requests[-1]['model'] == value
     elif key == B + 'model.revision':
@@ -68,5 +69,5 @@ def test_default_backend_and_image_inheritance_are_explicit(k2_env):
     k2_env.config['vlm']['backends']['alternate'] = deepcopy(k2_env.config['vlm']['backends']['main'])
     k2_env.config['vlm']['default_backend'] = 'alternate'
     changed = invoke_observer(k2_env, server)
-    assert changed['rows']['observations'][0]['context_key'] != first['rows']['observations'][0]['context_key']
-    assert len(server.requests) == 2
+    assert changed['rows']['observations'][0]['context_key'] == first['rows']['observations'][0]['context_key']
+    assert len(server.requests) == 1

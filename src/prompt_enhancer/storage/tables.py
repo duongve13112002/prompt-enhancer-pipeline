@@ -25,7 +25,7 @@ LS = pa.list_(pa.field('element', pa.large_string()))  # Parquet's compliant ite
 JSON = 'json'  # marker: canonical JSON text in a large_string column
 
 # protocol-bound enums from contracts/README.md (tables and enums sections); no schema file defines them.
-NAME_SOURCE = ('info_file', 'folder_name', 'model')  # README.md:30
+NAME_SOURCE = ('info_file', 'folder_name', 'model', 'override', 'folder_override')  # decisions 125, 131
 CONCEPT_KIND = ('character', 'clothing', 'place', 'object', 'style', 'other')  # README.md:60
 KIND_ORIGIN = ('override', 'generated')  # README.md:31
 FACT_ORIGIN = ('info_file', 'override', 'generated')  # README.md:68

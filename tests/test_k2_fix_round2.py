@@ -321,7 +321,10 @@ def test_ambiguous_snapshot_draws_fresh_with_durable_cause(k2_env, shade):
     assert [event['reason'] for event in third['report']['redraws']] == ['baseline_ambiguous']
     old_keys = {event['draw_key'] for result in (first, latest) for event in result['report']['redraws']}
     assert third['report']['redraws'][0]['draw_key'] not in old_keys
-    assert len(server.requests) == 3
+    # Distinct draw provenance can reuse exactly the same ordered image input.
+    samples = {tuple(result['report']['model_named_folders'][0]['sampled_image_ids'])
+               for result in (first, latest, third)}
+    assert len(server.requests) == len(samples)
     assert invoke(k2_env, server)['report']['redraws'] == third['report']['redraws']
 
 

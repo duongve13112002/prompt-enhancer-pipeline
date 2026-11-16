@@ -2,17 +2,46 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "kb_overrides.v0",
   "title": "Knowledge-base curated overrides",
-  "$comment": "Concept names are matched by the existing NFKC/casefold identity. P1 applies concept_type only; later stages consume aliases, facts and suppress. This contract does not rename folders or create concepts.",
-  "type": "object",
-  "propertyNames": {"minLength": 1},
-  "additionalProperties": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {
-      "concept_type": {"enum": ["character", "clothing", "place", "object", "style", "other"]},
-      "aliases": {"type": "array", "items": {"type": "string"}},
-      "facts": {"type": "array", "items": {"type": "string"}},
-      "suppress": {"type": "array", "items": {"type": "string"}}
+  "$comment": "Legacy root keys select concept names. The explicit concepts/folders form adds exact K0 folder paths. Folder names take precedence within one membership; directories are never renamed and concepts are never merged.",
+  "oneOf": [
+    {"$ref": "#/$defs/concepts"},
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["concepts", "folders"],
+      "properties": {
+        "concepts": {"$ref": "#/$defs/concepts"},
+        "folders": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["folder_id", "name"],
+            "properties": {
+              "folder_id": {"type": "string", "minLength": 1},
+              "name": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "concepts": {
+      "type": "object",
+      "propertyNames": {"minLength": 1},
+      "additionalProperties": {"$ref": "#/$defs/override"}
+    },
+    "override": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "concept_type": {"enum": ["character", "clothing", "place", "object", "style", "other"]},
+        "aliases": {"type": "array", "items": {"type": "string"}},
+        "facts": {"type": "array", "items": {"type": "string"}},
+        "suppress": {"type": "array", "items": {"type": "string"}}
+      }
     }
   }
 }

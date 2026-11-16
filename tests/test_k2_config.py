@@ -2,12 +2,14 @@
 
 from copy import deepcopy
 import json
+from random import Random
 
 import pytest
 import yaml
 
 from prompt_enhancer.config import COMMAND_READS, ConfigurationError, load_config, validate_naming_reads
-from k2_fixtures import NamingServer, assessment, folder, image_bytes, invoke, naming
+from prompt_enhancer.storage import image_id
+from k2_fixtures import FixedDraw, NamingServer, assessment, folder, image_bytes, invoke, naming
 
 
 def set_key(config, key, value, *, remove=False):
@@ -120,12 +122,18 @@ def test_naming_override_has_observable_effect(k2_env, key, value):
     folder(env, 'pending', count=3)
     if key == 'knowledge.naming.rename_on_change':
         server = NamingServer()
-        invoke(env, server)
-        (env.source / 'pending' / 'extra.png').write_bytes(image_bytes((240, 50, 90)))
-        invoke(env, server)
+        first = invoke(env, server, rng=Random(1))
+        original = first['report']['model_named_folders'][0]['sampled_image_ids']
+        payload = image_bytes((240, 50, 90))
+        (env.source / 'pending' / 'extra.png').write_bytes(payload)
+        unchanged = invoke(env, server, rng=Random(9))
+        assert unchanged['report']['model_named_folders'][0]['sampled_image_ids'] == original
         assert len(server.requests) == 2  # 1/3 is below the original 0.5 threshold.
         set_key(env.config, key, value)
-        changed = invoke(env, server)
+        selected = [image_id(payload), original[0]]
+        changed = invoke(env, server, rng=FixedDraw(selected))
+        assert changed['report']['model_named_folders'][0]['sampled_image_ids'] == selected != original
+        assert server.requests[-1]['messages'][1]['content'] != server.requests[1]['messages'][1]['content']
         assert len(server.requests) == 3
         assert changed['report']['redraws'][-1]['reason'] == 'image_set_change'
         return

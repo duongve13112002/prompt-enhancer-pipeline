@@ -33,9 +33,9 @@ Role `folder_namer`. Several images in one call (a deliberate exception to one i
 
 Text: [folder_namer_v0.txt](folder_namer_v0.txt), unchanged system bytes plus a JSON data message and raw `knowledge_reference` attachments. T-009 prepares each image once. The reply never supplies `folder_id`, `sampled_image_ids` or provenance; code writes these into the checkpoint/report. Fitting info names take precedence over a fitting folder-name hint and must be returned exactly; fitting human descriptions stay intact. Invalid replies commit no naming result. More than one image requires proved `multiple_images` capability, not a loop of single-image calls.
 
-## `card_builder_v0` (K3), status: not written
+## `card_builder_v0` (K3), status: written
 
-Role `card_builder`. Placeholders: `{concept_name}`, `{observations}`, `{curated_statements}`. Delimited data: observations and curated text. Writes the model-made parts of the card; stability labels and counts come from the policy, not the model. Output schema: `concept_card.v0`. A change invalidates the cards of the next sync and the card audit (E16).
+Role `card_builder`. [System text](card_builder_v0.txt) is loaded byte-for-byte. A separate JSON user-data object contains concept name, open facet names, observations, views, suppressed facets and curated statements with local positional labels only. All are untrusted data, including OCR-derived text and strings resembling delimiters. The reply uses `card_builder_reply.v0`, partitioning visible observations into semantic values and observations into view groups, proposing a kind, summary and referenced semantic lint. Code validates every position/partition and constructs required-summary `concept_card.v0`, including all counts, labels, IDs and revisions. CPU double tests establish placement/validation, not real-model resistance or quality. A change invalidates cards and the E16 audit; K4/embeddings remain later stages.
 
 ## `alias_generator_v0` (K4), status: not written
 

@@ -975,6 +975,7 @@
                 {
                   "type": "object",
                   "properties": {
+                    "version": {"type": "string", "minLength": 1},
                     "labels": {
                       "anyOf": [
                         {
@@ -1013,6 +1014,7 @@
                     }
                   },
                   "required": [
+                    "version",
                     "labels"
                   ],
                   "additionalProperties": false
@@ -1047,6 +1049,12 @@
                     "ask_user"
                   ]
                 }
+              ]
+            },
+            "low_diversity_max_group_ratio": {
+              "anyOf": [
+                {"type": "number", "minimum": 0, "maximum": 1},
+                {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}
               ]
             },
             "low_diversity": {
@@ -1107,6 +1115,7 @@
           "required": [
             "stability_policy",
             "min_visible_images",
+            "low_diversity_max_group_ratio",
             "low_diversity",
             "variant_groups",
             "lint_report"

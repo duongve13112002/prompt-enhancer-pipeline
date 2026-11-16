@@ -14,7 +14,7 @@ import pyarrow as pa
 from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_observation_reads
 from .k1_embed import _read_verified
 from .k2_naming import _digest, _validate_reply
-from .model_client import ModelCallError, ModelClientRun
+from .model_client import ModelCallError, ModelClientRun, semantic_role_settings
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id
 from .storage.identity import canonical_json, check_artifact_key, is_image_id
@@ -132,15 +132,13 @@ def parse_observation(value, *, image_id, concepts, context_key, model_revision,
 
 def observation_revisions(config, prompt, root):
     role = config['vlm']['roles']['observer']
-    backends = config['vlm']['backends']
-    return {'model': _digest({'role': role, 'backends': {name: backends[name]
-                             for name in {role['backend'], config['vlm']['default_backend']}}}),
+    return {'model': _digest(semantic_role_settings(config, 'observer')),
             'prompt': _digest({'id': role['prompt_id'], 'bytes': hashlib.sha256(prompt).hexdigest()}),
             'schema': _digest({'layout': LAYOUT, 'reply': _schema(root, REPLY_SCHEMA),
                               'stored': _schema(root, STORED_SCHEMA),
                               'configured': _schema(root, role['output']['schema_id']),
                               'facet_schema_version': config['observe']['facet_schema_version'],
-                              'vision': config['vision'], 'processor': PIL.__version__})}
+                              'processor': PIL.__version__})}
 
 
 def observation_key(image_id, names, revisions):

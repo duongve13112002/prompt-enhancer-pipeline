@@ -44,6 +44,38 @@ def validate_require(require):
     return require
 
 
+def semantic_role_settings(config, role_name):
+    """Offline reply identity excludes transport/admission settings; request trace hashes stay separate."""
+    role = config['vlm']['roles'][role_name]
+    backends = config['vlm']['backends']
+    selected = backends[role['backend']]
+
+    def identity(backend):
+        return {'provider': backend['provider'], 'engine': resolve_backend_engine(backend, 'vlm.backends'),
+                'model': deepcopy(backend['model']), 'extra_body': deepcopy(backend.get('extra_body', {}))}
+
+    result = {'identity': 'semantic_reply_v1',  # artifact-bound: never interpret old whole-profile keys here
+              'inference': {key: deepcopy(role[key]) for key in ('max_tokens', 'sampling', 'reasoning', 'output')},
+              'backend': identity(selected)}
+    image = role['image']
+    if selected['provider'] != 'openai_compatible':
+        route = {'on_budget_exhausted': selected['on_budget_exhausted']}
+        if isinstance(image, dict):
+            route['allow_images'] = selected['allow_images']
+        result['routing'] = route
+        if (selected['on_budget_exhausted'] == 'fallback_to_default_backend'
+                or (isinstance(image, dict) and not selected['allow_images'])):
+            result['fallback'] = identity(backends[config['vlm']['default_backend']])
+    if isinstance(image, dict):
+        vision = config['vision']
+        side = image.get('max_side', 'from_vision')
+        alpha = vision['alpha_policy']
+        result['image'] = {'max_side': vision['max_image_side'] if side == 'from_vision' else side,
+                           'format': vision['format'] if image['format'] == 'from_vision' else image['format'],
+                           'quality': image['quality'], 'alpha_policy': deepcopy(alpha)}
+    return result
+
+
 class ModelClientRun:
     """Own the shared budgets, concurrency and transports for one run."""
 
