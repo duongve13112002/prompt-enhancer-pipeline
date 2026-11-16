@@ -171,3 +171,11 @@
       - Each round closed its own findings and the next retest found a new construct; rounds 3 and 4 also found new defects (R3F1 backtracking, R4F2 quadratic).
       - The old patch stays unintegrated in its worktree.
     - `test_cli_worker_codex.py` and `test_codex_hooks.py` read the live `.tmp/pm-state` ledger, not a test state dir: in main, 42 tests fail with `git_history_changed`. They pass on a clean HEAD, and they pass in main with `AGENT_WORKFLOW_STATE_DIR` set to an empty folder (2026-11-15 18:4x). The override itself breaks 26 other tests (`test_brief_lint` send, `test_pm_supervisor`, a `test_session_context` test), which expect the default state dir: no single setting runs the whole suite green. Fix: each test gets its own state dir.
+
+## Moved 2026-11-16 13:3x (verbatim): S42 CI reds suite counts and CI window 3
+
+    - Main tool suite after the patch: `5394 passed, 11 skipped, 531 deselected in 909.97s`.
+    - Codex hook files, run with a scratch `AGENT_WORKFLOW_STATE_DIR`: `530 passed, 1 skipped`.
+    - **CI window 3 on `b2273d4`: RED; the repository is private again** ([run](https://github.com/duongve13112002/prompt-enhancer-pipeline/actions/runs/43764148659); report `runs/ci-window/20261115T220152449445Z-b2273d490ef1-33200.json`).
+      - Three POSIX-only reds (Ubuntu); the detail moved verbatim to [status-history](archive/status-history-2026-11-14.md).
+      - **S42-ci3, 2026-11-16 05:58:** round 1 fixed the three reds. L1 was a code defect: the capability check matched function identity, so a test double over `os.link` looked unsupported. L2 and L3 were test defects. Round 1 also fixed a P0-class `purge_tmp._on_error` that chmodded through links on POSIX. Gemini PASS; Sonnet PASS, plus P2-1 (security): the hook retried the removal by path string, so an ancestor junction redirected it outside the tree, and a probe deleted an outside file. Fix rounds closed it (accepted decisions in decision 128). **Integrated 2026-11-16 12:3x** (Gemini PASS, Sonnet PASS; the P3s, an `nlink>1` retry and RO3, go to the queue). CI window 4 follows.

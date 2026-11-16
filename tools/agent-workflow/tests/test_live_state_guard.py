@@ -385,6 +385,37 @@ def test_snapshot_and_changes_see_a_write_and_skip_the_limiter_subtree(tmp_path:
     assert "removed gone" in lsg.changes(after, lsg.snapshot(base))
 
 
+def test_a_directory_s_own_times_are_no_change_on_any_platform(tmp_path: Path) -> None:
+    """CI window 4: a directory's mtime moves on Linux when a child is added and not on Windows, so a directory
+    records its mode and identity, not its times; setting its times explicitly makes the check the same on both
+    platforms."""
+    base = tmp_path / "state"
+    (base / "inbox").mkdir(parents=True)
+    before = lsg.snapshot(base)
+    os.utime(base / "inbox", ns=(1_000_000_000, 1_000_000_000))
+    assert lsg.changes(before, lsg.snapshot(base)) == [], "a directory's own times are not a change"
+    (base / "inbox" / "a.json").write_text("one", encoding="utf-8")
+    assert lsg.changes(before, lsg.snapshot(base)) == ["added inbox/a.json"], "its children are"
+    (base / "file.txt").write_text("x", encoding="utf-8")
+    seen = lsg.snapshot(base)
+    os.utime(base / "file.txt", ns=(1_000_000_000, 1_000_000_000))
+    assert lsg.changes(seen, lsg.snapshot(base)) == ["changed file.txt"], "a file keeps its full metadata"
+
+
+def test_an_empty_directory_replaced_by_another_is_a_change(tmp_path: Path) -> None:
+    """S42-ci4 review F1: a directory records its identity, so an empty one removed and recreated with the same mode
+    and times is still reported. The new one is made while the old still exists, so no inode can be reused."""
+    base = tmp_path / "state"
+    (base / "empty").mkdir(parents=True)
+    os.utime(base / "empty", ns=(1_000_000_000, 1_000_000_000))
+    before = lsg.snapshot(base)
+    (base / "empty").rename(base / "old")
+    (base / "empty").mkdir()
+    os.utime(base / "empty", ns=(1_000_000_000, 1_000_000_000))
+    (base / "old").rmdir()
+    assert lsg.changes(before, lsg.snapshot(base)) == ["changed empty"]
+
+
 def test_snapshot_keeps_a_link_s_own_metadata_and_never_descends_into_it(tmp_path: Path) -> None:
     state, outside = _scratch_state(tmp_path)
     _link(state / "out-link", outside)

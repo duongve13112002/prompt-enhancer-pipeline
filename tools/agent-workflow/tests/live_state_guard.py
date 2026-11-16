@@ -214,9 +214,14 @@ def _is_reparse_point(st: os.stat_result) -> bool:
 
 
 def snapshot(base: Path | None = None) -> dict[str, tuple[int, int, int]]:
-    """`relative path -> (mode, size, mtime_ns)` for the live state tree, `test-slots` excluded. Uses scandir and
-    lstat only: no file is opened, no content read, no link or junction below `base` descended into (its own
-    metadata is kept)."""
+    """`relative path -> metadata` for the live state tree, `test-slots` excluded. Uses scandir and lstat only: no
+    file is opened, no content read, no link or junction below `base` descended into (its own metadata is kept).
+    A file, link or junction records `(mode, size, mtime_ns)`. A real directory records `(mode, st_dev, st_ino)`
+    from `os.lstat`: its identity, so a directory removed and recreated is a change (S42-ci4 review F1), but not
+    its size or times. Its content changes are already reported by its own entries, and the platforms disagree on
+    its times (CI window 4, run 43812832980: on Linux a directory's entry showed a new mtime once a child was added,
+    while the same test passed on Windows). The scandir entry's inode is not used, since it is 0 on Windows.
+    Known limit: a file system may reuse the inode of a removed directory for its replacement."""
     base = _ROOTS[0] if base is None else base
     found: dict[str, tuple[int, int, int]] = {}
     stack = [base]
@@ -236,9 +241,18 @@ def snapshot(base: Path | None = None) -> dict[str, tuple[int, int, int]]:
                     st = entry.stat(follow_symlinks=False)
                 except OSError:
                     continue
-                found[rel] = (st.st_mode, st.st_size, st.st_mtime_ns)
                 if entry.is_dir(follow_symlinks=False) and not _is_reparse_point(st):
+                    try:
+                        own = os.lstat(entry.path)
+                    except OSError:
+                        continue
+                    if _is_reparse_point(own):  # swapped for a link since the listing: keep its metadata, no descent
+                        found[rel] = (own.st_mode, own.st_size, own.st_mtime_ns)
+                        continue
+                    found[rel] = (own.st_mode, own.st_dev, own.st_ino)
                     stack.append(Path(entry.path))
+                else:
+                    found[rel] = (st.st_mode, st.st_size, st.st_mtime_ns)
     return found
 
 

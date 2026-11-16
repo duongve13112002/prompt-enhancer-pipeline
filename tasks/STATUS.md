@@ -18,7 +18,7 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
   - **T-009 (model client): accepted and pushed (`6b03510`);** details are in [status-history](archive/status-history-2026-11-14.md).
   - **E12 (dev GPU smoke): done 2026-11-15 21:08, smoke only;** the row is in [status-history](archive/status-history-2026-11-14.md). The next dev run sets `--image-min-tokens 1024` (decision 128).
   - **Next, with target times (2026-11-16 11:4x, PM estimates from measured rounds; each extra fix round adds about 1.5 h):**
-    - CI window 4 on the S42 and T-021 commit: 13:30.
+    - CI window 4 on `13016bd`: RED 13:2x (two tool tests, see T-022); CI window 5 after the S42-ci4 review: 14:30.
     - T-010 P3 accepted: 17:00; its K2/K3 live smoke on the dev GPU: 19:00.
     - T-011 (K4, K5): 11-17. T-013 (S0, S1): 11-18. T-014 (S2, S3): 11-19. T-015 (S4 to S6): 11-20. T-016 (CLI, run guide): 11-21. T-017 (pilot): 11-22.
   - **T-012 (P profiles): accepted 2026-11-15 23:1x;** the row, its P3 follow-ups (R2-1 to R2-7) and its PM decisions pending user review are in [status-history](archive/status-history-2026-11-14.md). R2-5 is decided: the fingerprint hashes the normalized AST of `config.py` (decision 124, a follow-up fix).
@@ -36,21 +36,17 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
     - The report lint stays advisory.
     - No rebase: base-only failures are reported.
   - **T-007 (K0 sync): accepted and pushed;** details are in [status-history](archive/status-history-2026-11-14.md).
-  - **T-022 (CI): accepted 2026-11-15 21:50 after fix round 4;** the row, with its P3 follow-ups (hard-linked ledger, hold only the leaf, `docs/ci.md:66` text), is in [status-history](archive/status-history-2026-11-14.md). The first window (22:15) refused before any change: `docs/ci.md:197` of `e9b2781` quoted the fake test key. **PM decision pending user review:** that line is baselined and the text now describes the value instead. CI window 4 (12:4x) refused on `tests/test_k2_observe_shared_keys.py:84` of `0c93c6d`, a checkpoint commit call with a key variable and a stage name. **PM decision pending user review:** baselined as test code, not a secret; so are the two lines of `4f370d1` that quoted it (a PM slip; lesson logged).
+  - **T-022 (CI): accepted 2026-11-15 21:50 after fix round 4;** the row, with its P3 follow-ups (hard-linked ledger, hold only the leaf, `docs/ci.md:66` text), is in [status-history](archive/status-history-2026-11-14.md). The first window (22:15) refused before any change: `docs/ci.md:197` of `e9b2781` quoted the fake test key. **PM decision pending user review:** that line is baselined and the text now describes the value instead. CI window 4 (12:4x) refused on `tests/test_k2_observe_shared_keys.py:84` of `0c93c6d`, a checkpoint commit call with a key variable and a stage name. **PM decision pending user review:** baselined as test code, not a secret; so are the two lines of `4f370d1` that quoted it (a PM slip; lesson logged). CI window 4 then ran on `13016bd`: **RED, the repository is private again** ([run](https://github.com/duongve13112002/prompt-enhancer-pipeline/actions/runs/43812832980); Ubuntu `2 failed, 6066 passed`, Windows cancelled). **S42-ci4 (PM fix):** `test_ci_window.py` now lists the six reviewed baseline entries; the live-state guard records a directory by its mode and identity (lstat dev and inode), not its times, since a directory's mtime moves on Linux when a child is added and not on Windows. Codex review FAIL F1 (P2): mode alone missed an empty directory replaced by another; fixed with the identity and a test; Codex retest 1 PASS, no findings (focused `305 passed`, 4 PM and 5 reviewer mutants killed). **PM decision pending user review:** a reused inode is an accepted limit of the advisory guard.
   - **T-026 (quota): accepted and pushed (`925e930`);** details are in [status-history](archive/status-history-2026-11-14.md).
   - **S42 Antigravity runner: accepted and pushed;** details are in [status-history](archive/status-history-2026-11-14.md). Before you run `setup.ps1`, see question 6.
   - **S42 CI reds: accepted and integrated 2026-11-16 04:30.** Fix rounds 1 and 2 close the CI-red tool tests on both readings, under POSIX and Windows. Reviews: Sonnet review 3 PASS, Gemini fix 2 PASS.
-    - Main tool suite after the patch: `5394 passed, 11 skipped, 531 deselected in 909.97s`.
-    - Codex hook files, run with a scratch `AGENT_WORKFLOW_STATE_DIR`: `530 passed, 1 skipped`.
+    - Suite counts and the CI window 3 detail (S42-ci3 closed it): moved verbatim to [status-history](archive/status-history-2026-11-14.md).
     - **Residuals:**
       - A command inside both bounds can outlast the hook timeout (24.9 s worker, 30.9 s PM mode): no whole-evaluate wall-clock budget.
       - Hooks fail open on timeout; decision 126: each guard gets its own budget and denies when it is spent (S42 follow-up).
       - A budget-per-target mutant survives.
       - The bound 512 was calibrated on one machine.
     - **PM decision pending user review:** both readings on POSIX; the bounds 64 and 512.
-    - **CI window 3 on `b2273d4`: RED; the repository is private again** ([run](https://github.com/duongve13112002/prompt-enhancer-pipeline/actions/runs/43764148659); report `runs/ci-window/20261115T220152449445Z-b2273d490ef1-33200.json`).
-      - Three POSIX-only reds (Ubuntu); the detail moved verbatim to [status-history](archive/status-history-2026-11-14.md).
-      - **S42-ci3, 2026-11-16 05:58:** round 1 fixed the three reds. L1 was a code defect: the capability check matched function identity, so a test double over `os.link` looked unsupported. L2 and L3 were test defects. Round 1 also fixed a P0-class `purge_tmp._on_error` that chmodded through links on POSIX. Gemini PASS; Sonnet PASS, plus P2-1 (security): the hook retried the removal by path string, so an ancestor junction redirected it outside the tree, and a probe deleted an outside file. Fix rounds closed it (accepted decisions in decision 128). **Integrated 2026-11-16 12:3x** (Gemini PASS, Sonnet PASS; the P3s, an `nlink>1` retry and RO3, go to the queue). CI window 4 follows.
   - **S42-statedir: Codex retest 3 PASS 10:55; integrated 2026-11-16 12:3x with S42-ci3 and T-021 P2.** Main tool suite: `6342 passed, 15 skipped`, plus 1 failure, fixed by the PM integration fix under T-021 (337 passed on rerun); main pipeline suite `3856 passed, 43 skipped`. Every tool test gets its own state directory, so the tool suite runs in one pass. Fix round 3 normalizes Win32 spellings (`abspath` before `realpath`, with property tests); tool suite 5968 passed. Its earlier PM decisions were accepted in decision 128.
     - **PM decisions pending user review:**
       - fix round 3, one round past the limit;
@@ -66,7 +62,7 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
     - the ledger false positive when another worktree is removed;
     - Codex temp dirs that cannot be removed;
     - the runner's R3F1 (the AST lint misses `$x = (Get-X)` and member targets) and R3F2 (the audit's false claim that a scalar PSCustomObject has `Count`);
-    - the pre-push check misses the machine's own absolute root in tracked files (lesson 2026-11-15);
+    - the pre-push check misses the machine's own absolute root in tracked files (lesson 2026-11-15), and runs no tool test that names a changed tracked data or config file (lesson 2026-11-16, recurred);
     - the live `.tmp/pm-state` ledger read by the tool tests: fixed by S42-statedir, not yet applied (history in the archive);
     - `gemini-ws.ps1`'s diff leaves out `pyproject.toml`.
   - **Follow-ups:** T-006 storage gets lease reclaim by owner identity, deferred from T-007; the handover from `pin()` to the caller is a documented known limit.
