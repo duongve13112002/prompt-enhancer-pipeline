@@ -40,3 +40,4 @@ S41 | Codex image generation tests the flow; generate only what a test needs and
 S42 | Fix defects of existing agent tooling yourself, no task command needed; new tooling features stay in T-020 to T-026; report each fix, another family reviews it | user 2026-11-14 (decision 72) | remembered only
 S43 | Spread work by each CLI's strengths across Claude, Codex and Antigravity; where Codex and Claude fit equally, alternate or draw between them; no single agent does all the implementation | user 2026-11-14 (decision 83) | remembered only
 S44 | Pipeline code first, tooling second (workers, fixes) | user 2026-11-15 (decision 100) | remembered only
+S45 | Spare the shared SSD: no whole-tree copies, one fixed basetemp deleted after each run, focused tests, delete `.tmp` and worktrees at once, few workers (detail: footer rule 18) | user 2026-11-16 (decision 129) | brief footer rule 18

@@ -20,23 +20,14 @@ Read the Rules digest before every task (AGENTS.md section 9). Each line is a pr
 
 ## Recent entries
 
+- 2026-11-16, `.tmp` reached 52 GiB, mostly pytest `--basetemp` trees from the PM's own full-suite runs (one left 29.7 GiB). `purge_tmp.py` refused them: their fixtures create protected names (`.secrets`, `.venv`, `pm-state`) and junctions.
+  - **Root cause:** the PM gave each run a new `--basetemp` under `.tmp/pm-checks` and never removed it; no tool can delete a basetemp, and nothing reported the growth before the user saw the disk.
+  - **Prevention:** reuse one basetemp per suite (pytest empties it at the start of each run) or delete it right after the run, keeping only the log. S42 item: a `purge_tmp.py` basetemp mode that refuses any link leaving the tree and removes links as links.
+  - **Evidence:** `.tmp/pm-checks/du.py`, `linkscan.py` and `rm_basetemp.py` output, 2026-11-16 06:2x.
+- 2026-11-16, the PM gave a tooling build (S42-statedir) to Codex, against decision 91 (tooling: Claude builds, Codex reviews). Its approved plan was then refused by the hook that protects tooling files from Codex, which wasted one Step 0 round.
+  - **Prevention:** before a dispatch, check the role split of decision 91 by task kind (tooling versus pipeline, odd versus even).
+  - **Evidence:** `tasks/active/S42-statedir-test-isolation.md` in its worktree, "hook/launcher files are protected".
 - 2026-11-15, two accepted patches built on different bases (T-006 race on b4eb856, T-012 on 6b03510) applied cleanly in turn, but T-012 imported helpers T-006 removed, so the suite did not even collect. **Prevention:** before integrating a patch whose base is older than main, grep main for every symbol the patch removes or renames. **Evidence:** ImportError `_temporary`, 2026-11-15 23:1x. **Also:** the PM wrote estimated clock times (23:2x to 23:5x) into STATUS, this lesson and its note before reading `Get-Date` (real 23:19), a rule it already knew. **Prevention:** run `Get-Date` in the same command that precedes any timestamped edit.
-- 2026-11-15, the PM added a baseline entry and repinned its hash, but a test listing the entries stayed at two, so CI went red. **Prevention:** before committing a pinned data file, grep the tests for its content, and run that file's tests. **Evidence:** CI run 43729022948.
-- 2026-11-15, the PM passed header file paths to its brief helper's `-Header`, which takes the header text. The T-007 combine, T-012, T-007 recheck and runner retest 2 briefs therefore carried a path string, not the dispatch. The Codex combine worker then worked only from the task file's old feature header, re-reported Step 0, and the turn was wasted.
-  - **Root cause:** a text parameter accepted a path silently, and lint passed because the task file supplied every field.
-  - **Prevention:** the helper reads a header given as a file path and refuses a path-like value naming no file. The PM reads the first lines of each brief it builds.
-  - **Evidence:** `.tmp/cli-jobs/t007-combine-codex/001.jsonl`.
-- 2026-11-15, the PM wrote "18:55" in STATUS without reading `Get-Date`; the clock said 18:45.
-  - **Prevention:** run `Get-Date` in the same step that writes any time. This is the standing rule; it recurred.
-
-- 2026-11-15, the page-fetch agent's report on the Anthropic API headers left out the `anthropic-workspace-id` row. That row is required for keys not scoped to a workspace. The PM's own browser re-read of the same table found it.
-  - **Root cause:** a fetch agent answers the question it was asked, so a row outside the question is dropped silently.
-  - **Prevention:** before a provider fact reaches a worker, the PM re-reads the whole table or section in the browser, not only the quoted lines.
-  - **Evidence:** `.tmp/T-009/fix1-continue-2.md`.
-- 2026-11-15, Codex workers on T-007 ended a turn with the work marked "incomplete" four times: `t007-codex-dev2` slice C, and `t007-fix1-codex` twice. Their replies only pointed at the checklist.
-  - **Root cause:** not established. The turns ended without a blocker named, while scope kept growing inside the round (lease reclamation).
-  - **Prevention:** a fix brief names what is out of scope and a hard finish list. When a turn ends incomplete, the PM narrows the scope at once rather than re-sending the same order.
-  - **Evidence:** `.tmp/cli-jobs/t007-fix1-codex/002.result.md`, `003.result.md`.
 - 2026-11-15, the Codex retest of the T-006 race fix (real junction-swap probes) ended rc=1 with a "cybersecurity risk" flag; the report was written, but the turn counted as failed.
   - **Prevention:** classify each review as security-related or not before choosing the family; security reviews go to Claude or Gemini, never Codex (decision 122). Check a reviewer's rc and its Verdict line, not only that the report exists. Shared with the peer PM.
 - 2026-11-15, a Bash `cd` into a worktree moved the session's primary directory, for the third time.
