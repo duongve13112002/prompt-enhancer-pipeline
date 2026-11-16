@@ -23,6 +23,7 @@ Plan only. **Every code task (T-005 onward, the tooling tasks T-020 to T-026, an
 | T-015 | S4 writer, S5 validation, S6 envelope | feature | R-024, R-027 | T-014, T-012 | yes, dev GPU |
 | T-016 | Command-line entry points and the run guide for the user's deployment | feature | R-020 | T-015 | yes |
 | T-017 | Pilot on the dev machine: every scenario end to end | run | R-020 | T-016, T-003 | yes |
+| T-018 | Embedding server (decisions 137 to 139): a project-owned server that runs the original weights through `transformers` in a separate GPU environment `.venv-gpu` and serves the OpenAI-compatible `/v1/embeddings` shape K1 already calls; profile and manifest entries for EmbeddingGemma 2, Qwen3-VL-Embedding-2B and Qwen3-VL-Embedding-8B (the 8B never runs on the dev machine); the two dev downloads; a one-image check against each model's reference output; a dev comparison after which the better model's weights stay on the dev machine | feature | R-016, R-018, R-020 | T-008, T-009 | yes, dev GPU |
 
 **Gate 1:** every path (generate, edit, retrieval off) works end to end on the dev machine; structural checks pass; the isolation test passes with no knowledge base present.
 
