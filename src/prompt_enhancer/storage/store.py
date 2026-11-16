@@ -66,12 +66,11 @@ import uuid
 import warnings
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from ..config import SENTINELS, ConfigurationError, _command_reads, _get, _lexical_path, _resolve_within
 from ._anchored import (atomic_write_bytes, lock_file, make_directory, make_root, remove_entry, rename_entry,
                         write_table_file)
-from ._fs import SUFFIX, StorageError, format_of, read_table_file, real_inside, sha256_file
+from ._fs import SUFFIX, StorageError, format_of, read_parquet_bytes, read_table_file, real_inside, sha256_file
 from .identity import artifact_path, check_artifact_key, check_artifact_path, check_kind, check_relative_name, identity_key
 from .tables import (MANIFEST_KINDS, MANIFEST_SCHEMA, SNAPSHOT_TABLES, SPECS, TS, Catalog, check_embedding_space,
                      check_references, check_tags)
@@ -151,7 +150,7 @@ def _read_hold(path):
     """A hold row, parsed from bytes read through a Python handle that is closed on return, so that a delete
     right after it is not blocked by a reader handle still open (Windows; fix round 3, full-suite WinError 32)."""
     try:
-        table = pq.read_table(pa.BufferReader(path.read_bytes()))
+        table = read_parquet_bytes(path.read_bytes())
     except (OSError, pa.ArrowException) as error:
         raise StorageError(f'{path}: cannot read hold: {error}') from error
     check_tags(table.schema, 'hold')
@@ -500,7 +499,7 @@ class KnowledgeStore:
         if expected_sha is not None and hashlib.sha256(data).hexdigest() != expected_sha:
             raise StorageError(f'{path}: manifest checksum differs from CURRENT')
         try:
-            table = pq.read_table(pa.BufferReader(data))
+            table = read_parquet_bytes(data)
         except (OSError, pa.ArrowException) as error:
             raise StorageError(f'{path}: cannot read manifest: {error}') from error
         if not table.schema.equals(MANIFEST_SCHEMA, check_metadata=False):

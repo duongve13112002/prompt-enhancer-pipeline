@@ -49,6 +49,21 @@ def sha256_file(path):
 # module only reads, checks names and locks handles it is given.
 
 
+def read_parquet_bytes(data):
+    """Parse Parquet bytes that the caller already hashed, without letting a Python-owned buffer reach an Arrow
+    worker thread (S42-ci7).
+
+    `pq.read_table(pa.BufferReader(bytes))` wraps the `bytes` in a `PyBuffer` and scans it on Arrow's pool; the
+    last reference can then drop on a worker during interpreter shutdown, where taking the GIL ends the thread
+    and aborts the process (apache/arrow #34314, #54536). So the bytes are copied into an Arrow-allocated buffer
+    (the `bytes` is released here, on the calling thread) and read with no dataset scanner, no column threads
+    and no pre-buffering. safety-bound: structural, not a deployment value."""
+    sink = pa.BufferOutputStream()
+    sink.write(data)
+    with pq.ParquetFile(pa.BufferReader(sink.getvalue()), pre_buffer=False) as parquet:
+        return parquet.read(use_threads=False)
+
+
 def read_table_file(path):
     """Read a whole table into memory and close the file, so no handle blocks a later delete on Windows."""
     fmt = format_of(path)

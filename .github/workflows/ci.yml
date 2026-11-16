@@ -53,6 +53,15 @@ jobs:
         env:
           PYTHONPATH: src
         run: python -B -X faulthandler -m pytest -q -p no:cacheprovider tests
+      # S42-ci7: CI window 7 saw one child abort at interpreter exit ("terminate called without an active exception")
+      # after an in-memory Parquet read. The abort was rare upstream (2/300 to 38/3000 processes), so this Linux-only
+      # opt-in check spawns 1000 short children that each read a manifest and exit; the default suite skips it.
+      - name: Exit stress after an in-memory Parquet read (Linux)
+        if: ${{ matrix.suite == 'pipeline' && runner.os == 'Linux' }}
+        env:
+          PYTHONPATH: src
+          PE_EXIT_STRESS: "1000"
+        run: python -B -X faulthandler -m pytest -q -p no:cacheprovider tests/test_storage_concurrency.py::test_child_reading_a_manifest_exits_cleanly_many_times
       - name: Tooling suite
         if: ${{ matrix.suite == 'tooling' }}
         run: python -B -X faulthandler -m pytest -q -p no:cacheprovider tools/agent-workflow/tests

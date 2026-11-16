@@ -985,7 +985,13 @@ def test_workflow_is_dispatch_only_least_privilege_and_runs_both_suites() -> Non
     assert pytest_steps == {
         "tests": "${{ matrix.suite == 'pipeline' }}",
         "tools/agent-workflow/tests": "${{ matrix.suite == 'tooling' }}",
+        # S42-ci7: the opt-in exit stress check runs one named test (no -k), only in the Linux pipeline job.
+        "tests/test_storage_concurrency.py::test_child_reading_a_manifest_exits_cleanly_many_times": (
+            "${{ matrix.suite == 'pipeline' && runner.os == 'Linux' }}"
+        ),
     }
+    (stress,) = [s for s in job["steps"] if s.get("name") == "Exit stress after an in-memory Parquet read (Linux)"]
+    assert stress["env"] == {"PYTHONPATH": "src", "PE_EXIT_STRESS": "1000"}
     # Any other suite value fails its job before the suite steps (S42-ci5 review F1): the guard's condition is the
     # exact complement of the two suite conditions, and it exits non-zero.
     guards = [s for s in job["steps"] if s.get("name") == "Refuse an unknown suite"]

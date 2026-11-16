@@ -40,6 +40,9 @@ def main():
             with store.writer() as writer:
                 report = writer.gc()
                 result.setdefault('collected', []).extend(report.collected)
+    elif mode == 'read_and_exit':  # exit stress: one manifest read, then straight into interpreter shutdown
+        for _ in range(count):
+            store.pin().release()
     elif mode == 'hold_lease':
         pinned = store.pin()
         print('PINNED ' + pinned.snapshot_id, flush=True)
