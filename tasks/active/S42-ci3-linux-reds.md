@@ -431,4 +431,3 @@ No new key, so no override or refusal test of configuration applies. Property te
 - Not run: ruff (not installed); Linux execution (no Linux here).
 - Scratch: removed (`mut/`, `mutants.py`, basetemps); kept the cited `ci3-failed.log`, `pipeline-suite.log`, `tools-suite.log`, `mutants-report.txt` under `.tmp/S42-ci3/`.
 - No commits, no network, no installs, `.secrets/` not opened, no processes left running.
-
