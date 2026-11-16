@@ -17,7 +17,7 @@
   "allowed_tracked_paths": [".secrets/README.md", "models/README.md"],
   "scanner_baseline": {
     "path": "tools/agent-workflow/gitleaks-baseline.json",
-    "sha256": "7fed892979d0230bba918445cdcb1da74977b79e2cd35fc0b9c82a3ebd41dcc8"
+    "sha256": "5b759881df1f1f49a7e9fa2ca9722132874766c7ec916e8a1e92fe6e67bcdb04"
   },
   "secret_scanner": {
     "win32": {

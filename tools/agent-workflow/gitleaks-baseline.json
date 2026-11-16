@@ -32,7 +32,25 @@
     "StartLine": 84,
     "Commit": "0c93c6d4a8f206117679607432a041f65e849486",
     "Fingerprint": "0c93c6d4a8f206117679607432a041f65e849486:tests/test_k2_observe_shared_keys.py:generic-api-key:84",
-    "Reason": "Test code, not a secret: the call checkpoints.commit(key, 'k2_observation', ...) passes a checkpoint key variable and the stage name of a synthetic K2 observation bundle; the rule matched the word key followed by a quoted stage name.",
+    "Reason": "Test code, not a secret: a checkpoint commit call whose first argument is the checkpoint key variable and whose second is the quoted K2 observation stage name; the rule matched the variable name followed by that quoted name.",
+    "Decision": "PM decision pending user review (decision 94), CI window 4, 2026-11-16"
+  },
+  {
+    "RuleID": "generic-api-key",
+    "File": "tools/agent-workflow/gitleaks-baseline.json",
+    "StartLine": 35,
+    "Commit": "4f370d1e002664e20ee5b2c3c0cd153a700d64da",
+    "Fingerprint": "4f370d1e002664e20ee5b2c3c0cd153a700d64da:tools/agent-workflow/gitleaks-baseline.json:generic-api-key:35",
+    "Reason": "Documentation, not a secret: in commit 4f370d1 the Reason of the entry above quoted the flagged test call verbatim; later commits describe it in words instead.",
+    "Decision": "PM decision pending user review (decision 94), CI window 4, 2026-11-16"
+  },
+  {
+    "RuleID": "generic-api-key",
+    "File": "tasks/STATUS.md",
+    "StartLine": 39,
+    "Commit": "4f370d1e002664e20ee5b2c3c0cd153a700d64da",
+    "Fingerprint": "4f370d1e002664e20ee5b2c3c0cd153a700d64da:tasks/STATUS.md:generic-api-key:39",
+    "Reason": "Documentation, not a secret: in commit 4f370d1 the T-022 row of STATUS quoted the flagged test call verbatim; later commits describe it in words instead.",
     "Decision": "PM decision pending user review (decision 94), CI window 4, 2026-11-16"
   }
 ]
