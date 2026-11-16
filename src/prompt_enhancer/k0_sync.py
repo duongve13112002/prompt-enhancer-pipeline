@@ -10,21 +10,21 @@ from .storage import StorageError
 from .storage.store import keep_outcome
 
 
-def _previous_for_plan(store):
+def _previous_for_plan(store, inspect=None):
     """Pin while reading; remove only newly created empty lease directories."""
     if not store.root.exists():
-        return {name: [] for name in _TABLES}
+        return None if inspect else {name: [] for name in _TABLES}
     if not store.path('LOCK').exists():
         # A valid publisher creates LOCK before CURRENT and never removes it.
         if store.path('CURRENT').exists():
             raise StorageError('CURRENT exists without the store lock file')
-        return {name: [] for name in _TABLES}
+        return None if inspect else {name: [] for name in _TABLES}
     lease_root = store.path('leases')
     existed = lease_root.exists()
     old_dirs = {path for _, path in store._children('leases')} if existed else set()
     pinned = store.pin()
     if pinned is None:
-        return {name: [] for name in _TABLES}
+        return None if inspect else {name: [] for name in _TABLES}
     new_dir = (lease_root / pinned.snapshot_id) not in old_dirs
 
     def remove_new_directories():
@@ -44,6 +44,8 @@ def _previous_for_plan(store):
     outcome = None
     try:
         with pinned:  # a failed release never replaces this result or exception (P3-B)
+            if inspect is not None:
+                return inspect(pinned)
             return {name: pinned.read_rows(name) for name in _TABLES}
     except BaseException as error:
         outcome = error
@@ -115,27 +117,8 @@ def sync(store, root, *, info_names, encoding, extensions, separator, workers, t
 
 
 def sync_config(config, *, project_root, plan=False, force=False):
-    """Run K0 with a configuration already validated for kb sync."""
-    from .storage import open_knowledge_store
+    """Synchronous CLI adapter; low-level sync remains an unpublished K0 operation."""
+    import asyncio
+    from .kb_sync import sync_knowledge
 
-    knowledge = config['knowledge']
-    from .config import _lexical_path, _resolve_within, ConfigurationError
-    import os
-    project = Path(project_root).resolve()
-    resolved = {}
-    for key, value in (('knowledge.root', knowledge['root']), ('storage.kb_store', config['storage']['kb_store']),
-                       ('storage.data_root', config['storage']['data_root'])):
-        resolved[key] = _resolve_within(_lexical_path(value, project, project, key), project,
-                                        {os.path.normcase('.secrets'), os.path.normcase('models')}, project, key)
-    source = resolved['knowledge.root']
-    for key in ('storage.kb_store', 'storage.data_root'):
-        target = resolved[key]
-        if target == source or target in source.parents or source in target.parents:
-            raise ConfigurationError(f'{key} overlaps knowledge.root')
-    store = open_knowledge_store(config, 'kb sync', project_root=project_root)
-    root = Path(project_root) / knowledge['root']
-    return sync(store, root, info_names=knowledge['info_file']['names'],
-                encoding=knowledge['info_file']['encoding'], extensions=knowledge['image_extensions'],
-                separator=knowledge['concept_separator'], workers=config['runtime']['cpu_workers'],
-                threshold=config['sync']['mass_deletion_guard']['max_removed_fraction'], plan=plan, force=force,
-                _resolved_root=source)
+    return asyncio.run(sync_knowledge(config, project_root=project_root, plan=plan, force=force))

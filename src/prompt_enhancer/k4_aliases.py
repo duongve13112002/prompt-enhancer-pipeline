@@ -2,12 +2,14 @@
 
 import asyncio
 from copy import deepcopy
+from contextlib import nullcontext
 import hashlib
 import json
 from pathlib import Path
 
 from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_alias_reads
-from .k2_naming import _digest, _validate_reply
+from .k2_naming import _digest, _validate_reply, failure_code
+from .k1_embed import MODEL_TOOL_MODULES, tool_revision
 from .model_client import ModelCallError, ModelClientRun, semantic_role_settings
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id, normalise_name
@@ -124,7 +126,7 @@ def _inputs(store, config, handoff, cards, overrides):
 
 
 async def build_aliases(store, config, handoff, *, cards, overrides, client=None,
-                        probe_cases=None, local_probe_plans=None):
+                        probe_cases=None, local_probe_plans=None, writer=None):
     """Return aliases, collision lint and artifact references; never scan the KB or publish.
 
     handoff is the effective naming output; cards are current K3 rows. An injected client is caller-owned.
@@ -142,11 +144,12 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
                  'prompt': _digest({'id': role['prompt_id'], 'sha256': hashlib.sha256(prompt).hexdigest()}
                                    if generate else None),
                  'schema': _digest({'layout': LAYOUT, 'reply': _schema(root, REPLY_SCHEMA),
-                                   'configured': _schema(root, role['output']['schema_id'])})}
+                                   'configured': _schema(root, role['output']['schema_id']),
+                                   'tool': tool_revision('k4_aliases', 'k2_naming', *MODEL_TOOL_MODULES)})}
     candidates, artifacts = {}, []
     owned_run = None
     try:
-        with store.writer() as writer:
+        with nullcontext(writer) if writer is not None else store.writer() as writer:
             generated = writer.checkpoints('k4_generation')
 
             async def evaluate(concept):
@@ -172,7 +175,7 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
                             record = bundle['record']
                             provenance = _record_revisions(record, config)
                         except (ValueError, KeyError, TypeError, UnicodeError) as error:
-                            raise StorageError(f'k4_generation: invalid completed bundle: {error}') from error
+                            raise StorageError('k4_generation: CACHE_INVALID: invalid completed bundle') from None
                         artifact = cached['output_key']
                         report['reused'] += 1
                     else:
@@ -198,10 +201,10 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
                 except (ValueError, TypeError, UnicodeError, ModelCallError) as error:
                     if record is not None:
                         writer.checkpoints('k4_call_failure').commit(
-                            key, 'k4_call_failure', canonical_json({'error': str(error)}).encode('utf-8'),
+                            key, 'k4_call_failure', canonical_json({'error': failure_code(error)}).encode('utf-8'),
                             revisions=revisions, call_records=[record])
-                    generated.fail(key, str(error), revisions=revisions)
-                    report['failed'][identity] = str(error)
+                    generated.fail(key, failure_code(error), revisions=revisions)
+                    report['failed'][identity] = failure_code(error)
 
             ordered = [concepts[key] for key in sorted(concepts)]
             if generate:
@@ -241,7 +244,8 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
                 _validate_reply(root, STORED_SCHEMA,
                                 {'concept_id': row['concept_id'], 'aliases': [item], 'revisions': row['revisions']})
             store.catalog.build('aliases', rows)
-            document_revisions = dict(revisions, schema=_digest({'layout': LAYOUT, 'stored': _schema(root, STORED_SCHEMA)}))
+            document_revisions = dict(revisions, schema=_digest({'layout': LAYOUT, 'stored': _schema(root, STORED_SCHEMA),
+                                                                 'tool': revisions['schema']}))
             document_key = artifact_key('k4_aliases', _digest(rows), document_revisions)
             documents = writer.checkpoints('k4_aliases')
             cached = documents.done(document_key) or documents.reusable(document_key)

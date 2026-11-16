@@ -8,6 +8,7 @@ publishes a snapshot (the caller does, as with K0).
 
 import asyncio
 import base64
+from contextlib import nullcontext
 from dataclasses import dataclass
 import hashlib
 import json
@@ -43,6 +44,9 @@ UNDECODABLE = 'undecodable'
 EXCEEDS = 'exceeds_max_decode_pixels'
 SOURCE_CHANGED = 'SOURCE_CHANGED'  # report code: no member path still holds the bytes of the image_id
 REUSED_REFERENCED = 'REUSED_REFERENCED'  # report code: T-008 Q5
+# Artifact-bound dependencies that map semantic role inputs to model requests and stored validation.
+MODEL_TOOL_MODULES = ('model_client', 'model_mapping', 'model_cloud', 'model_image', 'model_resources',
+                      'model_schemas', 'model_transport', 'profile_prompt', 'config', 'storage/identity')
 
 
 class EmbeddingError(RuntimeError):
@@ -81,6 +85,12 @@ class ConceptText:
 
 def _digest(value):
     return hashlib.sha256(canonical_json(value).encode('utf-8')).hexdigest()
+
+
+def tool_revision(*modules):
+    """Artifact-bound implementation identity, including explicitly named local helpers."""
+    root = Path(__file__).parent
+    return _digest({name: (root / (name + '.py')).read_text(encoding='utf-8') for name in modules})
 
 
 def embedder_settings(config, path='configuration'):
@@ -131,14 +141,17 @@ def image_revisions(settings):
                                'extra_body': settings.extra_body}),
             'schema': _digest({'layout': LAYOUT_VERSION, 'metadata_rule': IMAGE_METADATA_RULE,
                                'vision': settings.vision, 'max_decode_pixels': settings.max_decode_pixels,
-                               'pillow': PIL.__version__})}
+                               'pillow': PIL.__version__, 'tool': tool_revision(
+                                   'k1_embed', 'model_image', 'model_transport', 'model_resources', 'config',
+                                   'storage/identity')})}
 
 
 def text_revisions(settings):
     return {'model': settings.revision,
             'prompt': _digest({'shape': settings.shape, 'text_template': settings.text_template,
                                'extra_body': settings.extra_body}),
-            'schema': _digest({'layout': LAYOUT_VERSION})}
+            'schema': _digest({'layout': LAYOUT_VERSION, 'tool': tool_revision(
+                'k1_embed', 'model_transport', 'model_resources', 'config', 'storage/identity')})}
 
 
 def image_key(settings, image_id):
@@ -362,7 +375,7 @@ def _decode(data, settings):
     return dict(info, decode_status=DECODE_OK), prepared
 
 
-async def embed_images(store, config, handoff, *, knowledge_root, transport=None):
+async def embed_images(store, config, handoff, *, knowledge_root, transport=None, writer=None):
     """Part 1: embed every image of the K0 handoff under the current embedder; finished keys cost nothing.
 
     `handoff` is `sync()['handoff']['k1']`; `knowledge_root` is the resolved, read-only knowledge root.
@@ -378,7 +391,7 @@ async def embed_images(store, config, handoff, *, knowledge_root, transport=None
     records = {}
     embedder = Embedder(settings, transport=transport)
     try:
-        with store.writer() as writer:
+        with nullcontext(writer) if writer is not None else store.writer() as writer:
             checkpoints = writer.checkpoints(IMAGE_STAGE)
             pending = []
             for row in sorted(handoff['images'], key=lambda row: row['image_id']):
@@ -442,7 +455,7 @@ async def embed_images(store, config, handoff, *, knowledge_root, transport=None
             'dim': settings.dimension, 'report': report}
 
 
-async def embed_concept_texts(store, config, items, *, transport=None):
+async def embed_concept_texts(store, config, items, *, transport=None, writer=None):
     """Part 2: embed concept texts with the same encoder; identical text is embedded once.
 
     Over-long text is never truncated here: a server refusal fails the item with its reason.
@@ -459,7 +472,7 @@ async def embed_concept_texts(store, config, items, *, transport=None):
     records = {}
     embedder = Embedder(settings, transport=transport)
     try:
-        with store.writer() as writer:
+        with nullcontext(writer) if writer is not None else store.writer() as writer:
             checkpoints = writer.checkpoints(TEXT_STAGE)
             pending = []
             for text in texts:

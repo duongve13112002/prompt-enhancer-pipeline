@@ -2,7 +2,7 @@
 
 **Purpose.** Build, for each snapshot, the read-only index S1 and S3 query during a request (R-016, decision 19). The index is derived: it can always be rebuilt from the snapshot's tables.
 
-**Input and output.** `prompt_enhancer.k5_index.build_index(builder, config)` reads the new snapshot's already-written `concepts`, `folders`, `folder_concepts`, `images`, `aliases`, `cards`, `concept_text_embeddings` and `image_embeddings`. Descriptions are the assigned membership descriptions. It attaches an exact blocked vector index for each modality, character n-gram postings and a normalized exact name/alias map through the existing snapshot builder. It validates and returns without finishing or publishing the snapshot. Sync wiring is P3, outside this component (R-016/R-017).
+**Input and output.** `prompt_enhancer.k5_index.build_index(builder, config)` reads the new snapshot's already-written `concepts`, `folders`, `folder_concepts`, `images`, `aliases`, `cards`, `concept_text_embeddings` and `image_embeddings`. Descriptions are the assigned membership descriptions. It attaches an exact blocked vector index for each modality, character n-gram postings and a normalized exact name/alias map through the existing snapshot builder. It validates and returns without finishing or publishing the snapshot. The P3 `kb_sync.sync_knowledge` coordinator requires this validated result before finishing and publishing; unchanged completed syncs verify the saved index before reuse (R-016/R-017).
 
 **Method.**
 - **Character n-grams** need no word segmentation, so one lexical index serves Vietnamese, Japanese, Chinese and mixed prompts without a per-language tokenizer [A]: no comparison of word segmentation against character n-grams for these languages was found.

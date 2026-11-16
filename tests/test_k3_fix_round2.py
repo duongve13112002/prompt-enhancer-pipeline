@@ -65,7 +65,7 @@ def test_k3_invalid_reply_records_exact_failed_grouping_key_and_error(k2_env, mo
     row = rows[keys[0]]
     identity = data['handoff']['concepts'][0]['concept_id']
     assert row['state'] == 'failed'
-    assert row['error'] == failed['report']['failed'][identity] == 'reply must cover every facet position exactly once'
+    assert row['error'] == failed['report']['failed'][identity] == 'SCHEMA_INVALID'
     assert row['output_key'] is None and not failed['rows']['cards']
 
 
@@ -78,7 +78,7 @@ def test_separator_refusal_keeps_raw_reply_and_revert_reuses_without_call(k2_env
     assert len(before) == 1
     k2_env.config['knowledge']['concept_separator'] = '+'
     refused = invoke(k2_env, server, result=raw, rng=Random(1))
-    assert 'concept separator' in refused['report']['failed']['f']
+    assert refused['report']['failed']['f'] == 'SCHEMA_INVALID'
     assert len(server.requests) == 1
     assert state(k2_env, 'k2_naming') == before
     k2_env.config['knowledge']['concept_separator'] = '|'

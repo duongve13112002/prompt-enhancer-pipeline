@@ -41,7 +41,7 @@ LOCAL_ENGINES = ('vllm', 'llama_cpp', 'embed_server')
 COMMAND_READS = {
     'embed serve': ('runtime.gpus', 'runtime.vram_budget_gb', 'embedding.backend'),
     'kb status': ('storage.kb_store', 'storage.lock'),
-    'kb sync': ('knowledge', 'sync', 'embedding', 'observe', 'cards', 'aliases', 'index', 'storage.kb_store', 'storage.data_root',
+    'kb sync': ('rag.enabled', 'knowledge', 'sync', 'embedding', 'observe', 'cards', 'aliases', 'index', 'storage.kb_store', 'storage.data_root',
                 'storage.lock', 'storage.table_format', 'runtime.cpu_workers',
                 'vlm.roles.observer', 'vlm.roles.info_assessor', 'vlm.roles.folder_namer',
                 'vlm.roles.card_builder', 'vlm.roles.alias_generator', 'vision'),
@@ -1490,12 +1490,27 @@ def load_config(path, command, *, overlay=None, project_root=None):
         own = {k: v for k, v in data.items() if k != 'overlay_of'}
         config = _merge(config, own)
         _mark_sources(own, overlay_path, sources)
+    return _validate_loaded_config(config, command, root, path, sources)
+
+
+def validate_sync_config(config, *, project_root):
+    """Apply the command preflight to a supplied mapping before any stage/store/source activity."""
+    return _validate_loaded_config(config, 'kb sync', Path(project_root).resolve(), 'configuration', {})
+
+
+def _validate_loaded_config(config, command, root, path, sources):
     try:
         config_schema = _schema(root, 'enhancer_config.v0')
     except ConfigurationError as error:
         raise ConfigurationError(f'{path}: schema_version: {error}') from error
     _index_migration(config, path)
     _validate(config, config_schema, path, sources=sources)
+    if command == 'kb sync':
+        gate = _get(config, 'rag.enabled', path)
+        if type(gate) is not bool:
+            raise ConfigurationError(f'{path}: rag.enabled: expected boolean')
+        if not gate:
+            return config
     _validate_model_bindings(config, path)
     _validate_embedding(config, path, sources)
     for name, backend in config['vlm']['backends'].items():
@@ -1526,6 +1541,9 @@ def load_config(path, command, *, overlay=None, project_root=None):
     for key in reads:
         value = _get(config, key, path)
         _sentinel(value, path, key, sources)
+        if command == 'kb sync':
+            _validate(value, _schema_at(config_schema, key), path, key, sources, _EXACT_INTEGERS)
+            _require_finite(value, path, key, sources)
         if key.startswith('vlm.roles.'):
             try:
                 role_schema = _schema(root, 'vlm_role.v0')
@@ -1542,6 +1560,15 @@ def load_config(path, command, *, overlay=None, project_root=None):
     if command == 'embed serve':
         validate_embed_server_reads(config, path, sources, root)
     if command == 'kb sync':
+        for key in ('storage.lock.timeout_s', 'storage.lock.poll_s'):
+            _require_float_seconds(_get(config, key, path), path, key, sources)
+        # Validate store policy interactions without constructing a store or starting K0.
+        from .storage.store import _settings
+        from .storage import StorageError
+        try:
+            _settings(config, command, root)
+        except StorageError as error:
+            raise ConfigurationError(f'{path}: {error}') from None
         validate_index_reads(config, path, sources, root)
         validate_embedder_reads(config, path, sources, root)  # K1 is part of kb sync; the same check K1 runs
         validate_naming_reads(config, path, sources, root)

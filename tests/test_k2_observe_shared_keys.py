@@ -95,6 +95,6 @@ def test_completed_bundle_with_other_concepts_is_refused(k2_env, referenced):
         with k2_env.store.writer() as writer:
             checkpoints = writer.checkpoints('k2_observation')
             assert checkpoints.done(key) is None and checkpoints.reusable(key)
-    with pytest.raises(StorageError, match='invalid completed bundle.*does not match its cache key'):
+    with pytest.raises(StorageError, match='CACHE_INVALID: invalid completed bundle'):
         invoke_observer(k2_env, server)
     assert len(server.requests) == 1

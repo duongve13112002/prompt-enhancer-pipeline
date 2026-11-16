@@ -7,6 +7,11 @@ import shutil
 
 import pytest
 import yaml
+from hypothesis import settings
+
+# Shared machines cannot provide a stable per-example wall-clock deadline.
+settings.register_profile('pipeline_cpu', deadline=None)
+settings.load_profile('pipeline_cpu')
 
 from prompt_enhancer import load_config, load_profile
 

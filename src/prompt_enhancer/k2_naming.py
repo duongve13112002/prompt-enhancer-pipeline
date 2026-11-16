@@ -1,6 +1,7 @@
 """Unpublished K2 naming over K0's handoff; source text and model replies stay data (R-007/R-026)."""
 
 from copy import deepcopy
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -13,7 +14,7 @@ from .config import (ConfigurationError, _EXACT_INTEGERS, _StrictSafeLoader, _le
                      _resolve_within, _schema, validate_naming_reads)
 from .k0 import parse_info, trim_info_token
 from .k0_scan import decode_info, read_source_file
-from .k1_embed import _read_verified
+from .k1_embed import MODEL_TOOL_MODULES, _read_verified, tool_revision
 from .model_client import ModelCallError, ModelClientRun, semantic_role_settings
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id, normalise_name
@@ -36,9 +37,28 @@ def _key(stage, value, revisions):
 
 
 def _validate_reply(root, schema_id, value):
+    try:
+        canonical_json(value).encode('utf-8')
+    except (StorageError, UnicodeError, ValueError, TypeError):
+        raise ValueError(f'SCHEMA_INVALID: {schema_id}: invalid JSON') from None
     error = next(_EXACT_INTEGERS(_schema(root, schema_id)).iter_errors(value), None)
     if error is not None:
-        raise ValueError(f'{schema_id}: {error.message}')
+        # The validator message may quote arbitrary model text, including object keys.
+        raise ValueError(f'SCHEMA_INVALID: {schema_id}: {error.validator}') from None
+
+
+def failure_code(error):
+    """Return protocol codes only; exception details belong inside the model boundary."""
+    prefix = str(error).split(':', 1)[0]
+    if prefix in {'SOURCE_CHANGED', 'IMAGE_INVALID', 'CAPABILITY_UNAVAILABLE', 'SCHEMA_INVALID',
+                  'BUDGET_EXHAUSTED', 'MODEL_CALL_INVALID', 'CONFIGURATION_INVALID', 'INPUT_INVALID',
+                  'CLIENT_STATE_INVALID', 'MODEL_CALL_FAILED', 'HTTP_ERROR', 'INCOMPLETE_OR_REFUSED'}:
+        return prefix
+    if isinstance(error, ModelCallError):
+        return 'MODEL_CALL_FAILED'
+    if isinstance(error, OSError):
+        return 'SOURCE_READ_FAILED'
+    return 'SCHEMA_INVALID'
 
 
 def parse_assessment(value, parsed, *, project_root):
@@ -243,7 +263,7 @@ def _load(checkpoints, key):
     try:
         value = json.loads(checkpoints.load(key))
     except (ValueError, UnicodeError) as error:
-        raise StorageError(f'{checkpoints.stage}: invalid JSON artifact') from error
+        raise StorageError(f'{checkpoints.stage}: CACHE_INVALID: invalid JSON artifact') from None
     if not isinstance(value, dict) or value.get('version') != LAYOUT:
         raise StorageError(f'{checkpoints.stage}: unknown artifact layout')
     return value
@@ -262,7 +282,8 @@ def _role_revisions(config, name, prompt, root):
             'prompt': _digest({'id': role['prompt_id'], 'sha256': hashlib.sha256(prompt).hexdigest()}),
             'schema': _digest({'layout': LAYOUT, 'contract': _schema(root, ROLE_SCHEMAS[name]),
                                'configured': _schema(root, role['output']['schema_id']),
-                               'pillow': processor})}
+                               'pillow': processor, 'tool': tool_revision(
+                                   'k2_naming', 'k0', 'k1_embed', *MODEL_TOOL_MODULES)})}
 
 
 def _naming_payload(context):
@@ -424,7 +445,7 @@ def _replace_members(folder, members, concepts, values, source, revision):
 
 
 async def name_folders(store, config, handoff, *, images, folder_images, knowledge_root,
-                       client=None, rng=None, probe_cases=None, local_probe_plans=None):
+                       client=None, rng=None, probe_cases=None, local_probe_plans=None, writer=None):
     """Name K0's `handoff['k2']`, returning rows/report/artifact references without publishing.
 
     Image tables come from K0 (null decode status) or K1. A supplied BoundModelClient belongs to the caller;
@@ -461,7 +482,7 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
         try:
             inputs[identity] = _read_info(folder, knowledge, source)
         except (OSError, UnicodeError, ValueError) as error:
-            source_failures[identity] = str(error)
+            source_failures[identity] = failure_code(error)
             continue
         parsed = inputs[identity][1]
         if (not naming['assess_info_file'] and parsed is not None
@@ -528,7 +549,7 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
         return result
 
     try:
-        with store.writer() as writer:
+        with nullcontext(writer) if writer is not None else store.writer() as writer:
             recovery = {}
             override_key = _key('k2_overrides', overrides, DRAW_REVISION)
             override_checkpoints = writer.checkpoints('k2_overrides')
@@ -611,9 +632,9 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
                                                              'concepts': deepcopy(reply['concepts']),
                                                              'reason': reply['reason']})
                 except (ModelCallError, ValueError, OSError) as error:
-                    report['failed'][identity] = str(error)
+                    report['failed'][identity] = failure_code(error)
                     if key is not None:
-                        writer.checkpoints(stage).fail(key, str(error), revisions=revisions[
+                        writer.checkpoints(stage).fail(key, failure_code(error), revisions=revisions[
                             'info_assessor' if stage == 'k2_assessment' else 'folder_namer'])
             rows['folder_concepts'] = sorted([row for values in members.values() for row in values],
                                              key=lambda row: (row['folder_id'], row['position']))

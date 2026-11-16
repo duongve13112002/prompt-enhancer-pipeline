@@ -13,7 +13,10 @@ from .k0 import rows_from_scan
 from .k0_scan import decode_info, scan_source, validate_scan
 from .storage import StorageError, artifact_key
 
-_REVISION = {'model': 'none', 'prompt': 'none', 'schema': 'k0-scan-v2'}  # artifact-bound
+_REVISION = {'model': 'none', 'prompt': 'none', 'schema': 'k0-scan-v3-' + hashlib.sha256(
+    json.dumps({name: (Path(__file__).parent / (name + '.py')).read_text(encoding='utf-8')
+                for name in ('k0_checkpoint', 'k0', 'k0_scan', 'k0_sync')},
+               sort_keys=True).encode('utf-8')).hexdigest()}  # artifact-bound
 _VERSION = 2  # artifact-bound: JSON layout version
 _TABLES = ('folders', 'concepts', 'folder_concepts', 'images', 'folder_images')  # contract-bound
 

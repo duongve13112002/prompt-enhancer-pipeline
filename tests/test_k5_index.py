@@ -175,6 +175,50 @@ def test_reader_refuses_semantic_corruption(project_root, tmp_path, failure):
             ServingIndex(adapter, config())
 
 
+def test_reader_saved_settings_refused_before_fingerprint(project_root, tmp_path, monkeypatch):
+    env = published(project_root, tmp_path)
+    with env.store.pin() as pin:
+        metadata = json.loads(_decode(pin.read_file(module.MANIFEST)).column('document')[0].as_py())
+        metadata['settings']['build']['block_rows'] = module.sys.maxsize + 1
+        adapter = SimpleNamespace(store=pin.store, read_table=pin.read_table,
+            read_file=lambda path: _document(metadata) if path == module.MANIFEST else pin.read_file(path))
+
+        def forbidden(*args):
+            pytest.fail('fingerprint/parts reached before saved-settings refusal')
+
+        monkeypatch.setattr(module, '_metadata', forbidden)
+        with pytest.raises(StorageError, match='^K5: invalid saved index settings$'):
+            ServingIndex(adapter, config())
+
+
+@pytest.mark.parametrize('n', [4, 8])
+def test_lookup_materialization_includes_direct_to_pylist(project_root, tmp_path, n):
+    from k4_fixtures import inputs
+    data = inputs(tuple(f'Concept {i}' for i in range(n)))['handoff']
+    store = make_store(project_root, tmp_path / 'store')
+    visits = Counter()
+
+    class CountedTable:
+        """Labelled transparent lookup-table adapter, counting the actual Arrow conversion seam."""
+        def __init__(self, name, table):
+            self.name, self.table = name, table
+
+        def to_pylist(self):
+            visits[self.name] += self.table.num_rows
+            return self.table.to_pylist()
+
+        def __getattr__(self, name):
+            return getattr(self.table, name)
+
+    tables = {name: CountedTable(name, store.catalog.build(name, data.get(name, [])))
+              for name in ('concepts', 'folder_concepts', 'aliases')}
+    for _ in range(2):  # cold/revalidation lookup passes use the same row materialization path
+        visits.clear()
+        exact, _, _ = module._lookups(tables, config()['index'], store.catalog)
+        assert exact.num_rows == n
+        assert visits == {'concepts': n, 'folder_concepts': n, 'aliases': 0}
+
+
 @pytest.mark.parametrize('failure', ['k', 'dimension', 'revision', 'nonfinite', 'bool', 'zero-cosine', 'table'])
 def test_vector_and_query_refusals(project_root, tmp_path, failure):
     env = published(project_root, tmp_path, settings=config(metric='cosine'))
@@ -301,9 +345,18 @@ def test_corrupt_cached_unit_is_refused(project_root, tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('n', [4, 8])
 def test_k5_build_work_is_bounded(project_root, tmp_path, monkeypatch, n):
-    # Grow image vector rows; operation counts, not latency/RSS claims.
+    # Grow concepts, memberships and both vector tables; count actual materialization, not latency.
     from prompt_enhancer.storage import image_id
+    from k4_fixtures import inputs
     rows = dataset()
+    handoff = inputs(tuple(f'Concept {i}' for i in range(n)))['handoff']
+    rows.update(handoff)
+    rows['cards'] = []
+    rows['aliases'] = []
+    rows['concept_text_embeddings'] = [
+        {'concept_id': row['concept_id'], 'text_kind': 'name', 'embedder_revision': 'emb-r1',
+         'text_hash': text_hash(row['display_name']), 'dim': 4, 'vector': [1, 0, 0, 0]}
+        for row in rows['concepts']]
     rows['image_embeddings'] = []
     rows['images'] = []
     for i in range(n):
@@ -316,6 +369,27 @@ def test_k5_build_work_is_bounded(project_root, tmp_path, monkeypatch, n):
     counts = Counter()
     source_hash, matrix = module._source_hash, module._matrix
     order, batches = module._order, module._batches
+    lookups = module._lookups
+
+    def counted_lookups(tables, settings, catalog):
+        visits = Counter()
+
+        class CountedTable:
+            """Labelled table delegate catches direct rescans that bypass Catalog.rows."""
+            def __init__(self, name, table):
+                self.name, self.table = name, table
+
+            def to_pylist(self):
+                visits[self.name] += self.table.num_rows
+                return self.table.to_pylist()
+
+            def __getattr__(self, name):
+                return getattr(self.table, name)
+
+        result = lookups({name: CountedTable(name, table) for name, table in tables.items()}, settings, catalog)
+        assert visits == {'concepts': n, 'folder_concepts': n, 'aliases': 0}
+        counts['materialization_passes'] += 1
+        return result
 
     def counted_hash(*args):
         counts['source'] += 1
@@ -339,6 +413,7 @@ def test_k5_build_work_is_bounded(project_root, tmp_path, monkeypatch, n):
     monkeypatch.setattr(module, '_matrix', bounded_matrix)
     monkeypatch.setattr(module, '_order', counted_order)
     monkeypatch.setattr(module, '_batches', counted_batches)
+    monkeypatch.setattr(module, '_lookups', counted_lookups)
     for method_name in ('done', 'reusable', 'load', 'commit'):
         original = getattr(Checkpoints, method_name)
 
@@ -363,6 +438,7 @@ def test_k5_build_work_is_bounded(project_root, tmp_path, monkeypatch, n):
             assert counts['batched', name] == passes * len(rows[name])
         for name, passes in (('concepts', 4), ('aliases', 4), ('folder_concepts', 3)):
             assert counts['lookup', name] == passes * len(rows[name])
+        assert counts['materialization_passes'] == 3
 
     with store.writer() as writer:
         builder = write_snapshot(writer, rows)
@@ -370,7 +446,7 @@ def test_k5_build_work_is_bounded(project_root, tmp_path, monkeypatch, n):
         first = build_index(builder, config())
         assert_row_visits()
         assert counts['source'] == len(module.INPUTS)
-        shard_count = 2 + n // 2  # four text vectors plus N images
+        shard_count = n  # N text vectors and N image vectors, each in blocks of two
         assert counts['matrix'] == 3 * shard_count
         units = shard_count + 3  # two lookup files, vector shards and complete metadata
         assert counts['done'] == counts['reusable'] == counts['commit'] == units

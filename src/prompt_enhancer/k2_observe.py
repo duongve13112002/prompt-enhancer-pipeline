@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import asyncio
+from contextlib import nullcontext
 import hashlib
 import json
 import math
@@ -12,8 +13,8 @@ import PIL
 import pyarrow as pa
 
 from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_observation_reads
-from .k1_embed import _read_verified
-from .k2_naming import _digest, _validate_reply
+from .k1_embed import MODEL_TOOL_MODULES, _read_verified, tool_revision
+from .k2_naming import _digest, _validate_reply, failure_code
 from .model_client import ModelCallError, ModelClientRun, semantic_role_settings
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id
@@ -101,7 +102,7 @@ def parse_observation(value, *, image_id, concepts, context_key, model_revision,
     try:
         canonical_json(value).encode('utf-8')  # refuse NaN/Infinity and unencodable strings before any commit
     except (StorageError, UnicodeError) as error:
-        raise ValueError(f'invalid observation JSON: {error}') from error
+        raise ValueError('SCHEMA_INVALID: observer_reply.v0: invalid JSON') from None
     check_artifact_key(context_key)
     try:
         finite_quality = math.isfinite(value['quality'])
@@ -138,7 +139,8 @@ def observation_revisions(config, prompt, root):
                               'stored': _schema(root, STORED_SCHEMA),
                               'configured': _schema(root, role['output']['schema_id']),
                               'facet_schema_version': config['observe']['facet_schema_version'],
-                              'processor': PIL.__version__})}
+                              'processor': PIL.__version__, 'tool': tool_revision(
+                                  'k2_observe', 'k2_naming', 'k1_embed', *MODEL_TOOL_MODULES)})}
 
 
 def observation_key(image_id, names, revisions):
@@ -152,7 +154,8 @@ def _rows(document):
 
 
 async def observe_images(store, config, handoff, *, images, folder_images, image_embeddings,
-                         embedder_revision, dim, knowledge_root, client=None, probe_cases=None, local_probe_plans=None):
+                         embedder_revision, dim, knowledge_root, client=None, probe_cases=None, local_probe_plans=None,
+                         writer=None):
     """Consume P1 naming rows and K1 part-1 tables; return rows/report/artifacts, never publish.
 
     An injected BoundModelClient is caller-owned. A lazy run created here is always closed. A completed
@@ -223,7 +226,7 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
             task['locations'].extend(locations[folder_id][identity])
     observations, artifacts, owned_run = [], [], None
     try:
-        with store.writer() as writer:
+        with nullcontext(writer) if writer is not None else store.writer() as writer:
             checkpoints = writer.checkpoints(STAGE)
 
             async def evaluate(key, task):
@@ -245,7 +248,7 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
                         if document != bundle['document']:
                             raise ValueError('stored observation document disagrees with its reply')
                     except (ValueError, KeyError, TypeError, UnicodeError) as error:
-                        raise StorageError(f'{STAGE}: invalid completed bundle {key}: {error}') from error
+                        raise StorageError(f'{STAGE}: CACHE_INVALID: invalid completed bundle {key}') from None
                     observations.extend(_rows(document))
                     artifacts.append(checkpoints.state(key)['output_key'])
                     report['skipped_done'] += 1
@@ -283,8 +286,8 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
                     rows = _rows(document)
                     store.catalog.build('observations', rows)
                 except (ValueError, TypeError, OverflowError, UnicodeError, ModelCallError) as error:
-                    checkpoints.fail(key, str(error), revisions=revisions)
-                    report['failed'][key] = str(error)
+                    checkpoints.fail(key, failure_code(error), revisions=revisions)
+                    report['failed'][key] = failure_code(error)
                     return
                 bundle = {'version': LAYOUT, 'revisions': revisions, 'concepts': declared,
                           'reply': value, 'document': document}

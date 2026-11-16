@@ -38,7 +38,8 @@ def main(argv=None):
         else:
             result = sync_config(config, project_root=root, plan=args.plan, force=args.force)
         print(json.dumps(result, ensure_ascii=False, default=_json_default))
-        if args.action == 'sync' and args.plan and result['report']['guard']['exceeded'] and not args.force:
+        if (args.action == 'sync' and args.plan and result.get('status') != 'skipped'
+                and result['report']['guard']['exceeded'] and not args.force):
             return 1
     except (ConfigurationError, StorageError, OSError, ValueError) as error:
         print(str(error), file=sys.stderr)

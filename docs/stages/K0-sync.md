@@ -13,7 +13,9 @@
 
 **Decisions and configuration keys.** `knowledge.root`, `knowledge.info_file.names`, `knowledge.concept_separator` (default the vertical bar, decision 9), `knowledge.naming.*` ([K2](K2-observe.md)), `knowledge.overrides_file`, `knowledge.on_source_removed` (`remove` by default), `sync.mass_deletion_guard.max_removed_fraction` (`design_required`), `sync.snapshots.keep`, `sync.gc.retention`, `storage.kb_store`. Two folders that give one concept different descriptions keep both, each with its source, and the conflict goes to the lint report. A generated description is not a conflict with another folder's description. The sync report lists every model-named folder.
 
-**Compute.** CPU and disk; hashing runs in parallel over a bounded worker pool. Not implemented; nothing measured.
+**Implementation (T-011 P3).** `k0_sync.sync` remains an unpublished K0 scan/checkpoint API. Its synchronous `sync_config` CLI adapter runs the full `kb_sync.sync_knowledge` coordinator described in [execution](../execution.md#the-kb-sync-flow-r-014-decision-17). Stages accept an optional coordinator-owned writer; standalone calls retain their own writer lifecycle. The coordinator scans without writing before its unchanged check and commits K0 output only for changed work.
+
+**Compute.** CPU and disk; hashing runs in parallel over a bounded worker pool. CPU contracts use tiny synthetic sources and HTTP doubles; deployment performance is unmeasured.
 
 **Depends on.** Nothing upstream; calls K1 to K5.
 

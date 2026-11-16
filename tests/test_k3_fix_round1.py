@@ -446,7 +446,7 @@ def test_referenced_reply_survives_caught_failure_with_resume_disabled(k2_env, m
     with monkeypatch.context() as patch:
         patch.setattr(module, 'assemble_card', lambda *args, **kwargs: (_ for _ in ()).throw(ValueError('labelled retry')))
         failed = invoke_cards(k2_env, data, server)
-        assert list(failed['report']['failed'].values()) == ['labelled retry'], failed['report']
+        assert list(failed['report']['failed'].values()) == ['SCHEMA_INVALID'], failed['report']
     assert capture('after_failure', True) == initial
     assert (k2_env.store.root / artifact).read_bytes() == before
     assert invoke_cards(k2_env, data, server)['rows']['cards'] and len(server.requests) == 1

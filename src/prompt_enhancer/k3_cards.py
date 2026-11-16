@@ -2,12 +2,14 @@
 
 import asyncio
 from copy import deepcopy
+from contextlib import nullcontext
 import hashlib
 import json
 from pathlib import Path
 
 from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_card_reads
-from .k2_naming import _digest, _validate_reply
+from .k2_naming import _digest, _validate_reply, failure_code
+from .k1_embed import MODEL_TOOL_MODULES, tool_revision
 from .model_client import ModelCallError, ModelClientRun, semantic_role_settings
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id
@@ -176,7 +178,7 @@ def _curated(concept, handoff, override):
 
 
 async def build_cards(store, config, handoff, *, observations, images, folder_images, snapshot_id,
-                      overrides, client=None, probe_cases=None, local_probe_plans=None):
+                      overrides, client=None, probe_cases=None, local_probe_plans=None, writer=None):
     """Return current cards/concept kinds, lint and artifact references; never publish or read source files.
 
     handoff must be the effective P1 naming rows, overrides its effective_overrides, and observations the
@@ -240,14 +242,15 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
     revisions = {'model': _digest(semantic_role_settings(config, 'card_builder')),
                  'prompt': _digest({'id': role['prompt_id'], 'sha256': hashlib.sha256(prompt).hexdigest()}),
                  'schema': _digest({'layout': LAYOUT, 'reply': _schema(root, REPLY_SCHEMA),
-                                   'configured': _schema(root, role['output']['schema_id'])})}
+                                   'configured': _schema(root, role['output']['schema_id']),
+                                   'tool': tool_revision('k3_cards', 'k2_naming', *MODEL_TOOL_MODULES)})}
     effective = {concept_id(name): value for name, value in overrides['data'].items()}
     unknown = [name for name in overrides['data'] if concept_id(name) not in concepts]
     report = {'built': 0, 'reused_grouping': 0, 'failed': {}, 'lint_findings': [], 'unmatched_overrides': sorted(unknown)}
     artifacts, result = [], []
     owned_run = None
     try:
-        with store.writer() as writer:
+        with nullcontext(writer) if writer is not None else store.writer() as writer:
             grouping = writer.checkpoints('k3_grouping')
             documents = writer.checkpoints('k3_card')
 
@@ -272,7 +275,7 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
                             reply = parse_card_reply(bundle['reply'], payload, project_root=root)
                             record = bundle['record']
                         except (ValueError, KeyError, TypeError, UnicodeError) as error:
-                            raise StorageError(f'k3_grouping: invalid completed bundle: {error}') from error
+                            raise StorageError('k3_grouping: CACHE_INVALID: invalid completed bundle') from None
                         report['reused_grouping'] += 1
                     else:
                         if client is None:
@@ -300,7 +303,8 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
                     _validate_reply(root, STORED_SCHEMA, card)
                     store.catalog.build('cards', [card])
                     document_revisions = dict(revisions, schema=_digest({'contract': _schema(root, STORED_SCHEMA),
-                                                                         'layout': LAYOUT}))
+                                                                         'layout': LAYOUT,
+                                                                         'tool': revisions['schema']}))
                     document_key = artifact_key('k3_card', _digest(card), document_revisions)
                     if documents.done(document_key) or documents.reusable(document_key):
                         if json.loads(documents.load(document_key)) != card:
@@ -318,10 +322,10 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
                 except (ValueError, TypeError, UnicodeError, ModelCallError) as error:
                     if record is not None:
                         writer.checkpoints('k3_call_failure').commit(
-                            key, 'k3_call_failure', canonical_json({'error': str(error)}).encode('utf-8'),
+                            key, 'k3_call_failure', canonical_json({'error': failure_code(error)}).encode('utf-8'),
                             revisions=revisions, call_records=[record])
-                    grouping.fail(key, str(error), revisions=revisions)
-                    report['failed'][identity] = str(error)
+                    grouping.fail(key, failure_code(error), revisions=revisions)
+                    report['failed'][identity] = failure_code(error)
 
             ordered = [concepts[key] for key in sorted(concepts)]
             workers = backends[role['backend']]['max_concurrency']

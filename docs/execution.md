@@ -1,6 +1,6 @@
 # Execution: commands, sync, snapshots, resume
 
-How the pipeline runs end to end. Data shapes: [contracts](../contracts/README.md). Requirements: R-009, R-014, R-016, R-017, R-020. Decisions: 12, 17, 19, 20. Nothing here is implemented or measured; the design draws on [N124](note/N124-incremental-indexing.md), [N125](note/N125-snapshots-and-vector-deletion.md) and [N126](note/N126-content-addressed-caches.md).
+How the pipeline runs end to end. Data shapes: [contracts](../contracts/README.md). Requirements: R-009, R-014, R-016, R-017, R-020. Decisions: 12, 17, 19, 20. K0-K5 sync is implemented with CPU contract tests and HTTP doubles; deployment performance and quality are unmeasured. The design draws on [N124](note/N124-incremental-indexing.md), [N125](note/N125-snapshots-and-vector-deletion.md) and [N126](note/N126-content-addressed-caches.md).
 
 ## Where things run (R-020)
 
@@ -39,6 +39,10 @@ Each command refuses at start when a key it reads still holds a sentinel or is m
 7. **Publish** by moving the current pointer atomically; retain `sync.snapshots.keep` snapshots for rollback.
 
 `--plan` reports the guard verdict and exits 1 when the guard would refuse execution, or 0 when it permits it, including with `--force`. It hashes each selected file because checkpoint reads currently require a writer session that may recover or compact the store; plan preserves the store without taking that writer session.
+
+`prompt_enhancer.kb_sync.sync_knowledge` validates the complete consumed profile before constructing a store or scanning. Disabled retrieval returns `status: skipped`, `reason: retrieval_disabled`, exit 0 after general structure validation, without resolving KB/store paths; unused stage sentinels remain allowed. Enabled execution uses one writer across K0, K1 images, K2 naming, K2 observation, K3, K4, K1 text and K5. Every failed item blocks publication, including partial K4 alias results. K1 text inputs are sorted distinct exact nonempty names, assigned descriptions, accepted aliases and card summaries; pending aliases are excluded.
+
+Completed source/configuration/prompt/schema/tool identity lives in the snapshot scan summary. An unchanged repeat verifies current checksums and saved K5 semantics before returning the existing snapshot ID; it makes no model/probe calls or persistent file changes. Changed and interrupted runs reuse intact semantic item checkpoints, assemble current rows, validate K5, finish and publish last. Plan reports role work as conditional on later model replies. This command does not run GC implicitly; configured retention remains enforced by storage GC.
 
 With `knowledge.on_source_removed: remove` (the default) a deleted source loses its knowledge at the next sync; until then the database and running requests are unaffected, because the request path reads only the snapshot (decision 17).
 

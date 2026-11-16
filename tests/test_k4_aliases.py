@@ -74,7 +74,7 @@ def test_k4_unexpected_backend_refused(k2_env, monkeypatch):
         return result
     monkeypatch.setattr(Checkpoints, 'load', changed_load)
     monkeypatch.setattr(Checkpoints, 'done', changed_done)
-    with pytest.raises(StorageError, match='unexpected backend'):
+    with pytest.raises(StorageError, match='k4_generation: CACHE_INVALID: invalid completed bundle'):
         invoke_aliases(k2_env, data, server)
     assert len(server.requests) == 1
 
