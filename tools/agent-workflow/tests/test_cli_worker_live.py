@@ -637,6 +637,9 @@ def test_a_live_lock_owner_is_never_broken_however_old_the_lock(
     cw.LOCK.write_text(f"{os.getpid()} tok", encoding="ascii")
     old = time.time() - 10 * cw.STALE_LOCK_SECONDS
     os.utime(cw.LOCK, (old, old))
+    # Labelled boot-time double: this legacy lock (no creation time) is held only if written after the boot, and a
+    # fresh CI machine can have booted less than `old` ago (CI window 6, Ubuntu tooling job five minutes after start).
+    monkeypatch.setattr(cw, "boot_time", lambda: old - 120)
     monkeypatch.setattr(cw.time, "sleep", lambda _s: None)
     with pytest.raises(SystemExit, match=f"owner pid {os.getpid()}"), cw.RegistryLock():
         pass

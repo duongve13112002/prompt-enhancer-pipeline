@@ -11,6 +11,7 @@ Claude CLI.
 
 from __future__ import annotations
 
+import gc
 import importlib.util
 import json
 import re
@@ -1261,11 +1262,22 @@ def adversarial_report(name: str, n: int = SIZE) -> str:
 
 
 def _seconds(text: str) -> float:
+    """The fastest of three runs (scheduler noise only ever adds time), each with the cyclic garbage collector paused.
+
+    A collection traverses every live object of the whole test process, so inside a full suite its cost tracks the
+    suite's heap, not the report: CI window 6 measured 9.6 times for four times the `sections` input with it on, while
+    the same shape alone grows about 4.0 times per step up to 1.28 MB with it off. Pausing it keeps the ratio a
+    property of the lint; reference counting still frees memory, and a quadratic step still costs 16 times."""
     best = float("inf")
-    for _ in range(3):  # the fastest of three runs: scheduler noise only ever adds time
-        start = time.perf_counter()
-        rl.lint_report(text)
-        best = min(best, time.perf_counter() - start)
+    for _ in range(3):
+        gc.collect()
+        gc.disable()
+        try:
+            start = time.perf_counter()
+            rl.lint_report(text)
+            best = min(best, time.perf_counter() - start)
+        finally:
+            gc.enable()
     return best
 
 
