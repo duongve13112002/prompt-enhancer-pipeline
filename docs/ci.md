@@ -13,9 +13,11 @@ Continuous integration runs on GitHub Actions with the latest Ubuntu and Windows
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml):
 
 - **Trigger:** `workflow_dispatch` only, so a push never starts a run while the repository is private. GitHub runs it only "if the workflow file exists on the default branch" (N134).
-- **Matrix:** `ubuntu-latest` and `windows-latest`, with `fail-fast: false`.
-  - Each leg installs the CPU profile (`pip install ".[test]"`: the pyproject dependencies and the test extra, no GPU package).
-  - It then runs the pipeline suite (`tests/`, `PYTHONPATH=src`) and the tooling suite (`tools/agent-workflow/tests`).
+- **Matrix:** `ubuntu-latest` and `windows-latest`, times the suites `pipeline` and `tooling`: four parallel jobs, with `fail-fast: false`.
+  - Each job installs the CPU profile (`pip install ".[test]"`: the pyproject dependencies and the test extra, no GPU package).
+  - It then runs its suite: the pipeline suite (`tests/`, `PYTHONPATH=src`) or the tooling suite (`tools/agent-workflow/tests`).
+  - **Why one job per suite:** in run 43820753462 the Windows job ran both suites in turn. The pipeline suite alone took 23 min 27 s, so the 30 min limit cancelled the tooling suite.
+  - **Job limit: 60 min.** This is a PM value pending user review: the Windows tooling suite is estimated at about 37 min, from 1018 tests in 355 s.
   - Nothing is skipped, deselected or allowed to fail. There is no GPU, no model download, no secret and no paid call.
 - **Token:** `permissions: contents: read`.
 - **Action pins:** each action is pinned to a full commit SHA, with its tag in a comment.
@@ -40,7 +42,7 @@ The orchestrator only, after each accepted and pushed task, or when the user ask
 Settings: [`tools/agent-workflow/ci_window_config.json`](../tools/agent-workflow/ci_window_config.json). Every key is required.
 
 - **Reused from [`guard_config.json`](../tools/agent-workflow/guard_config.json):** the remote and branch (`git_guard.push_remote`, `push_branch`), the forbidden paths (`push_guard.forbidden_*`) and `git_timeout_seconds`.
-- **`run_timeout_seconds` = 2400** is a PM value pending measurement. It is refit from the first measured run.
+- **`run_timeout_seconds` = 4200** was refit after run 43820753462. It is above the 60 min job limit, with a margin for queueing. It is a PM value pending user review.
 
 Steps, in the order the tool runs them:
 

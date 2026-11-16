@@ -793,7 +793,7 @@ GOOD_ENTRY = {"executable": "g", "version": "1", "version_args": ["version"], "s
 def test_shipped_config_pins_gitleaks_for_windows_only() -> None:
     cfg = cw.load(cw.DEFAULT_CONFIG)
     win = cfg["secret_scanner"]["win32"]
-    assert cfg["secret_scanner"]["linux"] == "pin_required" and cfg["run_timeout_seconds"] == 2400
+    assert cfg["secret_scanner"]["linux"] == "pin_required" and cfg["run_timeout_seconds"] == 4200
     assert win["version"] == "8.30.1" and win["sha256"].startswith("17157e2e")
     assert Path(win["path"]).relative_to(gc.ROOT).as_posix() == ".tmp/tools/gitleaks/8.30.1/bin/gitleaks.exe"
 
@@ -974,11 +974,39 @@ def test_workflow_is_dispatch_only_least_privilege_and_runs_both_suites() -> Non
     (job,) = data["jobs"].values()
     assert job["strategy"]["fail-fast"] is False
     assert job["strategy"]["matrix"]["os"] == ["ubuntu-latest", "windows-latest"]
+    assert job["strategy"]["matrix"]["suite"] == ["pipeline", "tooling"]
     assert job["timeout-minutes"] * 60 < cw.load(cw.DEFAULT_CONFIG)["run_timeout_seconds"]
     assert "continue-on-error" not in text and "--deselect" not in text and " -k " not in text
     runs = [s.get("run", "") for s in job["steps"]]
     assert any(r.endswith("pytest -q -p no:cacheprovider tests") for r in runs)
     assert any(r.endswith("tools/agent-workflow/tests") for r in runs)
+    # Each suite step runs in exactly the job its matrix entry names, so the four jobs run both suites on both systems.
+    pytest_steps = {s["run"].rsplit(" ", 1)[-1]: s.get("if") for s in job["steps"] if "pytest" in s.get("run", "")}
+    assert pytest_steps == {
+        "tests": "${{ matrix.suite == 'pipeline' }}",
+        "tools/agent-workflow/tests": "${{ matrix.suite == 'tooling' }}",
+    }
+    # Any other suite value fails its job before the suite steps (S42-ci5 review F1): the guard's condition is the
+    # exact complement of the two suite conditions, and it exits non-zero.
+    guards = [s for s in job["steps"] if s.get("name") == "Refuse an unknown suite"]
+    assert len(guards) == 1
+    (guard,) = guards
+    assert guard["if"] == "${{ matrix.suite != 'pipeline' && matrix.suite != 'tooling' }}"
+    assert guard["env"] == {"SUITE": "${{ matrix.suite }}"} and "${{" not in guard["run"]
+    program, flag, code = guard["run"].split(" ", 2)
+    assert (program, flag) == ("python", "-c") and code[0] == code[-1] == '"'
+    done = subprocess.run(  # the guard's own program, run here with a misspelled suite
+        [sys.executable, "-I", "-c", code[1:-1]],
+        env={**os.environ, "SUITE": "toolng"},
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert done.returncode == 1 and "unknown matrix suite toolng" in done.stderr
+    names = [s.get("name") for s in job["steps"]]
+    assert names.index("Refuse an unknown suite") < names.index("Pipeline suite") < names.index("Tooling suite")
     assert any('pip install ".[test]"' in r for r in runs)
     step_env = [s.get("env", {}) for s in job["steps"]]
     assert {"PYTHONPATH": "src"} in step_env

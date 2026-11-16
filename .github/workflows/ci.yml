@@ -14,14 +14,18 @@ permissions:
 
 jobs:
   test:
-    name: tests (${{ matrix.os }})
+    name: tests (${{ matrix.os }}, ${{ matrix.suite }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        # One job per suite, in parallel: run 43820753462 ran both suites in one Windows job, and the pipeline suite
+        # alone took 23 min 27 s there, so the 30 min limit cancelled the tooling suite after 1018 tests in 355 s.
+        suite: [pipeline, tooling]
     runs-on: ${{ matrix.os }}
-    # Below ci_window_config.json run_timeout_seconds (2400 s, PM value pending measurement).
-    timeout-minutes: 30
+    # Below ci_window_config.json run_timeout_seconds (4200 s). PM value pending user review: the Windows tooling
+    # suite is estimated at about 37 min from that partial run (6360 tests at its rate), so 60 min leaves a margin.
+    timeout-minutes: 60
     env:
       PYTHONNOUSERSITE: "1"
       PYTHONDONTWRITEBYTECODE: "1"
@@ -36,11 +40,19 @@ jobs:
           python-version: "3.12"
       - name: Install the CPU profile (pyproject dependencies and the test extra; no GPU package)
         run: python -m pip install ".[test]"
+      # Each job runs exactly the suite its matrix entry names; together the four jobs run both suites on both systems.
+      # A suite value matching no step fails here, so a misspelled entry can never pass without running tests
+      # (S42-ci5 review F1). The value comes in through the environment, not into the script text.
+      - name: Refuse an unknown suite
+        if: ${{ matrix.suite != 'pipeline' && matrix.suite != 'tooling' }}
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: python -c "import os, sys; sys.exit('unknown matrix suite ' + os.environ['SUITE'])"
       - name: Pipeline suite
+        if: ${{ matrix.suite == 'pipeline' }}
         env:
           PYTHONPATH: src
         run: python -B -X faulthandler -m pytest -q -p no:cacheprovider tests
       - name: Tooling suite
-        # Runs after a red pipeline suite too, so one run reports both suites.
-        if: ${{ !cancelled() }}
+        if: ${{ matrix.suite == 'tooling' }}
         run: python -B -X faulthandler -m pytest -q -p no:cacheprovider tools/agent-workflow/tests
