@@ -33,4 +33,4 @@ Working data lives under `data_root` (profile value `storage.data_root`), by def
 
 ## Why Parquet and Arrow
 
-Tables and embeddings are Parquet or Arrow (R-016): columnar, append-friendly, readable without a server, and identical on Ubuntu and Windows. The serving index (approximate nearest neighbour plus a lexical index over character n-grams) is derived from those tables and rebuilt per snapshot ([K5-index](stages/K5-index.md)); it is never the source of truth.
+Tables and embeddings are Parquet or Arrow (R-016): columnar, append-friendly, readable without a server, and identical on Ubuntu and Windows. The serving index uses exact blocked numpy search plus a lexical index over character n-grams (decision 134), derived from those tables and rebuilt per snapshot ([K5-index](stages/K5-index.md)); it is never the source of truth. Base/dev engine and metric remain `design_required`, build settings `fit_from_bench`, and n-gram size `fit_from_gt` until selected or fitted.

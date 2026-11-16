@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path, PureWindowsPath
 import re
+import sys
 
 from jsonschema import Draft202012Validator, exceptions, validators
 import yaml
@@ -1233,6 +1234,31 @@ def validate_alias_reads(config, path='configuration', sources=None, project_roo
     _validate_configured_paths(scoped, root, path, sources)
 
 
+def _index_migration(config, path):
+    index = config.get('index')
+    if isinstance(index, dict):
+        for key in ('ann', 'exact_search_below_count'):
+            if key in index:
+                raise ConfigurationError(f'{path}: index.{key}: obsolete index configuration; migrate to '
+                                         'index.engine, index.metric and index.build.block_rows')
+
+
+def validate_index_reads(config, path='configuration', sources=None, project_root=None):
+    """K5's entire profile read set; refuse before reading or attaching snapshot files."""
+    sources = sources or {}
+    _index_migration(config, path)
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    value = _get(config, 'index', path)
+    _sentinel(value, path, 'index', sources)
+    node = _schema_at(_schema(root, 'enhancer_config.v0'), 'index')
+    _validate(value, node, path, 'index', sources, _EXACT_INTEGERS)
+    # Safety-bound: counts cross Python/numpy/Arrow native-size boundaries.
+    for key in ('index.build.block_rows', 'index.lexical.ngram_size'):
+        if _get(config, key, path) > sys.maxsize:
+            raise ConfigurationError(f'{path}: {key}: exceeds native integer size')
+    return deepcopy(value)
+
+
 def _validate_embedding(config, path, sources):
     """Cross-field rules of the embedder settings; sentinel values are checked when a command reads them."""
     embedding = config['embedding']
@@ -1319,6 +1345,7 @@ def load_config(path, command, *, overlay=None, project_root=None):
         config_schema = _schema(root, 'enhancer_config.v0')
     except ConfigurationError as error:
         raise ConfigurationError(f'{path}: schema_version: {error}') from error
+    _index_migration(config, path)
     _validate(config, config_schema, path, sources=sources)
     _validate_model_bindings(config, path)
     _validate_embedding(config, path, sources)
@@ -1364,6 +1391,7 @@ def load_config(path, command, *, overlay=None, project_root=None):
         default_key = 'vlm.backends.' + default
         _sentinel(_get(config, default_key, path), path, default_key, sources)
     if command == 'kb sync':
+        validate_index_reads(config, path, sources, root)
         validate_embedder_reads(config, path, sources, root)  # K1 is part of kb sync; the same check K1 runs
         validate_naming_reads(config, path, sources, root)
         validate_observation_reads(config, path, sources, root)

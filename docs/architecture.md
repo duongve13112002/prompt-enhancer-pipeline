@@ -42,7 +42,7 @@ flowchart TB
     K3 --> K4
     K3 --> K1T[K1 Embed, part 2: concept-text embeddings]
     K4 --> K1T
-    K1I --> K5[K5 Index: ANN and character n-gram lexical index]
+    K1I --> K5[K5 Index: exact blocked numpy search and character n-gram lexical index]
     K1T --> K5
     K3 --> K5
     K4 --> K5

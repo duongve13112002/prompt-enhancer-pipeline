@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "serving_index.v0",
+  "title": "K5 immutable serving index metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layout",
+    "key",
+    "settings",
+    "sources",
+    "tools",
+    "embedding",
+    "parts"
+  ],
+  "properties": {
+    "layout": {
+      "const": 1
+    },
+    "key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engine",
+        "metric",
+        "build",
+        "lexical"
+      ],
+      "properties": {
+        "engine": {
+          "const": "numpy_exact"
+        },
+        "metric": {
+          "enum": [
+            "cosine",
+            "inner_product"
+          ]
+        },
+        "build": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "block_rows"
+          ],
+          "properties": {
+            "block_rows": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "lexical": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "ngram_size"
+          ],
+          "properties": {
+            "kind": {
+              "const": "char_ngram"
+            },
+            "ngram_size": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "sources": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "required": [
+        "numpy",
+        "arrow",
+        "unicode",
+        "code",
+        "normalization",
+        "schema"
+      ]
+    },
+    "embedding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "dimension"
+      ],
+      "properties": {
+        "revision": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "dimension": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "parts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "kind",
+          "rows",
+          "sha256",
+          "size_bytes",
+          "artifact"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "exact",
+              "lexical",
+              "concept_text_embeddings",
+              "image_embeddings"
+            ]
+          },
+          "rows": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "artifact": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

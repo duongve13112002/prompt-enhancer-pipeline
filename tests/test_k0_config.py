@@ -20,7 +20,7 @@ def config(model_test_profile):
     config['embedding'].update(chosen='embeddinggemma-2', revision='test', query_text_limit=128)
     config['observe'].update(representatives_per_folder=1, facet_schema_version='image_observation.v0')
     config['cards']['min_visible_images'] = 1
-    config['index'].update(ann={'method': 'test', 'params': {}}, exact_search_below_count=1)
+    config['index'].update(engine='numpy_exact', metric='inner_product', build={'block_rows': 2})
     config['index']['lexical']['ngram_size'] = 2
     config['storage'].update(kb_store='store', lock={'timeout_s': 5, 'poll_s': 0.01})
     return config

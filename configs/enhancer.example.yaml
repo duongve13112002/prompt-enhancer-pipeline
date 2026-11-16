@@ -85,9 +85,10 @@ aliases:                                 # K4
   only_add_candidates: true              # aliases never decide a link
 
 index:                                   # K5, R-016
-  ann: {method: design_required, params: design_required}
-  exact_search_below_count: fit_from_bench
-  lexical: {kind: char_ngram, ngram_size: design_required}
+  engine: design_required                # numpy_exact is implemented; selection remains unmeasured
+  metric: design_required                # cosine | inner_product, explicit choice
+  build: fit_from_bench                  # {block_rows: <positive integer>}; E13
+  lexical: {kind: char_ngram, ngram_size: fit_from_gt}
 
 rag:
   enabled: true                          # decision 12, R-009

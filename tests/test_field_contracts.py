@@ -83,9 +83,9 @@ def options(value):
             'medium', 'cards', 'live', 'json_schema', 'json_object', 'engine_native',
             'response_format', 'from_vision', 'intent_ir.v0', 'verifier_result.v0', '2025-01-01',
             'openai_compatible', 'anthropic', 'gemini', 'vllm', 'llama_cpp', 'fallback_to_default_backend', 'stop', 'arrow', '7d', 'refuse', 'flatten', '#123456',
-            'openai_input_content', 'native', [],
+            'openai_input_content', 'native', 'numpy_exact', 'cosine', 'inner_product', 'char_ngram', [],
             ['alternative'], ['generate'], ['edit'], {}, {'other': 'alternative'},
-            {'chat': 'chat', 'health': 'health'},
+            {'chat': 'chat', 'health': 'health'}, {'block_rows': 2},
             {'source': 'source_image', 'format': 'png', 'quality': 80, 'transport': 'data_uri'},
             value + '_alternative' if isinstance(value, str) else 'alternative']
 
@@ -109,6 +109,7 @@ def test_protocol_only_fields():
         else:
             constrained.append('.'.join(path))
     assert constrained == ['schema_version', 'knowledge.info_file.on_description_count_mismatch',
+                           'index.lexical.kind',
                            'vision.alpha_policy.mode', 'vision.transport', 'vlm.backends.main.unsupported_param_policy',
                            'vlm.roles.planner.mode', 'vlm.roles.planner.output.validate_response']
 
@@ -129,6 +130,7 @@ def test_all_constrained_fields_are_known():
         else:
             allowed = (path == ('schema_version',)
                        or path == ('knowledge', 'info_file', 'on_description_count_mismatch')
+                       or path == ('index', 'lexical', 'kind')  # K5: character n-grams are the only protocol
                        or path == ('vision', 'alpha_policy', 'mode')  # Refuse also removes the background member.
                        or path == ('vision', 'transport')  # T-008: protocol-bound, data_uri is the only value
                        or path[:2] == ('vlm', 'backends') and path[-1] == 'unsupported_param_policy'

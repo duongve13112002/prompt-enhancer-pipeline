@@ -1245,54 +1245,18 @@
       "anyOf": [
         {
           "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "engine",
+            "metric",
+            "build",
+            "lexical"
+          ],
           "properties": {
-            "ann": {
+            "engine": {
               "anyOf": [
                 {
-                  "type": "object",
-                  "properties": {
-                    "method": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "enum": [
-                            "fit_from_gt",
-                            "fit_from_bench",
-                            "fit_from_pilot",
-                            "pin_required",
-                            "deploy_required",
-                            "design_required",
-                            "ask_user"
-                          ]
-                        }
-                      ]
-                    },
-                    "params": {
-                      "anyOf": [
-                        {
-                          "type": "object"
-                        },
-                        {
-                          "enum": [
-                            "fit_from_gt",
-                            "fit_from_bench",
-                            "fit_from_pilot",
-                            "pin_required",
-                            "deploy_required",
-                            "design_required",
-                            "ask_user"
-                          ]
-                        }
-                      ]
-                    }
-                  },
-                  "required": [
-                    "method",
-                    "params"
-                  ],
-                  "additionalProperties": false
+                  "const": "numpy_exact"
                 },
                 {
                   "enum": [
@@ -1307,11 +1271,56 @@
                 }
               ]
             },
-            "exact_search_below_count": {
+            "metric": {
               "anyOf": [
                 {
-                  "type": "integer",
-                  "minimum": 0
+                  "enum": [
+                    "cosine",
+                    "inner_product"
+                  ]
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "build": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "block_rows"
+                  ],
+                  "properties": {
+                    "block_rows": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  }
                 },
                 {
                   "enum": [
@@ -1330,11 +1339,16 @@
               "anyOf": [
                 {
                   "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "ngram_size"
+                  ],
                   "properties": {
                     "kind": {
                       "anyOf": [
                         {
-                          "type": "string"
+                          "const": "char_ngram"
                         },
                         {
                           "enum": [
@@ -1353,7 +1367,7 @@
                       "anyOf": [
                         {
                           "type": "integer",
-                          "minimum": 0
+                          "minimum": 1
                         },
                         {
                           "enum": [
@@ -1368,12 +1382,7 @@
                         }
                       ]
                     }
-                  },
-                  "required": [
-                    "kind",
-                    "ngram_size"
-                  ],
-                  "additionalProperties": false
+                  }
                 },
                 {
                   "enum": [
@@ -1388,13 +1397,7 @@
                 }
               ]
             }
-          },
-          "required": [
-            "ann",
-            "exact_search_below_count",
-            "lexical"
-          ],
-          "additionalProperties": false
+          }
         },
         {
           "enum": [

@@ -41,7 +41,7 @@ def environment(project_root, tmp_path, profile):
     config['embedding']['query_text_limit'] = 128
     config['observe'].update(representatives_per_folder=1, facet_schema_version='image_observation.v0')
     config['cards']['min_visible_images'] = 1
-    config['index'].update(ann={'method': 'test', 'params': {}}, exact_search_below_count=1)
+    config['index'].update(engine='numpy_exact', metric='inner_product', build={'block_rows': 2})
     config['index']['lexical']['ngram_size'] = 2
     config['storage'].update(kb_store=store_path.relative_to(project_root).as_posix(),
                              data_root=(tmp_path / 'data').relative_to(project_root).as_posix(),

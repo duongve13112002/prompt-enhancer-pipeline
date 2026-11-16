@@ -14,6 +14,8 @@ No lockfile exists and none may be invented. This file records facts and the pla
 
 ## Planned profiles
 
+K5 adds `numpy>=2.0.0` to the CPU/client dependencies (decision 134). The API floor follows bounded candidate merging with `np.concat`, documented in installed numpy source as added in 2.0. Local validation uses PM-installed numpy 2.5.5; that distribution requires Python >=3.12. The project's declared Python minimum is unchanged. Python 3.11 with a resolver-selected older numpy and other numpy releases are `not_run`, rather than inferred compatible. No GPU dependency or FAISS dependency is added, and this task installs nothing.
+
 | Profile | Contents | Status |
 | --- | --- | --- |
 | `.venv` (main) | client, embedder, tables, index build, tooling | to create by the environment task |

@@ -2,6 +2,7 @@
 
 import asyncio
 from collections import Counter
+from copy import deepcopy
 import json
 from types import SimpleNamespace
 
@@ -32,6 +33,101 @@ def test_generated_rows_resume_and_records(k2_env):
     assert not k2_env.store.path('CURRENT').exists()
     for path in result['artifacts']:
         assert k2_env.store.path(path).exists()
+
+
+def test_k4_cached_call_record_mismatch(k2_env, monkeypatch):
+    data, server = inputs(), AliasServer()
+    invoke_aliases(k2_env, data, server)
+    original = Checkpoints.load
+
+    def changed(helper, key):
+        result = original(helper, key)
+        if helper.stage == 'k4_generation':
+            bundle = json.loads(result)
+            bundle['record']['latency_ms'] = -123  # equality only; identity/provenance remain valid
+            return json.dumps(bundle).encode()
+        return result
+    monkeypatch.setattr(Checkpoints, 'load', changed)
+    with pytest.raises(StorageError, match='invalid completed bundle'):
+        invoke_aliases(k2_env, data, server)
+    assert len(server.requests) == 1
+
+
+def test_k4_unexpected_backend_refused(k2_env, monkeypatch):
+    data, server = inputs(), AliasServer()
+    invoke_aliases(k2_env, data, server)
+    k2_env.config['vlm']['backends']['other'] = deepcopy(k2_env.config['vlm']['backends']['main'])
+    load, done = Checkpoints.load, Checkpoints.done
+
+    def changed_load(helper, key):
+        result = load(helper, key)
+        if helper.stage == 'k4_generation':
+            bundle = json.loads(result)
+            bundle['record']['backend'] = 'other'
+            return json.dumps(bundle).encode()
+        return result
+
+    def changed_done(helper, key):
+        result = deepcopy(done(helper, key))
+        if helper.stage == 'k4_generation' and result:
+            result['call_records'][0]['backend'] = 'other'
+        return result
+    monkeypatch.setattr(Checkpoints, 'load', changed_load)
+    monkeypatch.setattr(Checkpoints, 'done', changed_done)
+    with pytest.raises(StorageError, match='unexpected backend'):
+        invoke_aliases(k2_env, data, server)
+    assert len(server.requests) == 1
+
+
+def test_k4_failed_generation_has_failed_state(k2_env):
+    server = AliasServer({'aliases': 'labelled invalid reply'})
+    result = invoke_aliases(k2_env, inputs(), server)
+    assert set(result['report']['failed']) == {concept_id('Concept')}
+    assert len(states(k2_env)) == 1 and states(k2_env)[0]['state'] == 'failed'
+    server.reply = {'aliases': []}
+    recovered = invoke_aliases(k2_env, inputs(), server)
+    assert not recovered['report']['failed'] and states(k2_env)[0]['state'] == 'done'
+
+
+def test_k4_corrupt_cached_document_refused(k2_env, monkeypatch):
+    data, server = inputs(), AliasServer()
+    invoke_aliases(k2_env, data, server)
+    original = Checkpoints.load
+
+    def changed(helper, key):
+        result = original(helper, key)
+        if helper.stage == 'k4_aliases':
+            rows = json.loads(result)
+            rows[0]['alias_text'] = 'changed assembled row'
+            return json.dumps(rows).encode()
+        return result
+    monkeypatch.setattr(Checkpoints, 'load', changed)
+    with pytest.raises(StorageError, match='completed rows disagree'):
+        invoke_aliases(k2_env, data, server)
+    assert len(server.requests) == 1
+
+
+def test_k4_alias_collides_with_alias_free_canonical_owner(k2_env):
+    data = inputs(('Alpha', 'Beta'))
+    data['overrides']['data'] = {'Alpha': {'aliases': ['ＢＥＴＡ']}}
+    k2_env.config['aliases']['generated'] = False
+    result = asyncio.run(build_aliases(k2_env.store, k2_env.config, **data))
+    assert len(result['rows']['aliases']) == 1
+    row = result['rows']['aliases'][0]
+    assert row['concept_id'] == concept_id('Alpha') and row['status'] == 'pending_review'
+    assert row['collides_with'] == [concept_id('Beta')]
+    assert result['report']['lint_findings'][0]['code'] == 'ALIAS_COLLISION'
+
+
+def test_k4_own_name_alias_is_accepted(k2_env):
+    data = inputs(('Beta',))
+    data['overrides']['data'] = {'Beta': {'aliases': ['ＢＥＴＡ']}}
+    k2_env.config['aliases']['generated'] = False
+    result = asyncio.run(build_aliases(k2_env.store, k2_env.config, **data))
+    assert len(result['rows']['aliases']) == 1
+    row = result['rows']['aliases'][0]
+    assert row['status'] == 'accepted' and row['collides_with'] == []
+    assert result['report']['lint_findings'] == []
 
 
 def test_duplicate_author_generated_origin(k2_env):

@@ -25,7 +25,9 @@ The mass-deletion removal fraction is unmatched removed folders divided by folde
 
 ## Tables
 
-All tables are Parquet or Arrow (R-016, decision 19); embeddings are Arrow. A snapshot is a set of table files plus a manifest. The serving index (approximate nearest neighbour and a lexical index over character n-grams) is derived from these tables and rebuilt per snapshot ([K5](../docs/stages/K5-index.md)); it is not a table. Every row computed by a model carries the revisions of the model, the prompt and the schema that produced it, so an artifact is keyed by input content hash plus those revisions (R-017).
+K5's implemented serving component uses exact blocked numpy search (decision 134), with explicit metric and block-row configuration. Its Arrow metadata contract is [serving_index.v0](schemas/serving_index.v0.schema.json); source-referenced exact/lexical maps and vector shards live inside the snapshot through `SnapshotBuilder.add_file`. Read-only APIs, complete-key search hits, accepted-alias eligibility, validation and resume are specified in [K5-index](../docs/stages/K5-index.md). K5 does not publish or construct a retrieval gateway. No quality or speed is claimed (R-016/R-017/R-009/R-026).
+
+All tables are Parquet or Arrow (R-016, decision 19); embeddings are Arrow. A snapshot is a set of table files plus a manifest. The serving index (exact blocked numpy search and a lexical index over character n-grams) is derived from these tables and rebuilt per snapshot ([K5](../docs/stages/K5-index.md)); it is not a table. Every row computed by a model carries the revisions of the model, the prompt and the schema that produced it, so an artifact is keyed by input content hash plus those revisions (R-017).
 
 | Table | Key | Main columns | Written by |
 | --- | --- | --- | --- |
