@@ -25,5 +25,14 @@
     "Fingerprint": "e9b2781a19fffcc6a7c53c3fab298d572e4ff5d3:docs/ci.md:generic-api-key:197",
     "Reason": "Documentation, not a secret: the baseline table in docs/ci.md quoted the fake test value of the first entry in commit e9b2781; later commits describe it instead of quoting it.",
     "Decision": "PM decision pending user review (decision 94), first CI window, 2026-11-15"
+  },
+  {
+    "RuleID": "generic-api-key",
+    "File": "tests/test_k2_observe_shared_keys.py",
+    "StartLine": 84,
+    "Commit": "0c93c6d4a8f206117679607432a041f65e849486",
+    "Fingerprint": "0c93c6d4a8f206117679607432a041f65e849486:tests/test_k2_observe_shared_keys.py:generic-api-key:84",
+    "Reason": "Test code, not a secret: the call checkpoints.commit(key, 'k2_observation', ...) passes a checkpoint key variable and the stage name of a synthetic K2 observation bundle; the rule matched the word key followed by a quoted stage name.",
+    "Decision": "PM decision pending user review (decision 94), CI window 4, 2026-11-16"
   }
 ]
