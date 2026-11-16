@@ -101,5 +101,12 @@
     "max_excerpt_chars": 600,
     "git_status_lines": 15,
     "transcript_tail_bytes": 4000000
+  },
+  "report_lint": {
+    "max_findings": 50,
+    "shown": 5,
+    "message_max_bytes": 512,
+    "record_max_bytes": 16384,
+    "timeout_seconds": 10
   }
 }

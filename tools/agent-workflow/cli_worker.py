@@ -1912,6 +1912,122 @@ def flag_history_change(w: dict[str, Any], changes: list[str], result_file: Path
     return False
 
 
+# T-021 P2: after every completed turn the registered task file gets the advisory report lint (report_lint.py). The
+# turn has ended, so it never blocks: the findings, or the error of a crashed lint, go to the registry entry and stderr.
+# Its bounds are validated values of guard_config.json `report_lint` (max_findings, shown, message_max_bytes,
+# record_max_bytes, timeout_seconds; T-021 P2R-F2, P2R-F3).
+REPORT_LINT_KEY = "report_lint"  # protocol-bound: registry key of the last turn's lint record
+# safety-bound: the cut for the error when the `report_lint` section itself cannot be loaded (no bound to read then).
+REPORT_LINT_FALLBACK_BYTES = 512
+
+
+def _json_bytes(text: str) -> int:
+    """Bytes of a string inside the registry's JSON (`save` uses json.dumps' default ASCII escapes), quotes excluded."""
+    return len(json.dumps(text)) - 2
+
+
+def _utf8_bytes(text: str) -> int:
+    return len(text.encode("utf-8", "surrogatepass"))
+
+
+def cut_bytes(text: str, limit: int, size: Callable[[str], int] = _json_bytes) -> str:
+    """`text` if it is at most `limit` bytes by `size`, else its longest prefix that fits together with a visible
+    marker naming the full size (`… [cut: N bytes]`). Linear: only the first `limit` characters are measured, since a
+    character is at least one byte. guard_config keeps `limit` above the marker's size."""
+    total = size(text)
+    if total <= limit:
+        return text
+    marker = f"… [cut: {total} bytes]"
+    budget = limit - size(marker)
+    kept = 0
+    for ch in text[: max(budget, 0)]:
+        budget -= size(ch)
+        if budget < 0:
+            break
+        kept += 1
+    return text[:kept] + marker
+
+
+def report_lint_record(name: str, worker: dict[str, Any], turn: int) -> dict[str, Any] | None:
+    """Lint the worker's registered task file after a turn, within `report_lint.timeout_seconds`. Returns the record
+    for the registry entry, or None when the worker has no task file. A crash of the lint, a passed deadline
+    (`LintDeadline`), an unreadable file or an invalid `report_lint` section is recorded in `error`, never silent.
+    Each message and the error are cut to `message_max_bytes`; findings are kept while the record's JSON stays within
+    `record_max_bytes`, `total` keeps the full count and `truncated` the number not kept; the stderr line is cut to
+    `record_max_bytes` UTF-8 bytes."""
+    hooks = worker.get("hooks")
+    task_file = hooks.get("task_file") if isinstance(hooks, dict) else None
+    if not isinstance(task_file, str) or not task_file:
+        return None
+    record: dict[str, Any] = {
+        "turn": turn,
+        "task_file": task_file,
+        "total": 0,
+        "findings": [],
+        "truncated": 0,  # findings counted in `total` but not kept (past max_findings or record_max_bytes)
+        "unwritten": [],  # heading lines of the reports not linted because they are blank or the template's text
+        "error": None,
+    }
+    bounds: dict[str, int] | None = None
+    findings: list[Any] = []
+    try:
+        bounds = guard_config()["report_lint"]
+        module = sibling("report_lint")
+        result = module.lint_report(
+            Path(task_file).read_text(encoding="utf-8"), module.load_template(), timeout=bounds["timeout_seconds"]
+        )
+        record["total"] = len(result.findings)
+        findings = result.findings[: bounds["max_findings"]]
+        record["unwritten"] = result.unwritten[: bounds["max_findings"]]
+    except (Exception, SystemExit) as exc:  # fail visible: the PM reads the record, the worker's result stands
+        record["error"] = f"{type(exc).__name__}: {exc}"
+    message_max = REPORT_LINT_FALLBACK_BYTES if bounds is None else bounds["message_max_bytes"]
+    record_max = REPORT_LINT_FALLBACK_BYTES if bounds is None else bounds["record_max_bytes"]
+    record["task_file"] = cut_bytes(task_file, message_max)
+    if record["error"]:
+        record["error"] = cut_bytes(record["error"], message_max)
+    size = len(json.dumps(record))
+    for f in findings:  # kept in order while the record fits; each item adds its JSON and a ", " separator
+        item = {"rule": f.rule, "line": f.line, "message": cut_bytes(f.message, message_max)}
+        grown = size + len(json.dumps(item)) + (2 if record["findings"] else 0)
+        if grown > record_max:
+            break
+        record["findings"].append(item)
+        size = grown
+    record["truncated"] = record["total"] - len(record["findings"])
+    while len(json.dumps(record)) > record_max and record["unwritten"]:  # the counts' digits can still tip it over
+        record["unwritten"].pop()
+    while len(json.dumps(record)) > record_max and record["findings"]:
+        record["findings"].pop()
+        record["truncated"] += 1
+    line = None
+    if record["error"]:
+        line = f"WARNING: worker {name}: report lint could not run on {record['task_file']}: {record['error']}"
+    elif record["unwritten"] and not record["total"]:
+        line = (
+            f"NOTE: worker {name}: report lint skipped the report at line(s) {', '.join(map(str, record['unwritten']))} "
+            f"of {record['task_file']}: blank or the template's text, not written yet"
+        )
+    elif record["total"]:
+        assert bounds is not None  # a total comes only from a lint that ran with its bounds
+        shown = "; ".join(f"{f['line']}: [{f['rule']}] {f['message']}" for f in record["findings"][: bounds["shown"]])
+        line = (
+            f"WARNING: worker {name}: report lint, {record['total']} finding(s) in {record['task_file']} "
+            f"(advisory; the PM reads them before accepting): {shown}"
+        )
+    if line is not None:
+        print(cut_bytes(line, record_max, _utf8_bytes), file=sys.stderr)
+    return record
+
+
+def store_report_lint(w: dict[str, Any], record: dict[str, Any] | None) -> None:
+    """Put the turn's lint record on the registry entry; a worker without a task file keeps no record."""
+    if record is None:
+        w.pop(REPORT_LINT_KEY, None)
+    else:
+        w[REPORT_LINT_KEY] = record
+
+
 def status_rows(include_retired: bool) -> list[dict[str, Any]]:
     rows = []
     for name, w in load().items():
@@ -1937,6 +2053,9 @@ def status_rows(include_retired: bool) -> list[dict[str, Any]]:
         }
         if w.get("git_changes"):
             row["git_changes"] = w["git_changes"]  # T-024 round 4: refs or reflogs a turn changed
+        report = w.get(REPORT_LINT_KEY)
+        if isinstance(report, dict) and (report.get("total") or report.get("error") or report.get("unwritten")):
+            row["report_lint"] = report  # T-021 P2: advisory findings of the last turn's task-file lint
         if not (w.get("status") == "busy" and entry_process_state(w, "launcher")[1] == ALIVE):
             finding = audit_finding(w)
             if finding:
@@ -2260,6 +2379,7 @@ def run_codex_turn(
             encoding="utf-8",
         )
     after = snap.ledger_usage(snap.codex_snapshot(home, time.time(), stale, session_file_limit))
+    report = report_lint_record(name, worker, turn)
     with RegistryLock():
         data = load()
         w = data.get(name)
@@ -2280,6 +2400,7 @@ def run_codex_turn(
             thread_id=thread_id,
             minutes_last_turn=round(seconds / 60, 1),
         )
+        store_report_lint(w, report)
         if flag_history_change(w, git_changed, result_file):
             ok = False
             problems.append(GIT_HISTORY_CHANGED)
@@ -2371,6 +2492,7 @@ def run_turn(
     result_file.write_text(
         result or f"(no result event; exit code {rc}; see {log.name})", encoding="utf-8"
     )
+    report = report_lint_record(name, worker, turn)
     with RegistryLock():
         data = load()
         w = data.get(name)
@@ -2395,6 +2517,7 @@ def run_turn(
             last_model_usage=model_usage,
             minutes_last_turn=round((time.monotonic() - started) / 60, 1),
         )
+        store_report_lint(w, report)
         flagged = flag_history_change(w, git_changed, result_file)
         audit_done = finish_git_audit(w)
         save(data)

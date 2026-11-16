@@ -140,6 +140,15 @@ INVALID = [
     (("worker_progress", "max_excerpt_chars"), -5),
     (("worker_progress", "git_status_lines"), False),
     (("worker_progress", "transcript_tail_bytes"), 0),
+    # T-021 P2 fix round 1: the turn-end report lint record (cli_worker.report_lint_record).
+    (("report_lint", "max_findings"), 0),
+    (("report_lint", "shown"), True),
+    (("report_lint", "message_max_bytes"), gc.REPORT_LINT_MESSAGE_FLOOR - 1),  # no room for the cut marker
+    (("report_lint", "message_max_bytes"), "512"),
+    (("report_lint", "record_max_bytes"), 2 * 512 + gc.REPORT_LINT_RECORD_FIXED - 1),  # under 2 messages + fixed
+    (("report_lint", "timeout_seconds"), 0),
+    (("report_lint", "timeout_seconds"), 1.5),
+    (("report_lint",), {"max_findings": 50}),
 ]
 
 
@@ -164,6 +173,25 @@ def test_non_default_values_are_accepted() -> None:
     assert cfg["tool_broken"]["probe_shell"]["windows"]["paths"][0] == "D:/PortableGit/bin/bash.exe"
     assert cfg["write_guard"]["allowed_dirs"] == ["runs", ".tmp/agents"]
     assert cfg["tool_broken"]["streak_length"] == 5
+
+
+def test_a_config_without_the_report_lint_section_is_refused_with_its_exact_message(tmp_path: Path) -> None:
+    """T-021 P2 fix round 1 (PM condition): every hook loads this file, so a config written before the section existed
+    is refused by name, never read with a source default."""
+    data = copy.deepcopy(DEFAULT)
+    del data["report_lint"]
+    old = tmp_path / "old.json"
+    old.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(gc.ConfigError) as refused:
+        gc.load(old)
+    assert str(refused.value) == "old.json is missing required keys: report_lint"
+
+
+def test_report_lint_bounds_accept_non_default_values_at_their_floors() -> None:
+    floor = gc.REPORT_LINT_MESSAGE_FLOOR
+    values = {"max_findings": 3, "shown": 2, "message_max_bytes": floor, "timeout_seconds": 2}
+    values["record_max_bytes"] = 2 * floor + gc.REPORT_LINT_RECORD_FIXED
+    assert gc.validate(edited(("report_lint",), values))["report_lint"] == values
 
 
 def test_load_refuses_bad_files(tmp_path: Path) -> None:

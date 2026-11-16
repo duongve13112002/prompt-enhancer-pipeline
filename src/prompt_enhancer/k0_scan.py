@@ -12,6 +12,7 @@ from pathlib import Path
 import stat
 import codecs
 
+from ._os_support import os_supports  # by name: a replaced `os.open` is not a missing primitive (S42-ci3)
 from .k0 import parse_info
 
 _CHUNK_BYTES = 1024 * 1024  # safety-bound: limit the memory used to hash an image
@@ -63,7 +64,7 @@ def _native_open(path, parent_fd, name, directory):
     """Open one component without following its final link; callers hold its parent."""
     if os.name != 'nt':
         if (not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK') or
-                not hasattr(os, 'O_DIRECTORY') or os.open not in os.supports_dir_fd):
+                not hasattr(os, 'O_DIRECTORY') or not os_supports(os.supports_dir_fd, 'open')):
             raise ScanError('safe no-follow directory-relative open is unavailable')
         flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
         if directory:
@@ -110,7 +111,7 @@ def _native_open(path, parent_fd, name, directory):
 def _lstat(path, parent_fd, name):
     if os.name == 'nt':
         return os.lstat(path)
-    if os.stat not in os.supports_dir_fd:
+    if not os_supports(os.supports_dir_fd, 'stat'):
         raise ScanError('safe directory-relative stat is unavailable')
     return os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
 
@@ -140,7 +141,7 @@ def _opened(path, parent_fd, name, directory):
 def _names(path, fd):
     if os.name == 'nt':
         return sorted(os.listdir(path))
-    if os.listdir not in os.supports_fd:
+    if not os_supports(os.supports_fd, 'listdir'):
         raise ScanError('safe directory-handle listing is unavailable')
     return sorted(os.listdir(fd))
 

@@ -152,3 +152,22 @@
 ## Row moved from STATUS 2026-11-16 09:28 (T-006 accepted row, budget)
 
   - **T-006 race follow-up and T-006-int: accepted 2026-11-16 00:1x.** Every file mutation in `src/` goes through the anchored layer `storage/_anchored.py` (decision 123 store lock on release; profile bundles anchored at the project root; `publish_new_bytes` no-replace). Reviews: race retest 3 Sonnet PASS and Gemini PASS; T-006-int Sonnet PASS (31 own junction probes refused) and Gemini PASS. Task files: [T-006-race-followup](archive/T-006-race-followup.md), [T-006-int](archive/T-006-int.md); history in the status archive. P3 follow-ups: the AST guard misses `builtins.open`, `io.FileIO`, numeric `os.open` flags, `.save(path)`, nested pyarrow writers and non-literal `.open(mode)` (no such code today); `_ensure_root` in `_write_bytes` untested; the segment refusal reaches `resolve_profile` as a raw `StorageError`, to map when the profile commands are wired; POSIX `linkat` branches run only on Linux CI. **PM decisions pending user review:** round 3 covers the whole class; a failed `release()` becomes a note or `StorageWarning`; profile folder names failing `check_segment` are refused.
+
+## Lines moved from STATUS 2026-11-16 12:46 (CI window 3 red detail, budget)
+
+      - Ubuntu: pipeline suite `2 failed, 2885 passed`; tool suite `1 failed, 5658 passed`. Windows: cancelled.
+      - All three failures are POSIX-only tests the Windows dev machine never runs:
+        - `test_register_publishes_without_hard_links`: a monkeypatched `os.link` makes the store refuse the platform;
+        - `test_posix_lock_file_refuses_a_symlink_leaf`: refused, but with the containment message;
+        - `test_remove_link_reports_success_only_when_the_entry_is_really_gone`: a directory link's target is gone afterwards, a possible purge safety defect.
+
+## Lines moved from STATUS 2026-11-16 11:4x (T-021 P2 old-scanner history, S42 state-dir queue item and the E12 row, budget)
+
+  - **E12 (dev GPU smoke): done at 21:08, GPU live, smoke only.** Model `unsloth/Qwen3.5-4B-GGUF` rev `e87f1764` (hashes match `models/manifest.json`) on llama.cpp `b11921` CUDA 13.4. All five combinations of docs/dev-machine.md met target on synthetic images: one image, JSON schema, image plus schema, thinking off, two images in order. Peak VRAM 3676 MiB; teardown back to 0 MiB. Limits: no thinking-on control (the template defaults to non-thinking); not more than two images. Evidence: `runs/E12-20261115-210633/summary.md`.
+    - Findings: the server reports `reasoning_format: none`, so any thought text would land in `message.content` (the E10 observer must look there). The server warns that Qwen-VL needs `--image-min-tokens 1024` for grounding. **PM decision pending user review:** the next dev run sets it, since it changes only the dev server.
+
+    - **P2 (report lint) BLOCKED on the user, 2026-11-16 04:05:** fix round 4, the last extra round of decision 121, still FAILS the Codex retest 4 (`.tmp/worktrees/T-021-p2/.tmp/T-021/retest4-p2/review.md`), while Gemini passes it.
+      - The two P2 findings are R4F1, where code or HTML inside an image description in a heading skips report discovery, and R4F2, where paragraph rebuilding and heading scans are quadratic and a watchdog fires near 400 KB.
+      - Each round closed its own findings and the next retest found a new construct; rounds 3 and 4 also found new defects (R3F1 backtracking, R4F2 quadratic).
+      - The old patch stays unintegrated in its worktree.
+    - `test_cli_worker_codex.py` and `test_codex_hooks.py` read the live `.tmp/pm-state` ledger, not a test state dir: in main, 42 tests fail with `git_history_changed`. They pass on a clean HEAD, and they pass in main with `AGENT_WORKFLOW_STATE_DIR` set to an empty folder (2026-11-15 18:4x). The override itself breaks 26 other tests (`test_brief_lint` send, `test_pm_supervisor`, a `test_session_context` test), which expect the default state dir: no single setting runs the whole suite green. Fix: each test gets its own state dir.

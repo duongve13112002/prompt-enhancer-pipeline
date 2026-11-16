@@ -196,6 +196,38 @@ def _heading(value: Any, where: str) -> str:
     return str(value)
 
 
+# safety-bound floors of the turn-end report lint record (cli_worker.report_lint_record, T-021 P2R-F3): a message keeps
+# room for its cut marker `… [cut: N bytes]` (about 40 bytes for any N this machine can hold), and the record holds its
+# fixed fields (turn, total, truncated, keys, an unwritten line or two: under 256 bytes) beside a cut task-file path
+# and a cut error.
+REPORT_LINT_MESSAGE_FLOOR = 64
+REPORT_LINT_RECORD_FIXED = 256
+
+
+def _report_lint(value: Any, where: str) -> dict[str, Any]:
+    cfg: dict[str, Any] = _section(
+        {
+            "max_findings": _positive_int,
+            "shown": _positive_int,
+            "message_max_bytes": _positive_int,
+            "record_max_bytes": _positive_int,
+            "timeout_seconds": _positive_int,
+        }
+    )(value, where)
+    if cfg["message_max_bytes"] < REPORT_LINT_MESSAGE_FLOOR:
+        raise ConfigError(
+            f"{where}.message_max_bytes must be at least {REPORT_LINT_MESSAGE_FLOOR} (room for the cut marker), "
+            f"got {cfg['message_max_bytes']!r}"
+        )
+    floor = 2 * cfg["message_max_bytes"] + REPORT_LINT_RECORD_FIXED
+    if cfg["record_max_bytes"] < floor:
+        raise ConfigError(
+            f"{where}.record_max_bytes must be at least 2 x message_max_bytes + {REPORT_LINT_RECORD_FIXED} = {floor} "
+            f"(the record's path, error and fixed fields), got {cfg['record_max_bytes']!r}"
+        )
+    return cfg
+
+
 def _version(value: Any, where: str) -> int:
     if value != SCHEMA_VERSION or isinstance(value, bool):
         raise ConfigError(f"{where} must be {SCHEMA_VERSION}, got {value!r}")
@@ -298,6 +330,8 @@ SCHEMA = _section(
                 "transcript_tail_bytes": _positive_int,
             }
         ),
+        # The turn-end report lint of cli_worker (T-021 P2): record and warning bounds and the lint's deadline.
+        "report_lint": _report_lint,
     }
 )
 

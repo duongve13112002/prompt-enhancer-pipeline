@@ -10,6 +10,7 @@ No lockfile exists and none may be invented. This file records facts and the pla
 | Hardware is not fixed: GPU count, VRAM, CUDA, torch and Python versions are read on each machine by the environment-report task and recorded here | user statement | user requirement |
 | Dev profile: a small-VRAM GPU; a small quantised model with its projector file served by `llama-server`; the embedder through its Python library | decision 20; [N103](note/N103-unsloth-qwen3-5-4b-gguf-sizes.md), [N055](note/N055-llama-cpp-server.md), [N122](note/N122-llama-cpp-multimodal-status.md) | files verified in notes; GPU and OS support of the installed build to check on the machine |
 | A vLLM release can pin a particular torch version | [N016](note/N016-vllm-torch-pin.md) | carried lead from an earlier project: re-check against the user's server before relying on it |
+| `markdown-it-py==4.2.0` is pinned in the `test` extra (`pyproject.toml`); the report lint `tools/agent-workflow/report_lint.py` reads Markdown with it and refuses another version with exit 2 (`PARSER_VERSION`). Its one dependency installed with it in `.venv` is `mdurl 0.1.2` (observed, not pinned) | decision 127; T-021 phase P2 | pinned; transitive version observed |
 
 ## Planned profiles
 

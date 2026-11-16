@@ -205,3 +205,63 @@ def test_parser_keeps_mismatched_second_line_verbatim(names, description):
     assert parsed['status'] == 'description_mismatch'
     assert parsed['line2'] == description
     assert parsed['descriptions'] == []
+
+
+# S42-ci3 fix round 1 (review P3-4): the POSIX capability checks judge the platform sets by name, as the store does.
+K0_DIR_FD = ('open', 'stat')  # stated here, not read from the module under test
+K0_FD = ('listdir',)
+
+
+class PosixView:
+    """Labelled double: the `os` that `k0_scan` alone sees, posing as POSIX. Its capability sets hold the native
+    functions named; the functions it calls are recording doubles, as any wrapper would be."""
+
+    def __init__(self, dir_fd=K0_DIR_FD, fd=K0_FD):
+        self.name = 'posix'
+        self.O_NOFOLLOW = self.O_NONBLOCK = self.O_DIRECTORY = 0
+        self.supports_dir_fd = {getattr(os, name) for name in dir_fd}
+        self.supports_fd = {getattr(os, name) for name in fd}
+        self.calls = []
+
+    def open(self, name, flags, dir_fd=None):
+        self.calls.append(('open', name, dir_fd))
+        return 7
+
+    def stat(self, name, dir_fd=None, follow_symlinks=True):
+        self.calls.append(('stat', name, dir_fd, follow_symlinks))
+        return 'stat result'
+
+    def listdir(self, fd):
+        self.calls.append(('listdir', fd))
+        return ['b', 'a']
+
+    def __getattr__(self, attribute):
+        return getattr(os, attribute)
+
+
+K0_CALLS = {
+    'open': lambda: k0_scan._native_open('p', 3, 'n', True),
+    'stat': lambda: k0_scan._lstat('p', 3, 'n'),
+    'listdir': lambda: k0_scan._names('p', 3),
+}
+
+
+def test_k0_capability_checks_are_not_fooled_by_replaced_functions(monkeypatch):
+    view = PosixView()
+    monkeypatch.setattr(k0_scan, 'os', view)
+    assert K0_CALLS['open']() == 7
+    assert K0_CALLS['stat']() == 'stat result'
+    assert K0_CALLS['listdir']() == ['a', 'b']
+    assert view.calls == [('open', 'n', 3), ('stat', 'n', 3, False), ('listdir', 3)]
+
+
+@pytest.mark.parametrize('missing', sorted(K0_CALLS))
+def test_k0_capability_checks_refuse_without_their_primitive(monkeypatch, missing):
+    view = PosixView(tuple(n for n in K0_DIR_FD if n != missing), tuple(n for n in K0_FD if n != missing))
+    monkeypatch.setattr(k0_scan, 'os', view)
+    with pytest.raises(k0_scan.ScanError, match='unavailable'):
+        K0_CALLS[missing]()
+    assert view.calls == []
+    for name, call in K0_CALLS.items():  # the other two still pass their own check
+        if name != missing:
+            call()

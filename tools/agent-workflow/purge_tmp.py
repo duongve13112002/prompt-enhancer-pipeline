@@ -20,13 +20,15 @@ is a file) may delete that worktree's own `.tmp/pm-state` (test-slot counters, g
 inside it), after archiving its reports; every other protected name inside it still refuses. An unreadable worker registry refuses every deletion. Never reads file contents of any path under
 a `.secrets` directory: only the entry names of a nested `.secrets` are counted (never printed) to tell the checked-out
 placeholder `README.md` from real credentials. Links (symlinks, junctions) are never followed; deleting one removes
-only the link.
+only the link. Every delete and archive copy acts inside a held chain of real directories from `.tmp` down
+(`_held_way`), so a directory swapped for a link after a check is never followed either.
 """
 
 from __future__ import annotations
 
 import contextlib
 import fnmatch
+import functools
 import json
 import math
 import os
@@ -35,6 +37,7 @@ import shutil
 import stat
 import sys
 import time
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
@@ -105,10 +108,11 @@ def load_cleanup_config(path: Path | None = None) -> CleanupConfig:
     return CleanupConfig(**values)
 
 
-def _is_link(path: str | os.PathLike[str]) -> bool:
-    """Symlink or Windows reparse point (junction); `os.walk` and `Path.is_symlink` miss junctions on Python 3.12."""
+def _is_link(path: str | os.PathLike[str], dir_fd: int | None = None) -> bool:
+    """Symlink or Windows reparse point (junction); `os.walk` and `Path.is_symlink` miss junctions on Python 3.12.
+    With `dir_fd` (POSIX, from `_held_way`), `path` is a name in that directory."""
     try:
-        info = os.lstat(path)
+        info = os.stat(path, dir_fd=dir_fd, follow_symlinks=False)
     except OSError:
         return False
     return stat.S_ISLNK(info.st_mode) or bool(
@@ -184,12 +188,245 @@ def _holds_protected(candidate: Path, protected: set[Path]) -> bool:
     return any(item == resolved or resolved in item.parents for item in protected)
 
 
-def _on_error(func, path, _exc):  # type: ignore[no-untyped-def]
+# protocol-bound Windows constants (winnt.h, fileapi.h, minwinbase.h) of the handle-held acts below
+_WIN_GENERIC_READ = 0x80000000
+_WIN_LIST_DIRECTORY = 0x0001  # FILE_LIST_DIRECTORY, a data access: the handle's share mode binds every other open
+_WIN_READ_ATTRIBUTES = 0x0080
+_WIN_WRITE_ATTRIBUTES = 0x0100
+_WIN_SYNCHRONIZE = 0x00100000
+_WIN_SHARE_READ_WRITE = 0x1 | 0x2  # no FILE_SHARE_DELETE: a held directory cannot be renamed or deleted
+_WIN_SHARE_ALL = 0x1 | 0x2 | 0x4
+_WIN_OPEN_EXISTING = 3
+_WIN_OPEN_ITSELF = 0x02000000 | 0x00200000  # FILE_FLAG_BACKUP_SEMANTICS (directories) | FILE_FLAG_OPEN_REPARSE_POINT
+_WIN_FILE_BASIC_INFO = 0  # FILE_INFO_BY_HANDLE_CLASS FileBasicInfo
+_WIN_READONLY, _WIN_DIRECTORY, _WIN_NORMAL, _WIN_REPARSE_POINT = 0x1, 0x10, 0x80, 0x400
+
+
+class _Win:
+    """Private kernel32 bindings, so declared argument types never leak into the shared `ctypes.windll`."""
+
+    def __init__(self) -> None:
+        import ctypes
+
+        self.ctypes = ctypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = ctypes.c_void_p
+        self.create = kernel.CreateFileW
+        uint = ctypes.c_uint32
+        self.create.argtypes = [ctypes.c_wchar_p, uint, uint, ctypes.c_void_p, uint, uint, handle]
+        self.create.restype = handle
+        self.get_info = kernel.GetFileInformationByHandleEx
+        self.set_info = kernel.SetFileInformationByHandle
+        for function in (self.get_info, self.set_info):
+            function.argtypes = [handle, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+            function.restype = ctypes.c_int
+        self.close = kernel.CloseHandle
+        self.close.argtypes = [handle]
+        self.close.restype = ctypes.c_int
+        self.invalid = ctypes.c_void_p(-1).value
+
+        class BasicInfo(ctypes.Structure):  # FILE_BASIC_INFO; a zero time is left unchanged when it is set
+            _fields_ = [
+                ("CreationTime", ctypes.c_int64),
+                ("LastAccessTime", ctypes.c_int64),
+                ("LastWriteTime", ctypes.c_int64),
+                ("ChangeTime", ctypes.c_int64),
+                ("FileAttributes", ctypes.c_uint32),
+            ]
+
+        self.BasicInfo = BasicInfo
+
+    def open(self, path: str, access: int, share: int) -> tuple[int, int] | None:
+        """(handle, attributes) of `path` itself, never a link's target; None when it cannot be opened."""
+        access |= _WIN_READ_ATTRIBUTES | _WIN_SYNCHRONIZE
+        handle = self.create(path, access, share, None, _WIN_OPEN_EXISTING, _WIN_OPEN_ITSELF, None)
+        if handle is None or handle == self.invalid:
+            return None
+        info = self.BasicInfo()
+        if not self.get_info(handle, _WIN_FILE_BASIC_INFO, self.ctypes.byref(info), self.ctypes.sizeof(info)):
+            self.close(handle)
+            return None
+        return handle, info.FileAttributes
+
+    def clear_read_only(self, handle: int, attributes: int) -> bool:
+        info = self.BasicInfo(0, 0, 0, 0, (attributes & ~_WIN_READONLY) or _WIN_NORMAL)  # 0 would mean "unchanged"
+        return bool(self.set_info(handle, _WIN_FILE_BASIC_INFO, self.ctypes.byref(info), self.ctypes.sizeof(info)))
+
+
+_WIN: _Win | None = None
+
+
+def _win() -> _Win:
+    global _WIN
+    if _WIN is None:
+        _WIN = _Win()
+    return _WIN
+
+
+def _hold_directory(path: str) -> int | None:
+    """Windows: a handle on the directory `path` itself, verified free of the reparse-point attribute (no link or
+    junction), that nobody can rename or delete while it is held; None for a link, a non-directory or a failed open."""
+    opened = _win().open(path, _WIN_LIST_DIRECTORY, _WIN_SHARE_READ_WRITE)
+    if opened is None:
+        return None
+    handle, attributes = opened
+    if attributes & _WIN_REPARSE_POINT or not attributes & _WIN_DIRECTORY:
+        _win().close(handle)
+        return None
+    return handle
+
+
+def _clear_read_only(path: str) -> bool:
+    """Windows: clear the read-only attribute on a handle to the entry `path` itself (a link or junction is opened as
+    itself and left alone, so nothing behind it changes); True only when the attribute was set and is now cleared."""
+    opened = _win().open(path, _WIN_WRITE_ATTRIBUTES, _WIN_SHARE_ALL)
+    if opened is None:
+        return False
+    handle, attributes = opened
     try:
-        os.chmod(path, stat.S_IWRITE)
+        if attributes & _WIN_REPARSE_POINT or not attributes & _WIN_READONLY:
+            return False
+        return _win().clear_read_only(handle, attributes)
+    finally:
+        _win().close(handle)
+
+
+class _Way(NamedTuple):
+    """How an act inside `_held_way` names its entry: POSIX a name relative to the held descriptor `dir_fd`;
+    Windows the full path (`dir_fd` None), every directory on it being held."""
+
+    name: str
+    dir_fd: int | None
+
+
+@contextlib.contextmanager
+def _held_way(root: str, path: str, *, create: bool = False) -> Iterator[_Way | None]:
+    """The directories from `root` down to the parent of `path`, each a real directory (never a link or junction),
+    held until the act on `path` ends; None when one is a link, not a directory or missing, or when `path` is not
+    strictly inside `root`. With `create`, a missing directory below `root` is made on the way (mkdir never follows
+    a final link).
+
+    POSIX: descriptors opened with O_DIRECTORY | O_NOFOLLOW relative to the previous one; the act then uses
+    `dir_fd`, so a directory swapped for a link later is never followed. Windows: handles on each directory itself
+    (`_hold_directory`), held without FILE_SHARE_DELETE, so none of them can be renamed, deleted or replaced by a
+    link while the act runs by path (S42-ci3 fix round 1, review P2-1)."""
+    try:
+        relative = os.path.relpath(path, root)
+    except ValueError:  # another drive
+        relative = os.pardir
+    parts = relative.split(os.sep)
+    if relative == os.curdir or parts[0] == os.pardir:
+        yield None
+        return
+    held: list[int] = []
+    try:
+        yield (_hold_nt if os.name == "nt" else _hold_posix)(root, parts, create, held)
+    finally:
+        for item in reversed(held):
+            (_win().close if os.name == "nt" else os.close)(item)
+
+
+def _hold_nt(root: str, parts: list[str], create: bool, held: list[int]) -> _Way | None:
+    directory = root
+    for index in range(len(parts)):
+        if index:
+            directory = os.path.join(directory, parts[index - 1])
+            if create:
+                with contextlib.suppress(OSError):  # an existing name, a link included, stays as it is
+                    os.mkdir(directory)
+        handle = _hold_directory(directory)
+        if handle is None:
+            return None
+        held.append(handle)
+    return _Way(os.path.join(directory, parts[-1]), None)
+
+
+def _hold_posix(root: str, parts: list[str], create: bool, held: list[int]) -> _Way | None:
+    if not (hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY") and shutil.rmtree.avoids_symlink_attacks):
+        return None  # no directory-relative no-follow primitives here: refuse rather than act by name
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    try:
+        held.append(os.open(root, flags))
+        for part in parts[:-1]:
+            if create:
+                with contextlib.suppress(FileExistsError):
+                    os.mkdir(part, dir_fd=held[-1])
+            held.append(os.open(part, flags, dir_fd=held[-1]))
+    except (OSError, NotImplementedError):  # ELOOP or ENOTDIR: a link or not a directory on the way; ENOENT: gone
+        return None
+    return _Way(parts[-1], held[-1])
+
+
+def _on_error(func, path, _exc, *, root):  # type: ignore[no-untyped-def]
+    """Error hook of a tree removal (`shutil.rmtree` on POSIX, `_remove_tree_nt` on Windows): report, and on Windows
+    retry a removal once after clearing a read-only attribute. Nothing is printed after a successful retry.
+
+    POSIX only reports: the entry's own mode never blocks unlink or rmdir there (the parent directory's does), and a
+    retry by name could follow a directory swapped for a link (review P2-1). Windows retries `os.unlink`,
+    `os.remove` or `os.rmdir` only inside `_held_way` from `root`, so no directory from `root` down is or can become
+    a link meanwhile, and only after `_clear_read_only` cleared the attribute on the entry's own handle. rmtree's
+    other reports (`os.open`, `os.scandir`, `os.path.islink`, `os.lstat`) remove nothing and are only reported."""
+    if os.name == "nt" and func in (os.unlink, os.remove, os.rmdir):
+        with _held_way(root, path) as way:
+            if way is not None and _clear_read_only(way.name):
+                try:
+                    func(way.name)
+                except OSError as error:
+                    print(f"  could not remove {path}: {error.__class__.__name__}")
+                return
+    print(f"  could not remove {path}: {getattr(func, '__name__', func)} failed")
+
+
+def _remove_entry(func, path: str, root: str) -> None:  # type: ignore[no-untyped-def]
+    try:
         func(path)
     except OSError as error:
-        print(f"  could not remove {path}: {error.__class__.__name__}")
+        _on_error(func, path, error, root=root)
+
+
+def _remove_tree_nt(top: str, root: str) -> None:
+    """Windows tree removal that never leaves the tree. `shutil.rmtree` there walks by path string
+    (`_rmtree_unsafe`; `rmtree.avoids_symlink_attacks` is False): a directory `os.walk` listed and queued, then swapped
+    for a junction before its own scan, is entered, and the files behind it are unlinked. Here every directory from
+    `top` down to the one being emptied stays held (`_hold_directory`) while the names inside it are acted on; the
+    caller holds those from `root` down to `top`. A link entry is removed as a link."""
+    held: list[tuple[str, int, Iterator[os.DirEntry[str]]]] = []
+
+    def enter(path: str) -> None:
+        handle = _hold_directory(path)
+        if handle is None:
+            print(f"  could not remove {path}: a link or not a directory now")
+            return
+        try:
+            with os.scandir(path) as listing:
+                entries = list(listing)
+        except OSError as error:
+            _on_error(os.scandir, path, error, root=root)
+            entries = []
+        except BaseException:
+            _win().close(handle)
+            raise
+        held.append((path, handle, iter(entries)))
+
+    try:
+        enter(top)
+        while held:
+            path, handle, pending = held[-1]
+            entry = next(pending, None)
+            if entry is None:
+                held.pop()
+                _win().close(handle)
+                _remove_entry(os.rmdir, path, root)
+            elif _is_link(entry.path):
+                if not _remove_link(entry.path):
+                    print(f"  could not remove link {entry.path}")
+            elif entry.is_dir(follow_symlinks=False):
+                enter(entry.path)
+            else:
+                _remove_entry(os.unlink, entry.path, root)
+    finally:
+        for _path, handle, _pending in held:
+            _win().close(handle)
 
 
 def _size(path: Path) -> int:
@@ -463,29 +700,61 @@ class Gate:
         return _remove(os.path.abspath(target))
 
 
-def _remove_link(path: str) -> bool:
-    """Remove a link itself (never its target); True only when it is really gone (Windows junctions need rmdir)."""
+def _lexists(name: str, dir_fd: int | None) -> bool:
+    """`os.path.lexists` for a name in a held directory (`_Way`)."""
+    try:
+        os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except OSError:
+        return False
+    return True
+
+
+def _remove_link(path: str, dir_fd: int | None = None) -> bool:
+    """Remove a link itself (never its target); True only when it is really gone (Windows junctions need rmdir).
+    With `dir_fd` (POSIX), `path` is a name in that held directory."""
     if os.name == "nt":
         with contextlib.suppress(OSError):
             os.rmdir(path)
     with contextlib.suppress(OSError):
-        os.unlink(path)
-    return not os.path.lexists(path)
+        os.unlink(path, dir_fd=dir_fd)
+    return not _lexists(path, dir_fd)
 
 
 def _remove(path: str) -> bool:
-    """Delete a link, tree or file; True only when nothing is left."""
-    if _is_link(path):
-        return _remove_link(path)
-    if os.path.isdir(path):
-        shutil.rmtree(path, onerror=_on_error)
-    else:
-        with contextlib.suppress(OSError):
-            os.remove(path)
-    return not os.path.lexists(path)
+    """Delete a link, tree or file below `.tmp`; True only when nothing is left. Every act runs inside `_held_way`
+    from `.tmp`, so a directory on the way swapped for a link after the Gate's check is never followed (S42-ci3 fix
+    round 1). A link is removed as a link; on Windows a read-only file is removed after `_on_error` cleared it."""
+    root = str(PROJECT / ".tmp")
+    with _held_way(root, path) as way:
+        if way is None:
+            if not os.path.lexists(path):
+                return True
+            print(f"  could not remove {path}: a link, junction or non-directory on its way")
+            return False
+        if _is_link(way.name, way.dir_fd):
+            return _remove_link(way.name, way.dir_fd)
+        try:
+            is_dir = stat.S_ISDIR(os.stat(way.name, dir_fd=way.dir_fd, follow_symlinks=False).st_mode)
+        except OSError:
+            return not _lexists(way.name, way.dir_fd)
+        if is_dir and os.name == "nt":
+            _remove_tree_nt(way.name, root)
+        elif is_dir:  # fd-based rmtree (`_hold_posix` refuses without it), anchored at the held parent
+            shutil.rmtree(way.name, dir_fd=way.dir_fd, onerror=functools.partial(_on_error, root=root))
+        else:
+            try:
+                os.remove(way.name, dir_fd=way.dir_fd)
+            except OSError as error:
+                _on_error(os.remove, way.name, error, root=root)
+        return not _lexists(way.name, way.dir_fd)
+
+
+class _NotArchived(Exception):
+    """A report could not be archived without following a link: its worktree is not deleted."""
 
 
 def _archive_reports(worktree: Path) -> int:
+    """Copy the small reports under `<worktree>/.tmp` into `pm-archive/<worktree name>`; raises `_NotArchived`."""
     tmp = worktree / ".tmp"
     count = 0
     if not tmp.is_dir() or _is_link(tmp):
@@ -502,18 +771,75 @@ def _archive_reports(worktree: Path) -> int:
         ]
         for name in files:
             source = Path(root) / name
-            if source.suffix.lower() not in REPORT_SUFFIXES or _is_link(source):
-                continue
-            try:
-                if source.stat().st_size > MAX_REPORT_BYTES:
-                    continue
-            except OSError:
-                continue
-            destination = target_root / source.relative_to(tmp)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
-            count += 1
+            if source.suffix.lower() in REPORT_SUFFIXES:
+                count += _archive_copy(str(source), str(target_root / source.relative_to(tmp)))
     return count
+
+
+def _open_report(way: _Way) -> int | None:
+    """A read descriptor on the report itself, never a link's target; None for a link, a directory or a gone entry."""
+    if os.name == "nt":
+        opened = _win().open(way.name, _WIN_GENERIC_READ, _WIN_SHARE_ALL)
+        if opened is None:
+            return None
+        handle, attributes = opened
+        if attributes & (_WIN_REPARSE_POINT | _WIN_DIRECTORY):
+            _win().close(handle)
+            return None
+        import msvcrt
+
+        try:
+            return msvcrt.open_osfhandle(handle, os.O_RDONLY)  # the descriptor now owns the handle
+        except BaseException:
+            _win().close(handle)
+            raise
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)  # NONBLOCK: a FIFO never hangs
+    try:
+        return os.open(way.name, flags, dir_fd=way.dir_fd)
+    except OSError:  # ELOOP: a link, never archived; ENOENT: gone
+        return None
+
+
+def _archive_copy(source: str, destination: str) -> bool:
+    """Copy one report into the archive; False when it is skipped (a link, not a regular file, too large, gone).
+
+    Both ways are held from `.tmp` (`_held_way`), so neither the read nor the write follows a directory swapped for
+    a link; a link on either way raises `_NotArchived`. The source is opened without following a link. The copy is
+    written to a new temporary name (an exclusive create never opens an existing name) and renamed over
+    `destination`, which replaces a link there as a name instead of writing through it (S42-ci3 fix round 1), and
+    replaces an older read-only copy too (fix round 2, review P3-3)."""
+    root = str(PROJECT / ".tmp")
+    with _held_way(root, source) as way_in, _held_way(root, destination, create=True) as way_out:
+        if way_in is None or way_out is None:
+            raise _NotArchived(f"a link, junction or non-directory on the way of {source} or {destination}")
+        reader = _open_report(way_in)
+        if reader is None:
+            return False
+        with open(reader, "rb") as report:
+            info = os.fstat(report.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_REPORT_BYTES:
+                return False
+            folder, name = os.path.split(way_out.name)
+            temporary = os.path.join(folder, f".{name}.{uuid.uuid4().hex}.tmp")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
+            try:
+                with open(os.open(temporary, flags, 0o666, dir_fd=way_out.dir_fd), "wb") as copy:
+                    shutil.copyfileobj(report, copy)
+                os.utime(temporary, ns=(info.st_atime_ns, info.st_mtime_ns), dir_fd=way_out.dir_fd)
+                try:
+                    os.replace(temporary, way_out.name, src_dir_fd=way_out.dir_fd, dst_dir_fd=way_out.dir_fd)
+                except PermissionError:
+                    # Windows: MoveFileExW refuses to replace a read-only file, which an older run's archive holds
+                    # (`copy2` kept the source's mode). Clear it on that file's own handle (a link or junction is
+                    # left alone, so nothing behind one changes) and replace once more, still inside the held way.
+                    if os.name != "nt" or not _clear_read_only(way_out.name):
+                        raise
+                    os.replace(temporary, way_out.name)
+            except OSError as error:  # for example a directory or junction at `destination`
+                with contextlib.suppress(OSError):
+                    os.unlink(temporary, dir_fd=way_out.dir_fd)
+                raise _NotArchived(f"{destination}: {error!r}") from None
+    return True
 
 
 def _refuse_protected_parent(parent: Path) -> None:
@@ -548,7 +874,12 @@ def archive_remove(paths: list[str], dry_run: bool = False) -> int:
                 f"{worktree.name}: would archive reports and remove, ~{before / 2**30:.2f} GB (dry run)"
             )
             continue
-        archived = 0 if is_link else _archive_reports(worktree)
+        try:
+            archived = 0 if is_link else _archive_reports(worktree)
+        except _NotArchived as error:  # never delete what could not be archived
+            print(f"{worktree.name}: refused, report not archived: {error}")
+            refused += 1
+            continue
         # Same removal path as the purge commands: a junction is removed as a link, never followed.
         if gate.remove(worktree):
             state = "removed (link only)" if is_link else "removed"

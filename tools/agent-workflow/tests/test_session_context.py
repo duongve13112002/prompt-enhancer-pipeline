@@ -30,6 +30,8 @@ def hook(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr(module, "ROOT", tmp_path)
     monkeypatch.setattr(module, "STATE", state)
+    # The purge reader the hook loads resolves the state directory at call time: point it at the same scratch state.
+    monkeypatch.setenv("AGENT_WORKFLOW_STATE_DIR", str(state))
     monkeypatch.setattr(module, "BUDGETS", budgets)
     config = tmp_path / "memory_hooks.json"
     config.write_text(module.CONFIG.read_text(encoding="utf-8"), encoding="utf-8")

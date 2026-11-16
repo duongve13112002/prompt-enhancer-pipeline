@@ -66,7 +66,10 @@ def start(
         python,
         *args,
     ]
-    env = {**os.environ, "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"}
+    # The script keeps its state under `<tree>/.tmp/pm-state` (its default rule) and its copy of cli_worker.py must
+    # read the same registry: the per-test override of the suite would point that child elsewhere, so drop it.
+    env = {k: v for k, v in os.environ.items() if k != "AGENT_WORKFLOW_STATE_DIR"}
+    env.update({"PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"})
     return subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", env=env
     )

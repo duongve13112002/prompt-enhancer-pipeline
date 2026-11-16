@@ -317,7 +317,9 @@ def test_session_start_hook_with_the_real_event_shape(tmp_path: Path) -> None:
         ctx = json.loads(out)["hookSpecificOutput"]
         assert ctx["hookEventName"] == "SessionStart"
         assert ctx["additionalContext"].startswith("[tool-health]")
-    directory = th.state_dir(CFG)
+    # A scratch root, never the project's live health directory: session_start only probes the shell and writes no
+    # state (hooks/tool_health.py session_start), so the child leaves no flag to find.
+    directory = th.state_dir(CFG, tmp_path)
     assert th.flagged(directory, event["session_id"], "Bash") is None
 
 

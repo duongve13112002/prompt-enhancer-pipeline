@@ -643,6 +643,8 @@ def test_property_any_footer_edit_is_caught(index: int, char: str) -> None:
 def cw(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     module = load(TOOLS / "cli_worker.py", "cli_worker_lint_gate")
     monkeypatch.setattr(module, "ROOT", tmp_path)
+    # These tests read the waiver log at the default rule `<ROOT>/.tmp/pm-state`, so the per-test override is lifted.
+    monkeypatch.delenv("AGENT_WORKFLOW_STATE_DIR", raising=False)
     # The `send` lookup of the brief-order marker reads this registry, never the live one.
     monkeypatch.setattr(module, "REGISTRY", tmp_path / "registry" / "cli-workers.json")
     (tmp_path / "tasks").mkdir()

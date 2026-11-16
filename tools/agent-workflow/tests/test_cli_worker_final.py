@@ -575,6 +575,7 @@ def test_containment_that_cannot_be_set_up_refuses_the_turn(repo: Path, monkeypa
 
 def test_a_crashing_brief_lint_refuses_the_launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cw, "ROOT", tmp_path)
+    monkeypatch.delenv("AGENT_WORKFLOW_STATE_DIR", raising=False)  # the default rule of the scratch root is checked
 
     def boom(*args: object, **kwargs: object) -> None:  # test double: the linter cannot be loaded
         raise RuntimeError("x")

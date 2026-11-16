@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import hypothesis
@@ -28,7 +29,53 @@ settings.register_profile("ci", derandomize=True, database=None, deadline=None)
 settings.register_profile("explore", max_examples=2000, database=None, deadline=None)
 settings.load_profile("ci")
 
-GITATTRIBUTES = "* text=auto\n*.md text eol=lf\n*.py text eol=lf\n*.txt text eol=lf\n*.png binary\n"
+import live_state_guard as lsg  # noqa: E402 - sits beside this file; needs the sys.path entry pytest adds
+
+# Live-state guard (decision 72): no test reads or writes the live PM state directory. Installed at import, before any
+# test module is collected, so import-time reads are covered too.
+lsg.install()
+STATE_ENV = lsg.STATE_ENV
+_LIVE_BEFORE: dict[str, dict[str, tuple[int, int, int]]] = {}
+_LIVE_CHANGES: list[str] = []
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    _LIVE_BEFORE.update(lsg.snapshot_all())
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    after = lsg.snapshot_all()
+    for root, before in _LIVE_BEFORE.items():
+        _LIVE_CHANGES.extend(f"{root}: {line}" for line in lsg.changes(before, after.get(root, {})))
+
+
+def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
+    # Metadata only (a snapshot sees writes by any process, never reads): other sessions may change the live
+    # directory legitimately, so a change is reported, not failed; the in-process guard fails the test itself.
+    if _LIVE_CHANGES:
+        terminalreporter.section("live PM state metadata changed during the run (writer unknown)")
+        for line in _LIVE_CHANGES[:20]:
+            terminalreporter.line(line)
+    else:
+        terminalreporter.line("live PM state: no metadata change during the run (test-slots excluded)")
+
+
+@pytest.fixture(autouse=True)
+def pm_state_dir(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Path]:
+    """Every test gets its own empty PM state directory through AGENT_WORKFLOW_STATE_DIR, so an implicit state
+    default can never reach the live one and every child process inherits the same routing. A test that checks the
+    default rule (`<root>/.tmp/pm-state` of a scratch root) calls `monkeypatch.delenv(STATE_ENV)` itself. The
+    teardown fails the test when the access guard saw the live directory, even if the error was swallowed."""
+    state = tmp_path_factory.mktemp("pm-state")
+    monkeypatch.setenv(STATE_ENV, str(state))
+    seen = len(lsg.violations())
+    yield state
+    assert lsg.violations()[seen:] == [], "test touched the live PM state directory"
+
+
+GITATTRIBUTES ="* text=auto\n*.md text eol=lf\n*.py text eol=lf\n*.txt text eol=lf\n*.png binary\n"
 
 
 def git(repo: Path, *args: str) -> str:

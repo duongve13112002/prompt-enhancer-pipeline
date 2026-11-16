@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import errno
 import importlib.util
 import json
 import os
 import shutil
+import stat
 import subprocess
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -161,7 +164,10 @@ def test_purge_older_rejects_a_non_numeric_age(pt: ModuleType) -> None:
 
 def junction(link: Path, target: Path) -> None:
     subprocess.run(
-        ["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True
+        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+        check=True,
+        capture_output=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,  # footer rule 7: no console window on the user's screen
     )
 
 
@@ -481,8 +487,8 @@ def test_a_link_that_cannot_be_removed_is_reported_as_kept(
     tmp = pt.PROJECT / ".tmp"
     (tmp / "pytest-x").mkdir()
     with (
-        mock.patch.object(pt, "_is_link", lambda path: Path(path).name == "pytest-x"),
-        mock.patch.object(pt, "_remove_link", lambda path: False),
+        mock.patch.object(pt, "_is_link", lambda path, dir_fd=None: Path(path).name == "pytest-x"),
+        mock.patch.object(pt, "_remove_link", lambda path, dir_fd=None: False),
     ):
         assert pt.purge_children(str(tmp), ["pytest-*"]) == 1
     assert "kept pytest-x (link)" in capsys.readouterr().out
@@ -565,26 +571,440 @@ def test_property_no_target_set_deletes_a_protected_or_busy_path(
     assert all(f.exists() for f in protected_files)
 
 
+def dir_link(link: Path, target: Path) -> None:
+    """A directory link without privilege: a junction on Windows, a symlink on POSIX."""
+    if os.name == "nt":
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            check=True,
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+def linked_target(pt: ModuleType, link: Path) -> tuple[Path, int]:
+    """A directory with one file outside the purged tree, linked from `link`; returns it and its mode."""
+    target = pt.PROJECT / "outside"
+    target.mkdir()
+    (target / "keep.txt").write_text("k", encoding="utf-8")
+    dir_link(link, target)
+    return target, os.stat(target).st_mode
+
+
+def assert_target_kept(target: Path, mode: int) -> None:
+    assert (target / "keep.txt").read_text(encoding="utf-8") == "k"
+    assert os.stat(target).st_mode == mode  # not even its mode is changed through the link
+
+
 def test_remove_link_reports_success_only_when_the_entry_is_really_gone(
     pt: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # S42-ci3 L3: the refusal doubles live in their own context. `monkeypatch.undo()` also undid the fixture's
+    # PROJECT patch, so the old assertion looked for the target below the real checkout, where it never was.
     stuck = pt.PROJECT / ".tmp" / "stuck"
-    if os.name == "nt":
-        stuck.mkdir()  # stands in for a junction: the Windows branch removes it with rmdir
-    else:
-        # POSIX removes a link with unlink only and never rmdirs a real directory, so the entry is a directory link
-        (pt.PROJECT / ".tmp" / "stuck-target").mkdir()
-        stuck.symlink_to(pt.PROJECT / ".tmp" / "stuck-target", target_is_directory=True)
+    target, mode = linked_target(pt, stuck)
 
-    def refuse(_path: str) -> None:
+    def refuse(*_args: object, **_kwargs: object) -> None:
         raise PermissionError("held open")
 
-    monkeypatch.setattr(pt.os, "unlink", refuse)
-    monkeypatch.setattr(pt.os, "rmdir", refuse)
-    assert pt._remove_link(str(stuck)) is False and stuck.exists()
-    monkeypatch.undo()
+    with monkeypatch.context() as patched:
+        patched.setattr(pt.os, "unlink", refuse)
+        patched.setattr(pt.os, "rmdir", refuse)
+        assert pt._remove_link(str(stuck)) is False and os.path.lexists(stuck)
     assert pt._remove_link(str(stuck)) is True and not os.path.lexists(stuck)
-    assert os.name == "nt" or (pt.PROJECT / ".tmp" / "stuck-target").is_dir()  # the link's target is kept
+    assert_target_kept(target, mode)
+
+
+@pytest.mark.parametrize("path", ["link", "tree", "tree-refused"])
+def test_no_removal_path_reaches_a_link_target(
+    pt: ModuleType, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """Every way `_remove` meets a link keeps its target and the target's mode, on POSIX and Windows (S42-ci3):
+    the link itself, a tree holding it (rmtree), and a tree whose link entry refuses removal (rmtree's error hook,
+    which used to chmod through the link on POSIX)."""
+    tree = pt.PROJECT / ".tmp" / "tree"
+    tree.mkdir()
+    (tree / "file.txt").write_text("x", encoding="utf-8")
+    link = tree / "the-link"
+    target, mode = linked_target(pt, link)
+    chmodded: list[tuple[str, bool]] = []
+    real_chmod = os.chmod
+
+    def recording_chmod(entry: str, *args: object, **kwargs: object) -> None:  # test double: records, then acts
+        chmodded.append((os.fspath(entry), pt._is_link(entry)))
+        real_chmod(entry, *args, **kwargs)
+
+    with monkeypatch.context() as patched:  # its own context: undoing it keeps the fixture's PROJECT patch
+        patched.setattr(pt.os, "chmod", recording_chmod)
+        if path == "tree-refused":
+            for name in ("unlink", "rmdir"):
+
+                def refuse_the_link(entry: str, *args: object, _real=getattr(os, name), **kwargs: object) -> None:
+                    if os.path.basename(os.fspath(entry)) == "the-link":  # test double: the link entry is held
+                        raise PermissionError("held open")
+                    _real(entry, *args, **kwargs)
+
+                patched.setattr(pt.os, name, refuse_the_link)
+        gone = pt._remove(str(link if path == "link" else tree))
+    assert gone is (path != "tree-refused")
+    assert os.path.lexists(link) is (path == "tree-refused")
+    assert not [entry for entry, is_link in chmodded if is_link]
+    assert_target_kept(target, mode)
+
+
+@pytest.mark.parametrize("func", [os.open, os.scandir, os.path.islink, os.lstat])
+def test_rmtree_error_hook_never_acts_through_a_link_or_crashes(
+    pt: ModuleType, monkeypatch: pytest.MonkeyPatch, func: object
+) -> None:
+    """rmtree reports `os.open` and `os.path.islink` ("Cannot call rmtree on a symbolic link") for a directory link
+    swapped in during the walk: the hook neither chmods through it nor calls `os.open(path)` (TypeError)."""
+    link = pt.PROJECT / ".tmp" / "swapped"
+    target, mode = linked_target(pt, link)
+    pt._on_error(func, str(link), (OSError, OSError("reported"), None), root=str(pt.PROJECT / ".tmp"))
+    assert os.path.lexists(link)
+    assert_target_kept(target, mode)
+
+
+# --- S42-ci3 fix round 1: read-only entries, and directories swapped for links after a check -------------------------
+
+
+def read_only(path: Path) -> None:
+    """Mode 0o444 on POSIX; on Windows `os.chmod` without S_IWRITE sets the read-only attribute."""
+    os.chmod(path, 0o444)
+
+
+def test_a_tree_and_a_file_holding_read_only_entries_are_removed_silently(
+    pt: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review P2-2 and P3-2: the hook exists to clear the Windows read-only attribute. A read-only file at depth, a
+    read-only directory and a read-only top-level file all go, on both platforms (POSIX needs no chmod: the parent's
+    mode governs unlink), and a successful retry prints nothing."""
+    tree = pt.PROJECT / ".tmp" / "tree"
+    (tree / "sub").mkdir(parents=True)
+    for name in ("ro.txt", "sub/ro.txt"):
+        (tree / name).write_text("x", encoding="utf-8")
+        read_only(tree / name)
+    if os.name == "nt":
+        read_only(tree / "sub")  # the read-only attribute on a directory blocks RemoveDirectoryW
+    single = pt.PROJECT / ".tmp" / "single.txt"
+    single.write_text("x", encoding="utf-8")
+    read_only(single)
+    assert pt._remove(str(tree)) is True and not tree.exists()
+    assert pt._remove(str(single)) is True and not single.exists()
+    assert capsys.readouterr().out == ""
+
+
+def test_the_hook_never_retries_through_a_directory_swapped_for_a_link(
+    pt: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review P2-1, probe2 as a test: rmtree reported `os.unlink` failing for `tree/X/victim.txt`, and `X` has since
+    become a link to a directory outside the tree. The hook must not clear the victim's read-only attribute or
+    delete it (the first-round hook did both on Windows, and unlinked it on POSIX)."""
+    tmp = pt.PROJECT / ".tmp"
+    outside = pt.PROJECT / "outside"
+    outside.mkdir()
+    victim = outside / "victim.txt"
+    victim.write_text("precious", encoding="utf-8")
+    read_only(victim)
+    mode = os.stat(victim).st_mode
+    (tmp / "tree").mkdir()
+    dir_link(tmp / "tree" / "X", outside)
+    reported = str(tmp / "tree" / "X" / "victim.txt")
+    pt._on_error(os.unlink, reported, (OSError, OSError("EACCES"), None), root=str(tmp))
+    assert victim.read_text(encoding="utf-8") == "precious" and os.stat(victim).st_mode == mode
+    assert f"could not remove {reported}" in capsys.readouterr().out
+    os.chmod(victim, 0o644)  # cleanup of the test's own file
+
+
+def test_a_directory_swapped_for_a_link_above_the_target_is_never_followed(
+    pt: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Class audit A3 to A5: between the Gate's check and the delete, a directory above the target becomes a link.
+    The delete must refuse instead of removing the tree, file or link of the same name behind it."""
+    tmp = pt.PROJECT / ".tmp"
+    outside = pt.PROJECT / "outside"
+    (outside / "tree").mkdir(parents=True)
+    (outside / "tree" / "keep.txt").write_text("k", encoding="utf-8")
+    (outside / "file.txt").write_text("f", encoding="utf-8")
+    dir_link(tmp / "hop", outside)
+    for name in ("tree", "file.txt"):
+        assert pt._remove(str(tmp / "hop" / name)) is False
+    assert (outside / "tree" / "keep.txt").read_text(encoding="utf-8") == "k"
+    assert (outside / "file.txt").read_text(encoding="utf-8") == "f"
+    assert capsys.readouterr().out.count("on its way") == 2
+
+
+class Listing:
+    """Labelled double of an `os.scandir` iterator: a list already read, usable as `os.walk` and `_remove_tree_nt`
+    use it (context manager, iterator)."""
+
+    def __init__(self, entries: list[os.DirEntry[str]]) -> None:
+        self.entries = iter(entries)
+
+    def __enter__(self) -> Listing:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def __iter__(self) -> Listing:
+        return self
+
+    def __next__(self) -> os.DirEntry[str]:
+        return next(self.entries)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="NTFS junctions; POSIX rmtree lists by descriptor")
+def test_a_directory_swapped_for_a_junction_during_the_walk_is_never_entered(
+    pt: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Class audit A2, Windows regression: `shutil.rmtree` (`_rmtree_unsafe`, `os.walk` by path) listed `tree`, then
+    `tree/X` was swapped for a junction to an outside directory before its own scan; rmtree entered it and unlinked
+    the files behind it. The held walk removes the junction only."""
+    tmp = pt.PROJECT / ".tmp"
+    outside = pt.PROJECT / "outside"
+    outside.mkdir()
+    (outside / "victim.txt").write_text("precious", encoding="utf-8")
+    tree = tmp / "tree"
+    (tree / "X").mkdir(parents=True)
+    (tree / "X" / "own.txt").write_text("x", encoding="utf-8")
+    real_scandir = os.scandir
+    swapped: list[bool] = []
+
+    def scandir_then_swap(path: object = ".") -> Listing:  # labelled double: the swap happens right after listing
+        with real_scandir(path) as listing:
+            entries = list(listing)
+        if os.fspath(path) == str(tree) and not swapped:
+            os.rename(tree / "X", tmp / "X-moved")
+            junction(tree / "X", outside)
+            swapped.append(True)
+        return Listing(entries)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(pt.os, "scandir", scandir_then_swap)
+        assert pt._remove(str(tree)) is True
+    assert swapped and (outside / "victim.txt").read_text(encoding="utf-8") == "precious"
+    assert (tmp / "X-moved" / "own.txt").exists()  # moved away by the double, not by the purge
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows share modes; POSIX acts by dir_fd instead")
+def test_a_held_way_cannot_be_renamed_or_replaced_while_the_act_runs(pt: ModuleType) -> None:
+    """The Windows half of `_held_way`: every directory from the root down is held without FILE_SHARE_DELETE, so it
+    cannot be renamed (the first step of swapping it for a junction) until the way is released; a junction on the
+    way is refused."""
+    tmp = pt.PROJECT / ".tmp"
+    (tmp / "a" / "b").mkdir(parents=True)
+    with pt._held_way(str(tmp), str(tmp / "a" / "b" / "leaf")) as way:
+        assert way is not None and way.name == str(tmp / "a" / "b" / "leaf") and way.dir_fd is None
+        for held in (tmp / "a", tmp / "a" / "b"):
+            with pytest.raises(PermissionError):
+                os.rename(held, held.with_name(held.name + "-moved"))
+    os.rename(tmp / "a" / "b", tmp / "a" / "b-moved")  # released afterwards
+    junction(tmp / "a" / "b", tmp / "a" / "b-moved")
+    with pt._held_way(str(tmp), str(tmp / "a" / "b" / "leaf")) as way:
+        assert way is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX dir_fd acts; Windows holds the way instead")
+def test_a_posix_held_way_acts_on_the_directory_it_opened(pt: ModuleType) -> None:
+    """The POSIX half of `_held_way`: a directory swapped for a symlink after the way was opened is not followed,
+    because the act names the entry relative to the descriptor of the directory that was verified."""
+    tmp = pt.PROJECT / ".tmp"
+    (tmp / "a").mkdir()
+    (tmp / "a" / "leaf").write_text("mine", encoding="utf-8")
+    outside = pt.PROJECT / "outside"
+    outside.mkdir()
+    (outside / "leaf").write_text("precious", encoding="utf-8")
+    with pt._held_way(str(tmp), str(tmp / "a" / "leaf")) as way:
+        assert way is not None and way.name == "leaf"
+        os.rename(tmp / "a", tmp / "a-moved")
+        (tmp / "a").symlink_to(outside, target_is_directory=True)
+        os.unlink(way.name, dir_fd=way.dir_fd)
+    assert (outside / "leaf").read_text(encoding="utf-8") == "precious"
+    assert not (tmp / "a-moved" / "leaf").exists()
+    with pt._held_way(str(tmp), str(tmp / "a" / "leaf")) as way:
+        assert way is None  # a symlink on the way is refused when the way is opened
+
+
+def test_a_held_way_refuses_a_path_that_is_not_strictly_inside_its_root(pt: ModuleType) -> None:
+    """Review P3-1, mutant R4: the root itself and any path outside it yield None, so no later caller of `_held_way`
+    can act at or above its root (the Gate refuses these first; this guard is the second line)."""
+    tmp = pt.PROJECT / ".tmp"
+    (pt.PROJECT / "outside" / "a").mkdir(parents=True)
+    paths = [str(tmp), str(pt.PROJECT / "outside" / "a" / "leaf"), str(pt.PROJECT / "leaf")]
+    if os.name == "nt":  # another drive: `relpath` raises ValueError
+        paths.append("Y:\\leaf" if not str(tmp).upper().startswith("Y:") else "Z:\\leaf")
+    for path in paths:
+        with pt._held_way(str(tmp), path) as way:
+            assert way is None, path
+
+
+def test_a_held_way_refuses_a_root_that_is_a_link(pt: ModuleType) -> None:
+    """Review P3-1, mutant R5: the root is verified like every directory below it. A root that is a junction or
+    symlink yields None, though every directory behind it is real."""
+    real = pt.PROJECT / "real-root"
+    (real / "a").mkdir(parents=True)
+    dir_link(pt.PROJECT / "linked-root", real)
+    with pt._held_way(str(pt.PROJECT / "linked-root"), str(pt.PROJECT / "linked-root" / "a" / "leaf")) as way:
+        assert way is None
+    with pt._held_way(str(real), str(real / "a" / "leaf")) as way:
+        assert way is not None
+
+
+class PosixOs:
+    """Labelled double: the `os` of `purge_tmp` as on a POSIX host, over the real tree, so `_hold_posix` runs on
+    every platform (fix round 2, class audit X8). `open` takes the root by full path and every other directory as
+    one name relative to a held descriptor. It refuses a link or junction with ELOOP, as open(2) does under
+    O_NOFOLLOW, and asserts both no-follow flags. `mkdir` works relative to a descriptor. Everything else is the
+    real `os`. The flag values are Linux x86-64 (asm-generic/fcntl.h)."""
+
+    name = "posix"
+    O_DIRECTORY, O_NOFOLLOW = 0o200000, 0o400000
+
+    def __init__(self) -> None:
+        self.held: dict[int, str] = {}
+        self.opens: list[tuple[str, int | None]] = []
+        self.next = 1 << 20
+
+    def __getattr__(self, attribute: str) -> object:
+        return getattr(os, attribute)
+
+    def _path(self, name: str, dir_fd: int | None) -> str:
+        if dir_fd is None:
+            return name
+        assert os.sep not in name and "/" not in name, f"not one component: {name!r}"
+        return os.path.join(self.held[dir_fd], name)
+
+    def open(self, name: str, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+        path = self._path(name, dir_fd)
+        self.opens.append((name, dir_fd))
+        assert flags & self.O_DIRECTORY and flags & self.O_NOFOLLOW, "a directory opened without no-follow"
+        info = os.lstat(path)  # FileNotFoundError when it is gone
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:  # link or junction
+            raise OSError(errno.ELOOP, "Too many levels of symbolic links", path)
+        if not stat.S_ISDIR(info.st_mode):
+            raise NotADirectoryError(errno.ENOTDIR, "Not a directory", path)
+        self.next += 1
+        self.held[self.next] = path
+        return self.next
+
+    def close(self, descriptor: int) -> None:
+        del self.held[descriptor]
+
+    def mkdir(self, name: str, mode: int = 0o777, *, dir_fd: int | None = None) -> None:
+        os.mkdir(self._path(name, dir_fd))
+
+
+def test_the_posix_held_way_opens_each_directory_by_descriptor_on_any_platform(
+    pt: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Class audit X8: `_hold_posix` opens the root without following a link, then each directory relative to the
+    one before, creates missing ones relative to the held parent, refuses a link on the way without creating
+    anything behind it, and closes every descriptor."""
+    tmp = pt.PROJECT / ".tmp"
+    (tmp / "a").mkdir()
+    outside = pt.PROJECT / "outside"
+    outside.mkdir()
+    dir_link(tmp / "hop", outside)
+    double = PosixOs()
+    monkeypatch.setattr(pt, "os", double)
+    monkeypatch.setattr(pt, "shutil", SimpleNamespace(rmtree=SimpleNamespace(avoids_symlink_attacks=True)))
+    with pt._held_way(str(tmp), str(tmp / "a" / "b" / "leaf"), create=True) as way:
+        assert way is not None and way.name == "leaf" and double.held[way.dir_fd] == str(tmp / "a" / "b")
+        assert double.opens == [(str(tmp), None), ("a", double.opens[1][1]), ("b", double.opens[2][1])]
+        assert None not in (double.opens[1][1], double.opens[2][1])
+    assert (tmp / "a" / "b").is_dir() and double.held == {}
+    for root, path in ((tmp, tmp / "hop" / "x" / "leaf"), (tmp / "hop", tmp / "hop" / "x" / "leaf")):
+        with pt._held_way(str(root), str(path), create=True) as way:
+            assert way is None
+    assert list(outside.iterdir()) == [] and double.held == {}
+
+
+def test_archiving_replaces_an_older_read_only_copy(pt: ModuleType) -> None:
+    """Review P3-3: an archive from an older run can hold a read-only copy (the old `copy2` kept the source's mode).
+    Re-archiving a worktree of the same name replaces it; fix round 1 refused the worktree on Windows."""
+    wt = make_worktree(pt.PROJECT)
+    archive = pt.ARCHIVE / "wt1"
+    archive.mkdir(parents=True)
+    (archive / "report.md").write_text("older run", encoding="utf-8")
+    read_only(archive / "report.md")
+    assert pt.archive_remove([str(wt)]) == 0 and not wt.exists()
+    assert (archive / "report.md").read_text(encoding="utf-8") == "report"
+
+
+@pytest.mark.parametrize("where", ["ancestor", "leaf-directory", "leaf-file", "leaf-hardlink"])
+def test_archiving_never_writes_through_a_link(pt: ModuleType, where: str) -> None:
+    """Class audit A6: a link already under `pm-archive`, on the way to a report's copy or at its name. A link on the
+    way refuses the worktree (nothing is written behind it, nothing is deleted). A link at the name is replaced as a
+    name (POSIX rename(2) replaces a symlink itself), except a Windows junction, which no file can replace: refused.
+    The first-round `shutil.copy2` wrote through all three. A hard link aliases an outside file the way a file
+    symlink does, and needs no privilege on Windows, so `leaf-hardlink` runs where `leaf-file` is skipped (review
+    mutant R6: a copy written straight to the name changes the outside file)."""
+    wt = make_worktree(pt.PROJECT)
+    (wt / ".tmp" / "sub").mkdir()
+    (wt / ".tmp" / "sub" / "r.md").write_text("sub report", encoding="utf-8")
+    outside = pt.PROJECT / "outside"
+    outside.mkdir()
+    archive = pt.ARCHIVE / "wt1"
+    archive.mkdir(parents=True)
+    if where == "ancestor":
+        dir_link(archive / "sub", outside)
+    elif where == "leaf-directory":
+        dir_link(archive / "report.md", outside)
+    elif where == "leaf-hardlink":
+        (outside / "report.md").write_text("precious", encoding="utf-8")
+        os.link(outside / "report.md", archive / "report.md")
+    else:
+        (outside / "report.md").write_text("precious", encoding="utf-8")
+        try:
+            os.symlink(outside / "report.md", archive / "report.md")
+        except OSError as error:  # Windows without the symlink privilege (WinError 1314)
+            pytest.skip(f"file symlink unavailable: {error}")
+    refused = pt.archive_remove([str(wt)])
+    leaf_file = where in ("leaf-file", "leaf-hardlink")
+    if leaf_file or (where == "leaf-directory" and os.name != "nt"):
+        assert refused == 0 and not wt.exists()
+        assert not pt._is_link(archive / "report.md")
+        assert (archive / "report.md").read_text(encoding="utf-8") == "report"
+    else:
+        assert refused == 1 and (wt / ".tmp" / "report.md").exists()
+    expected = ["report.md"] if leaf_file else []
+    assert sorted(p.name for p in outside.iterdir()) == expected
+    if expected:
+        assert (outside / "report.md").read_text(encoding="utf-8") == "precious"
+
+
+def test_archiving_never_reads_through_a_directory_swapped_for_a_link(
+    pt: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Class audit A7: a report directory listed by `_walk` and swapped for a link to a credentials-like tree before
+    the copy. The copy must not read the file behind the link (the module never reads a `.secrets` tree); the
+    worktree is refused instead."""
+    wt = make_worktree(pt.PROJECT)
+    (wt / ".tmp" / "notes").mkdir()
+    (wt / ".tmp" / "notes" / "n.md").write_text("note", encoding="utf-8")
+    secrets = pt.PROJECT / "outside-secrets"
+    secrets.mkdir()
+    (secrets / "n.md").write_text("credential", encoding="utf-8")
+    real_walk = pt._walk
+    swapped: list[bool] = []
+
+    def walk_then_swap(top: object) -> Iterator[tuple[str, list[str], list[str]]]:  # labelled double: the race
+        listing = list(real_walk(top))
+        if Path(os.fspath(top)) == wt / ".tmp" and not swapped:  # the archive's walk, not the Gate's
+            os.rename(wt / ".tmp" / "notes", wt / ".tmp" / "notes-moved")
+            dir_link(wt / ".tmp" / "notes", secrets)
+            swapped.append(True)
+        yield from listing
+
+    with monkeypatch.context() as patched:
+        patched.setattr(pt, "_walk", walk_then_swap)
+        assert pt.archive_remove([str(wt)]) == 1
+    assert swapped and "report not archived" in capsys.readouterr().out and wt.exists()
+    copies = [p for p in pt.ARCHIVE.rglob("n.md")] if pt.ARCHIVE.exists() else []
+    assert all(p.read_text(encoding="utf-8") != "credential" for p in copies)
 
 
 @pytest.mark.parametrize(
@@ -1079,15 +1499,15 @@ def test_qa1_authorize_refuses_outside_and_protected_paths(pt: ModuleType) -> No
     assert gate.check(pt.PROJECT / ".tmp" / "x" / ".." / "plain") is not None  # no lexical collapsing
 
 
-NAMES = ["plain-1", "plain-2", "T-owned", "pm-state", "runs", "cli-jobs", "models", "wt-busy"]
+SWEEP_NAMES = ["plain-1", "plain-2", "T-owned", "pm-state", "runs", "cli-jobs", "models", "wt-busy"]
 
 
 @settings(
     max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
 )
 @given(
-    old=st.sets(st.sampled_from(NAMES)),
-    archived=st.sets(st.sampled_from(NAMES)),
+    old=st.sets(st.sampled_from(SWEEP_NAMES)),
+    archived=st.sets(st.sampled_from(SWEEP_NAMES)),
     nested_runs=st.booleans(),
 )
 def test_qa1_property_no_command_removes_an_owned_or_protected_path(

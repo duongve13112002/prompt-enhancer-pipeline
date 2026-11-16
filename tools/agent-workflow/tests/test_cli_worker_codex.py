@@ -303,6 +303,29 @@ def test_resume_uses_the_captured_thread_and_none_of_the_forbidden_flags(world: 
     assert cb.SERVICE_TIER_PIN in argv and cb.FAST_MODE_PIN in argv
 
 
+def test_a_registered_task_file_is_linted_after_every_codex_turn(
+    world: World, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """T-021 P2: the Codex turn end runs the advisory report lint on the registered task file (labelled fake CLI)."""
+    turn = {"thread_id": THREAD_A, "usage": USAGE_1}
+    world.plan(turns=[turn, turn, turn, turn])
+    task = world.cwd / "task.md"
+    task.write_text("## Completion report\n\n- **Work completed:** w\n", encoding="utf-8")  # prose only: written, no checks
+    assert world.start("w1", "--task-file", str(task)) == 0
+    record = world.entry()["report_lint"]
+    assert record["total"] == 2 and record["error"] is None and record["unwritten"] == []
+    assert "WARNING: worker w1: report lint, 2 finding(s)" in capsys.readouterr().err
+    task.write_text("## Completion report\n\n", encoding="utf-8")  # a blank report: not linted, and the record says so
+    assert world.send() == 0
+    record = world.entry()["report_lint"]
+    assert record["total"] == 0 and record["unwritten"] == [1]
+    assert "NOTE: worker w1: report lint skipped" in capsys.readouterr().err
+    task.unlink()  # an unreadable file is recorded, never silent
+    assert world.send() == 0 and world.entry()["status"] == "idle"
+    assert world.entry()["report_lint"]["error"].startswith("FileNotFoundError")
+    assert "report lint could not run" in capsys.readouterr().err
+
+
 def test_missing_thread_id_is_an_error_and_not_resumable(world: World) -> None:
     world.plan(turns=[{"mode": "no_thread", "usage": USAGE_1}])
     assert world.start() == 1

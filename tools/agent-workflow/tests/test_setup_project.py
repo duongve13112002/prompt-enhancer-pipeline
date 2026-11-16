@@ -22,8 +22,11 @@ def _fails(results: list[sp.Result]) -> list[str]:
     return [f"{r.area}: {r.message}" for r in results if r.level == "FAIL"]
 
 
-def test_the_real_checkout_has_no_failures() -> None:
+def test_the_real_checkout_has_no_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     """Guards the repository itself: no dead links, no previous-project tokens, bindings and skills in sync."""
+    # check_clis yields only OK and WARN (setup_project.py check_clis) and reads this machine's local Codex profile
+    # under the live `.tmp/pm-state`; the test asserts FAIL rows only, so that machine state stays unread.
+    monkeypatch.setattr(sp, "check_clis", lambda root, cfg, run_cli: [])
     results = sp.run_checks(ROOT, run_cli=False)
     if not (ROOT / sp.SETTINGS_LOCAL).is_file():
         results = [r for r in results if r.area != "settings"]

@@ -12,10 +12,15 @@ Links are junctions on Windows (no privilege needed) and symlinks on POSIX. POSI
 
 import ast
 from datetime import datetime, timedelta, timezone
+import errno
 import importlib
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
+import stat
+import subprocess
+import sys
+from types import SimpleNamespace
 import warnings
 
 import pyarrow as pa
@@ -33,6 +38,7 @@ _fs = importlib.import_module('prompt_enhancer.storage._fs')
 ROUND_3 = hasattr(anchored, 'make_directory')  # the anchored write layer; absent in the round 2 tree
 POSIX_ONLY = pytest.mark.skipif(os.name == 'nt', reason='POSIX dir_fd branch: runs on Linux CI')
 WINDOWS_ONLY = pytest.mark.skipif(os.name != 'nt', reason='Windows handle behaviour')
+SRC = str(Path(prompt_enhancer.__file__).resolve().parents[1])
 
 
 def _refusal(excinfo):
@@ -441,6 +447,23 @@ def test_the_chain_itself_refuses_a_link_without_the_name_check(tmp_path, monkey
     assert victim.read_bytes() == b'must survive'
 
 
+def test_a_store_root_swapped_for_a_link_is_refused_by_its_own_open(tmp_path, monkeypatch, outside):
+    """Fix round 2 (mutants N5, N6 on the renamed root helpers): the root itself is a link once the path rule has
+    passed. Its own open refuses it as a link, never through a later check of the path the handle reached. Windows
+    opens the junction itself and reads its reparse attribute; POSIX opens the last component with `O_NOFOLLOW`.
+    Nothing is written behind it."""
+    root = tmp_path / 'store'
+    _dir_link(root, outside)
+    monkeypatch.setattr(anchored, 'real_inside', lambda check_root, relative: None)  # labelled double: the race
+    message = 'is a link or junction: refused' if os.name == 'nt' else 'is a link or not a directory: refused'
+    for call in (lambda: anchored.atomic_write_bytes(root, 'x.bin', b'x'),
+                 lambda: anchored.make_directory(root, 'd'),
+                 lambda: anchored.open_lock_file(root, 'x.lock', create=True)):
+        with pytest.raises(StorageError, match=message):
+            call()
+    assert list(outside.iterdir()) == []
+
+
 @WINDOWS_ONLY
 def test_the_chain_checks_the_spelling_on_the_handle(tmp_path, monkeypatch):
     root = _root(tmp_path)
@@ -523,15 +546,101 @@ def test_posix_writes_refuse_without_a_dir_fd_primitive(tmp_path, monkeypatch):
     assert list(root.iterdir()) == []
 
 
+# The primitives `_PosixDirectory` calls, stated here and not read from the module under test (review P3-1).
+_POSIX_DIR_FD = ('open', 'stat', 'unlink', 'rmdir', 'mkdir', 'rename', 'link')
+_POSIX_NO_FOLLOW = ('stat', 'link')
+
+
+def _fake_posix(monkeypatch, dir_fd=_POSIX_DIR_FD, no_follow=_POSIX_NO_FOLLOW):
+    """Labelled double: a POSIX platform whose capability sets hold the native functions named."""
+    for flag in ('O_NOFOLLOW', 'O_DIRECTORY'):
+        monkeypatch.setattr(os, flag, getattr(os, flag, 0), raising=False)
+    monkeypatch.setattr(os, 'supports_dir_fd', {getattr(os, name) for name in dir_fd})
+    monkeypatch.setattr(os, 'supports_follow_symlinks', {getattr(os, name) for name in no_follow})
+
+
+def test_the_capability_check_is_not_fooled_by_a_replaced_function(monkeypatch):
+    """S42-ci3 L1 and review P3-3: the check judges the platform sets by name, so a double over any primitive,
+    installed after the sets were built, keeps the store open (CI window 3 refused at start)."""
+    _fake_posix(monkeypatch)
+    for name in sorted(set(_POSIX_DIR_FD)):
+        monkeypatch.setattr(os, name, lambda *args, **kwargs: None)  # labelled double, as in test_profiles.py
+    assert anchored._posix_available()
+
+
+@pytest.mark.parametrize('dir_fd, no_follow', [
+    *[(tuple(n for n in _POSIX_DIR_FD if n != missing), _POSIX_NO_FOLLOW) for missing in _POSIX_DIR_FD],
+    *[(_POSIX_DIR_FD, tuple(n for n in _POSIX_NO_FOLLOW if n != missing)) for missing in _POSIX_NO_FOLLOW],
+])
+def test_the_capability_check_refuses_without_any_one_primitive(monkeypatch, dir_fd, no_follow):
+    """Review P3-1: every primitive the class calls is required; dropping one from the platform sets refuses."""
+    _fake_posix(monkeypatch, dir_fd, no_follow)
+    assert not anchored._posix_available()
+
+
+def test_the_capability_check_holds_for_a_double_installed_before_import_and_after_reload_of_os(tmp_path):
+    """Review P3-3: a module imported while `os.link` is wrapped, and `importlib.reload(os)`, which rebuilds the
+    sets. Run in a child interpreter, so reloading `os` never touches this test process."""
+    script = tmp_path / 'probe.py'
+    script.write_text(
+        'import importlib, os, sys\n'
+        f'names = {_POSIX_DIR_FD!r}\n'
+        'def fake():  # labelled double: a POSIX platform, sets built from the native functions\n'
+        '    os.O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0); os.O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)\n'
+        '    os.supports_dir_fd = {getattr(os, n) for n in names}\n'
+        '    os.supports_follow_symlinks = {os.stat, os.link}\n'
+        'fake()\n'
+        'os.link = lambda *a, **k: None  # labelled double installed before the import\n'
+        'from prompt_enhancer.storage import _anchored\n'
+        'before = _anchored._posix_available()\n'
+        'importlib.reload(os); fake()\n'
+        'os.link = lambda *a, **k: None\n'
+        'print(before, _anchored._posix_available())\n', encoding='utf-8')
+    flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+    result = subprocess.run([sys.executable, '-X', 'faulthandler', str(script)], capture_output=True, text=True,
+                            timeout=120, creationflags=flags, env={**os.environ, 'PYTHONPATH': SRC})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ['True', 'True']
+
+
 @POSIX_ONLY
-def test_posix_lock_file_refuses_a_symlink_leaf(tmp_path, outside):
+def test_posix_lock_file_refuses_a_symlink_leaf(tmp_path, monkeypatch, outside):
+    """A symlink leaf is refused by both layers, in their documented order (module docstring of `_anchored`):
+    the path rule `real_inside` first, then the `O_NOFOLLOW` open, which alone holds against a link swapped in
+    after the path rule (S42-ci3 L2: CI window 3 met the path rule's refusal, which names its own reason)."""
     root = _root(tmp_path)
     (root / 'leases').mkdir()
     victim = _victim(outside, 'x.lease')
+    inner = _victim(root / 'leases', 'inner.lease', b'inner')
     os.symlink(victim, root / 'leases' / 'x.lease')
-    with pytest.raises(StorageError, match='is a link'):
+    os.symlink(inner, root / 'leases' / 'y.lease')
+    with pytest.raises(StorageError, match='resolved outside project root'):
         anchored.open_lock_file(root, 'leases/x.lease', create=True)
-    assert victim.read_bytes() == b'must survive'
+    with pytest.raises(StorageError, match='is a link or another spelling'):  # a link that stays inside root
+        anchored.open_lock_file(root, 'leases/y.lease', create=True)
+    monkeypatch.setattr(anchored, 'real_inside', lambda check_root, relative: None)  # labelled double: the race
+    for name in ('x.lease', 'y.lease'):
+        with pytest.raises(StorageError, match='is a link: refused'):
+            anchored.open_lock_file(root, f'leases/{name}', create=True)
+    assert victim.read_bytes() == b'must survive' and inner.read_bytes() == b'inner'
+    assert (root / 'leases' / 'x.lease').is_symlink() and (root / 'leases' / 'y.lease').is_symlink()
+
+
+@POSIX_ONLY
+def test_posix_root_reached_through_a_swapped_ancestor_is_refused(tmp_path, monkeypatch):
+    """S42-ci3 fix round 1, class audit S1: `O_NOFOLLOW` on the root's full path covers its last component only. A
+    directory above the root swapped for a link after the path rule must refuse every write, not move the store."""
+    real = tmp_path / 'real'
+    (real / 'store').mkdir(parents=True)
+    os.symlink(real, tmp_path / 'hop', target_is_directory=True)
+    monkeypatch.setattr(anchored, 'real_inside', lambda check_root, relative: None)  # labelled double: the race
+    for call in (lambda root: anchored.atomic_write_bytes(root, 'x.bin', b'x'),
+                 lambda root: anchored.make_directory(root, 'd')):
+        with pytest.raises(StorageError, match='is a link or not a directory: refused'):
+            call(tmp_path / 'hop' / 'store')
+    assert list((real / 'store').iterdir()) == []
+    anchored.atomic_write_bytes(real / 'store', 'x.bin', b'x')  # the same root by its resolved name still works
+    assert (real / 'store' / 'x.bin').read_bytes() == b'x'
 
 
 @POSIX_ONLY
@@ -556,6 +665,269 @@ def test_posix_rename_refuses_a_symlink_source(tmp_path, monkeypatch, outside):
     with pytest.raises(StorageError, match='is a link'):
         anchored.rename_entry(root, 'snapshots/.building-a', 'snapshots/a', directory=True)
     assert (root / 'snapshots' / '.building-a').is_symlink()
+
+
+# ----------------------------------------------------------------------------- the POSIX class on every platform
+
+
+@pytest.mark.parametrize('flag', ['O_NOFOLLOW', 'O_DIRECTORY'])
+def test_the_capability_check_refuses_without_either_open_flag(monkeypatch, flag):
+    """Review mutant E: every primitive is present, but the platform lacks one of the two open flags the class
+    passes on every open; the store refuses at start instead of opening without it."""
+    _fake_posix(monkeypatch)
+    assert anchored._posix_available()
+    monkeypatch.delattr(os, flag, raising=False)
+    assert not anchored._posix_available()
+
+
+class PosixTree:
+    """Labelled double: the `os` of a POSIX host as `_anchored` uses it, over an in-memory tree, so the POSIX class
+    runs on every platform. S42-ci3 fix round 2, P0-1: no Windows test reached `_PosixDirectory`, so a helper
+    shadowed by its Windows namesake failed every POSIX store write unseen.
+
+    It gives the kernel's documented answers the class relies on (open(2), mkdir(2), linkat(2); from the man
+    pages, not re-run on Linux: an assumption the Linux CI checks). An open of a link without `O_NOFOLLOW`
+    would follow it, which the double refuses as a test failure. `O_DIRECTORY` on a non-directory, a link
+    included, is ENOTDIR. `O_NOFOLLOW` without `O_PATH` on a link is ELOOP. `O_EXCL`, mkdir and linkat on an
+    existing name are EEXIST. The double also refuses what the class must never do: open a full path, as
+    anything but the anchor `/`, or a name with a separator relative to a descriptor. File bytes live in real
+    scratch files, so the real `open(descriptor)` of `_file_object` works. The flag values are Linux x86-64
+    (asm-generic/fcntl.h); test-only."""
+
+    name = 'posix'
+    O_RDONLY, O_WRONLY, O_RDWR, O_ACCMODE = 0, 0o1, 0o2, 0o3
+    O_CREAT, O_EXCL, O_NONBLOCK = 0o100, 0o200, 0o4000
+    O_DIRECTORY, O_NOFOLLOW, O_CLOEXEC, O_PATH = 0o200000, 0o400000, 0o2000000, 0o10000000
+    _MODES = {'dir': stat.S_IFDIR, 'file': stat.S_IFREG, 'link': stat.S_IFLNK, 'fifo': stat.S_IFIFO}
+
+    def __init__(self, scratch, directories=(), links=(), fifos=(), files=(), hard_links=True):
+        self.scratch, self.hard_links = scratch, hard_links
+        self.entries = {PurePosixPath('/'): ('dir', None)}
+        for directory in directories:
+            path = PurePosixPath(directory)
+            for item in (*reversed(path.parents), path):
+                self.entries.setdefault(item, ('dir', None))
+        for kind, names in (('link', links), ('fifo', fifos)):
+            for item in names:
+                self.entries[PurePosixPath(item)] = (kind, None)
+        for item in files:
+            self.entries[PurePosixPath(item)] = ('file', self._new_file())
+        self.descriptors, self.next, self.opens, self.synced = {}, 1 << 20, [], []
+        self.supports_dir_fd = {getattr(os, name) for name in _POSIX_DIR_FD}  # real functions: their names count
+        self.supports_follow_symlinks = {getattr(os, name) for name in _POSIX_NO_FOLLOW}
+
+    def _new_file(self):
+        real = self.scratch / f'file-{len(list(self.scratch.iterdir()))}'
+        real.write_bytes(b'')
+        return real
+
+    def _path(self, name, dir_fd):
+        if dir_fd is None:
+            assert name == '/', f'opened by a full path, not from the anchor: {name!r}'
+            return PurePosixPath('/')
+        assert '/' not in name and name not in ('', '.', '..'), f'not one component: {name!r}'
+        return self.descriptors[dir_fd] / name
+
+    def _kind(self, path):
+        return self.entries.get(path, (None, None))[0]
+
+    def _descriptor(self, path):
+        self.next += 1
+        self.descriptors[self.next] = path
+        return self.next
+
+    def kinds(self):
+        return {path.as_posix(): kind for path, (kind, _) in self.entries.items()}
+
+    def read(self, path):
+        return self.entries[PurePosixPath(path)][1].read_bytes()
+
+    def open(self, name, flags, mode=0o777, *, dir_fd=None):
+        path = self._path(name, dir_fd)
+        self.opens.append((name, flags, dir_fd))
+        kind = self._kind(path)
+        if kind is None:
+            if not flags & self.O_CREAT:
+                raise FileNotFoundError(errno.ENOENT, 'No such file or directory', str(path))
+            self.entries[path], kind = ('file', self._new_file()), 'file'
+        elif flags & self.O_CREAT and flags & self.O_EXCL:
+            raise FileExistsError(errno.EEXIST, 'File exists', str(path))
+        if kind == 'link':
+            assert flags & self.O_NOFOLLOW, f'{path}: a link opened without O_NOFOLLOW would be followed'
+            if flags & self.O_DIRECTORY:
+                raise NotADirectoryError(errno.ENOTDIR, 'Not a directory', str(path))
+            if not flags & self.O_PATH:
+                raise OSError(errno.ELOOP, 'Too many levels of symbolic links', str(path))
+            return self._descriptor(path)
+        if flags & self.O_DIRECTORY and kind != 'dir':
+            raise NotADirectoryError(errno.ENOTDIR, 'Not a directory', str(path))
+        if kind == 'dir' and flags & self.O_ACCMODE:
+            raise IsADirectoryError(errno.EISDIR, 'Is a directory', str(path))
+        if kind in ('dir', 'fifo'):
+            return self._descriptor(path)
+        access = {self.O_RDONLY: os.O_RDONLY, self.O_WRONLY: os.O_WRONLY, self.O_RDWR: os.O_RDWR}
+        return os.open(self.entries[path][1], access[flags & self.O_ACCMODE] | getattr(os, 'O_BINARY', 0))
+
+    def close(self, descriptor):
+        if self.descriptors.pop(descriptor, None) is None:
+            os.close(descriptor)  # a real scratch file
+
+    def fstat(self, descriptor):
+        if descriptor in self.descriptors:
+            return SimpleNamespace(st_mode=self._MODES[self._kind(self.descriptors[descriptor])] | 0o755)
+        return os.fstat(descriptor)
+
+    def fsync(self, descriptor):
+        if descriptor in self.descriptors:
+            self.synced.append(self.descriptors[descriptor].as_posix())
+        else:
+            os.fsync(descriptor)
+
+    def stat(self, name, *, dir_fd, follow_symlinks):
+        assert follow_symlinks is False
+        path = self._path(name, dir_fd)
+        if self._kind(path) is None:
+            raise FileNotFoundError(errno.ENOENT, 'No such file or directory', str(path))
+        return SimpleNamespace(st_mode=self._MODES[self._kind(path)] | 0o644)
+
+    def mkdir(self, name, mode=0o777, *, dir_fd):
+        path = self._path(name, dir_fd)
+        if self._kind(path) is not None:
+            raise FileExistsError(errno.EEXIST, 'File exists', str(path))
+        self.entries[path] = ('dir', None)
+
+    def rmdir(self, name, *, dir_fd):
+        path = self._path(name, dir_fd)
+        if self._kind(path) != 'dir':
+            raise NotADirectoryError(errno.ENOTDIR, 'Not a directory', str(path))
+        if any(path in item.parents for item in self.entries):
+            raise OSError(errno.ENOTEMPTY, 'Directory not empty', str(path))
+        del self.entries[path]
+
+    def unlink(self, name, *, dir_fd):
+        path = self._path(name, dir_fd)
+        if self._kind(path) is None:
+            raise FileNotFoundError(errno.ENOENT, 'No such file or directory', str(path))
+        if self._kind(path) == 'dir':
+            raise IsADirectoryError(errno.EISDIR, 'Is a directory', str(path))
+        del self.entries[path]  # a link goes as a name; the real scratch file stays until pytest removes it
+
+    def rename(self, source, target, *, src_dir_fd, dst_dir_fd):
+        source, target = self._path(source, src_dir_fd), self._path(target, dst_dir_fd)
+        if self._kind(source) is None:
+            raise FileNotFoundError(errno.ENOENT, 'No such file or directory', str(source))
+        for item in sorted(self.entries):
+            if item == source or source in item.parents:
+                self.entries[target / item.relative_to(source)] = self.entries.pop(item)
+
+    def link(self, source, target, *, src_dir_fd, dst_dir_fd, follow_symlinks):
+        assert follow_symlinks is False
+        source, target = self._path(source, src_dir_fd), self._path(target, dst_dir_fd)
+        if not self.hard_links:
+            raise PermissionError(errno.EPERM, 'Operation not permitted', str(target))
+        if self._kind(target) is not None:
+            raise FileExistsError(errno.EEXIST, 'File exists', str(target))
+        self.entries[target] = self.entries[source]
+
+
+_POSIX_ROOT = PurePosixPath('/srv/data/store')
+
+
+def _posix_tree(monkeypatch, tmp_path, **layout):
+    """Install `PosixTree` as the `os` of `_anchored`, with a POSIX path flavour, and bypass the path rule
+    (`real_inside` resolves on the host): labelled doubles, so only the anchored POSIX layer is under test."""
+    scratch = tmp_path / 'posix-files'
+    scratch.mkdir()
+    tree = PosixTree(scratch, **layout)
+    monkeypatch.setattr(anchored, 'os', tree)
+    monkeypatch.setattr(anchored, 'Path', PurePosixPath)
+    monkeypatch.setattr(anchored, 'real_inside', lambda check_root, relative: None)
+    return tree
+
+
+def test_every_store_write_runs_through_the_posix_class_on_any_platform(tmp_path, monkeypatch):
+    """S42-ci3 fix round 2, P0-1: the fix-round-1 tree failed here with AttributeError, because the Windows
+    `_open_root(api, root)` replaced the POSIX `_open_root(root, flags)`. Every write acts on descriptors opened
+    from `/` one component at a time, ancestors with `O_PATH`, and leaves no descriptor open."""
+    tree = _posix_tree(monkeypatch, tmp_path, directories=[_POSIX_ROOT])
+    anchored.make_directory(_POSIX_ROOT, 'a')
+    above = PosixTree.O_PATH | PosixTree.O_DIRECTORY | PosixTree.O_NOFOLLOW | PosixTree.O_CLOEXEC
+    held = PosixTree.O_RDONLY | PosixTree.O_DIRECTORY | PosixTree.O_NOFOLLOW | PosixTree.O_CLOEXEC
+    assert [(name, flags) for name, flags, _ in tree.opens] == [('/', above), ('srv', above), ('data', above),
+                                                                  ('store', held)]
+    assert tree.opens[0][2] is None and all(dir_fd is not None for _, _, dir_fd in tree.opens[1:])
+    anchored.atomic_write_bytes(_POSIX_ROOT, 'a/b/x.bin', b'one')  # `b` is made on the way
+    anchored.atomic_write_bytes(_POSIX_ROOT, 'a/b/x.bin', b'two')  # renamed over the first
+    anchored.publish_new_bytes(_POSIX_ROOT, 'a/b/p.bin', b'published')
+    with pytest.raises(FileExistsError):
+        anchored.publish_new_bytes(_POSIX_ROOT, 'a/b/p.bin', b'never')
+    anchored.rename_entry(_POSIX_ROOT, 'a/b/x.bin', 'a/b/y.bin', directory=False)
+    with anchored.open_lock_file(_POSIX_ROOT, 'a/l.lock', create=True) as lock:
+        lock.write(b'lock')
+    anchored.make_directory(_POSIX_ROOT, 'a/gone')
+    anchored.remove_entry(_POSIX_ROOT, 'a/gone', directory=True)
+    store = {path[len('/srv/data/store/'):]: kind for path, kind in tree.kinds().items()
+             if path.startswith('/srv/data/store/')}
+    assert store == {'a': 'dir', 'a/b': 'dir', 'a/b/y.bin': 'file', 'a/b/p.bin': 'file', 'a/l.lock': 'file'}
+    assert tree.read(_POSIX_ROOT / 'a/b/y.bin') == b'two' and tree.read(_POSIX_ROOT / 'a/b/p.bin') == b'published'
+    assert tree.read(_POSIX_ROOT / 'a/l.lock') == b'lock'
+    assert '/srv/data/store/a/b' in tree.synced  # the parent is fsynced after a rename
+    assert all(flags & PosixTree.O_NOFOLLOW for _, flags, _ in tree.opens)
+    assert tree.descriptors == {}
+
+
+def test_the_posix_publication_falls_back_without_hard_links_on_any_platform(tmp_path, monkeypatch):
+    """`publish` where linkat fails (EPERM: no hard links): an exclusive no-follow create, still no replace."""
+    tree = _posix_tree(monkeypatch, tmp_path, directories=[_POSIX_ROOT], hard_links=False)
+    anchored.publish_new_bytes(_POSIX_ROOT, 'p.bin', b'published')
+    with pytest.raises(FileExistsError):
+        anchored.publish_new_bytes(_POSIX_ROOT, 'p.bin', b'never')
+    assert tree.read(_POSIX_ROOT / 'p.bin') == b'published'
+    assert [path for path in tree.kinds() if path.endswith('.tmp')] == [] and tree.descriptors == {}
+
+
+@pytest.mark.parametrize('where, link, root, relative', [
+    ('above the root', '/srv/hop', '/srv/hop/store', 'x.bin'),
+    ('the root', '/srv/store', '/srv/store', 'x.bin'),
+    ('below the root', '/srv/store/sub', '/srv/store', 'sub/x.bin'),
+])
+def test_the_posix_class_refuses_a_link_on_the_way_on_any_platform(tmp_path, monkeypatch, where, link, root,
+                                                                   relative):
+    """A link anywhere from `/` down to the act's parent refuses the act and changes nothing (class audit S1 on
+    every platform; the POSIX-only test above checks the same against a real kernel)."""
+    tree = _posix_tree(monkeypatch, tmp_path, directories=['/srv/store'], links=[link])
+    before = tree.kinds()
+    for call in (lambda: anchored.atomic_write_bytes(PurePosixPath(root), relative, b'x'),
+                 lambda: anchored.make_directory(PurePosixPath(root), relative.replace('.bin', '')),
+                 lambda: anchored.open_lock_file(PurePosixPath(root), relative, create=True)):
+        with pytest.raises(StorageError, match='is a link or not a directory: refused'):
+            call()
+    assert tree.kinds() == before and tree.descriptors == {}
+
+
+def test_the_posix_class_refuses_links_and_wrong_types_at_the_leaf_on_any_platform(tmp_path, monkeypatch):
+    """The leaf arms: a link is never removed, renamed or opened as a lock, a type mismatch is refused, a rename
+    never replaces, a lock file that is no regular file is refused (first reported untested in round 0), and a
+    root that is not absolute is refused before any open."""
+    tree = _posix_tree(monkeypatch, tmp_path, directories=[_POSIX_ROOT / 'd'], links=[_POSIX_ROOT / 'ln'],
+                       fifos=[_POSIX_ROOT / 'fifo'], files=[_POSIX_ROOT / 'f', _POSIX_ROOT / 'g'])
+    before = tree.kinds()
+    refusals = [
+        (lambda: anchored.remove_entry(_POSIX_ROOT, 'ln'), 'is a link: refused, not changed'),
+        (lambda: anchored.remove_entry(_POSIX_ROOT, 'd'), 'expected a file'),
+        (lambda: anchored.remove_entry(_POSIX_ROOT, 'f', directory=True), 'expected a directory'),
+        (lambda: anchored.rename_entry(_POSIX_ROOT, 'ln', 'new', directory=False), 'is a link: refused'),
+        (lambda: anchored.open_lock_file(_POSIX_ROOT, 'ln', create=True), 'is a link: refused'),
+        (lambda: anchored.open_lock_file(_POSIX_ROOT, 'fifo', create=False), 'expected a file'),
+    ]
+    for call, message in refusals:
+        with pytest.raises(StorageError, match=message):
+            call()
+    with pytest.raises(FileExistsError):
+        anchored.rename_entry(_POSIX_ROOT, 'f', 'g', directory=False)
+    with pytest.raises(StorageError, match='absolute, resolved path'):
+        anchored._open_posix_root(PurePosixPath('srv/data/store'), PosixTree.O_RDONLY)
+    assert tree.kinds() == before and tree.descriptors == {}
 
 
 # ----------------------------------------------------------------------------- structural: no name-based mutation

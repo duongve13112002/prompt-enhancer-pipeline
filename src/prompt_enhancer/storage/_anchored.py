@@ -17,7 +17,7 @@ held without `FILE_SHARE_DELETE`; measured on NTFS, none of them can be renamed 
 descendant, which NTFS refuses to move; the share mode is a second guard). The durability of a completed rename
 relies on NTFS journaling its metadata (Windows cannot fsync a directory: T-006 probe 10); an assumption, not a
 measured guarantee.
-POSIX: `os.open(..., O_DIRECTORY | O_NOFOLLOW, dir_fd=parent)` for each directory, then `mkdir`, `open` with
+POSIX: `os.open(..., O_DIRECTORY | O_NOFOLLOW, dir_fd=parent)` for each directory from `/` down, then `mkdir`, `open` with
 `O_NOFOLLOW`, `rename`, `unlink` or `rmdir` with `dir_fd`, and `fsync` on the parent's descriptor after a rename.
 """
 
@@ -31,6 +31,7 @@ import uuid
 import pyarrow.ipc as ipc
 import pyarrow.parquet as pq
 
+from .._os_support import os_supports
 from ..config import _strip_extended_prefix
 from ._fs import (HASH_CHUNK, PARQUET_COMPRESSION, PARQUET_VERSION, SUFFIX, FileLock, StorageError, check_segment,
                   real_inside)
@@ -190,11 +191,16 @@ def _directory(root, parts, *, create):
 # ----------------------------------------------------------------------------- POSIX
 
 
+# The `*at` primitives this class calls, judged by name (`_os_support`): a replaced `os.link` (a test double forcing
+# a `linkat` failure, or any wrapper) must not read as a missing primitive, wherever it was installed (S42-ci3).
+_DIR_FD_NAMES = ('open', 'stat', 'unlink', 'rmdir', 'mkdir', 'rename', 'link')
+_NO_FOLLOW_NAMES = ('stat', 'link')
+
+
 def _posix_available():
     return (hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY')
-            and all(function in os.supports_dir_fd
-                    for function in (os.open, os.stat, os.unlink, os.rmdir, os.mkdir, os.rename, os.link))
-            and os.stat in os.supports_follow_symlinks and os.link in os.supports_follow_symlinks)
+            and os_supports(os.supports_dir_fd, *_DIR_FD_NAMES)
+            and os_supports(os.supports_follow_symlinks, *_NO_FOLLOW_NAMES))
 
 
 def _open_directory(name, flags, dir_fd, shown):
@@ -207,6 +213,27 @@ def _open_directory(name, flags, dir_fd, shown):
         raise
 
 
+def _open_posix_root(root, flags):
+    """POSIX: the resolved root, opened from `/` one component at a time without following a link: `O_NOFOLLOW` on the
+    full path would cover its last component only, so a directory above the root swapped for a link after the path
+    rule would move the whole store (S42-ci3 fix round 1; Windows checks the root handle's final path instead).
+    Directories above the root are opened with `O_PATH` where it exists, so one without read permission still works."""
+    if not root.is_absolute():
+        raise StorageError(f'{root}: a store root is an absolute, resolved path')
+    above = (getattr(os, 'O_PATH', 0) or os.O_RDONLY) | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, 'O_CLOEXEC', 0)
+    descriptor = _open_directory(root.anchor, above, None, Path(root.anchor))
+    try:
+        for index, part in enumerate(root.parts[1:-1], start=2):
+            child = _open_directory(part, above, descriptor, Path(*root.parts[:index]))
+            os.close(descriptor)
+            descriptor = child
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):  # `O_PATH` alone would also open a link itself
+            raise StorageError(f'{root.parent}: is a link or not a directory: refused')
+        return _open_directory(root.name, flags, descriptor, root)
+    finally:
+        os.close(descriptor)
+
+
 class _PosixDirectory:
     """A verified directory below the root, held open by descriptor with every directory above it."""
 
@@ -216,7 +243,7 @@ class _PosixDirectory:
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, 'O_CLOEXEC', 0)
         self.descriptors = []
         try:
-            self.descriptors.append(_open_directory(str(root), flags, None, root))
+            self.descriptors.append(_open_posix_root(root, flags))
             for index, part in enumerate(parts):
                 shown = root.joinpath(*parts[:index + 1])
                 if create:
@@ -427,7 +454,8 @@ def _api():
     return _API
 
 
-def _open_root(api, root):
+def _open_windows_root(api, root):
+    # one name per platform helper: a shared name let this definition replace the POSIX one (S42-ci3 fix round 2)
     handle = api.create(str(root), _DIRECTORY_ACCESS, _SHARE_READ_WRITE, None, _OPEN_EXISTING,
                         _FLAG_BACKUP_SEMANTICS | _FLAG_OPEN_REPARSE_POINT, None)
     if handle is None or handle == api.invalid:
@@ -522,7 +550,7 @@ class _WindowsDirectory:
     def __init__(self, root, parts, create):
         self.api, self.handles = _api(), []
         try:
-            self.handles.append(_open_root(self.api, root))
+            self.handles.append(_open_windows_root(self.api, root))
             _verify(self.api, self.handles[-1], root, True)
             for index, part in enumerate(parts):
                 shown = root.joinpath(*parts[:index + 1])
