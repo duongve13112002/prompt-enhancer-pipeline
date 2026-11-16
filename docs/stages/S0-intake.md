@@ -14,12 +14,32 @@
 
 **Decisions and configuration keys.** `profiles.*`, `rag.enabled` (default true, decision 12), `vision.max_image_side` (`none` by default, 1024 for experiments and benchmarks, decision 84) and encoding (`fit_from_bench`, E12, E13), `runtime.*` deadlines (`fit_from_bench`). The enhancer contract has no width, height or aspect ratio (R-005).
 
-**Compute.** CPU; image decode and resize. Not implemented; nothing measured.
+**Compute.** CPU; library intake, image decode and resize have bounded synthetic contract/property tests.
+Live intake latency and whole-pipeline behavior are unmeasured; P1 makes no model calls.
 
 **Depends on.** P (an active admin profile); K0 (a published snapshot, when retrieval is on).
 
 **Failure modes.** No published snapshot (warning `SNAPSHOT_MISSING`, retrieval state `failed`, status `degraded`); an image too large to decode within limits (refused); an override the configuration profile does not allow (refused).
 
 **Experiments.** E12 (dev smoke with image input), E13 (latency of the whole path).
+
+**Library contract (T-013 P1).** `request.v0` and `intake_result.v0` define the input and result payload.
+Call `prompt_enhancer.intake.intake(request, config, project_root=...)` as a context manager; use its
+`payload` for JSON, `profile` for the checked admin view and `snapshot` for downstream pinned reads.
+Images are supplied as base64 bytes, never a request-specified URL or path. Configuration profiles explicitly
+declare `request_overrides.allowed_keys` (empty in both examples); only those exact existing leaf paths may
+be overridden, with strict types and effective configuration revalidation. The policy itself is not overridable.
+An intake refusal includes `error: {code, message}` beside an unchanged failed response envelope with null output.
+Before an effective configuration exists, refusal retrieval state follows base `rag.enabled` (`disabled` when off); afterwards it follows the effective value.
+Refusal diagnostics contain fixed structural text and exception class names, never request values, paths or exception text.
+`generate` with a non-null `source_image` is refused as `SOURCE_IMAGE_UNEXPECTED` before any image decoding (PM decision pending user review, R-005/R-012).
+
+The independent decode bound is `vision.max_decode_pixels: deploy_required`; there is no inferred backend value.
+`runtime.intake_deadline_s: fit_from_bench` bounds elapsed time checked before and after each stage.
+It does not preempt an in-progress filesystem or Pillow call. A deadline refusal releases any acquired lease.
+The caller owns the returned result's snapshot lease until it closes the result after downstream processing.
+S0 calls `pin()` once, which reads the pointer internally; it never calls `current()` first. Retrieval off
+constructs no knowledge gateway/store and skips filesystem resolution of knowledge-only paths during loading.
+`none` preserves native image scale; explicit encoding, EXIF orientation and alpha policy can still change bytes.
 
 **References.** N102.

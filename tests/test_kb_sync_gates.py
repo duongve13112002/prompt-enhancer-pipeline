@@ -7,7 +7,9 @@ import traceback
 import pytest
 import yaml
 
-from prompt_enhancer.config import ConfigurationError, load_config, validate_sync_config
+from prompt_enhancer.config import (
+    ConfigurationError, MODEL_VISION_READS, _schema, _schema_at, load_config, validate_sync_config,
+)
 from prompt_enhancer.k0_sync import sync_config
 from prompt_enhancer.k2_naming import _validate_reply, failure_code
 from prompt_enhancer.kb_sync import require_success
@@ -56,6 +58,34 @@ def leaves(value, prefix=''):
         yield prefix
 
 
+def schema_properties(node):
+    properties = dict(node.get('properties', {}))
+    for keyword in ('anyOf', 'oneOf', 'allOf'):
+        for branch in node.get(keyword, []):
+            properties.update(schema_properties(branch))
+    return properties
+
+
+def schema_leaves(node, prefix):
+    properties = schema_properties(node)
+    if properties:
+        return {leaf for key, child in properties.items() for leaf in schema_leaves(child, prefix + '.' + key)}
+    return {prefix}
+
+
+def model_vision_groups(project_root):
+    vision = _schema(project_root, 'enhancer_config.v0')['properties']['vision']
+    return tuple('vision.' + key for key in schema_properties(vision) if key != 'max_decode_pixels')
+
+
+def test_model_vision_inventory_covers_schema(project_root):
+    schema = _schema(project_root, 'enhancer_config.v0')
+    expected = schema_leaves(schema['properties']['vision'], 'vision') - {'vision.max_decode_pixels'}
+    classified = {leaf for key in MODEL_VISION_READS for leaf in schema_leaves(_schema_at(schema, key), key)}
+    assert classified == expected
+    assert set(model_vision_groups(project_root)) == set(MODEL_VISION_READS)
+
+
 def set_leaf(config, key, value, remove=False):
     parts = key.split('.')
     parent = config
@@ -81,10 +111,11 @@ def test_each_sync_read_leaf_refused_before_k0(k2_env, monkeypatch, failure):
     monkeypatch.setattr(storage, 'open_knowledge_store', forbidden)
     import prompt_enhancer.kb_sync as coordinator
     monkeypatch.setattr(coordinator, 'open_knowledge_store', forbidden)
-    # Independent inventory from the approved plan, not COMMAND_READS or stage validators.
-    groups = ('knowledge', 'sync', 'embedding', 'observe', 'cards', 'aliases', 'index', 'vision',
+    # Independent schema inventory: S0's decode bound is not a model-stage read.
+    groups = ('knowledge', 'sync', 'embedding', 'observe', 'cards', 'aliases', 'index',
               'storage.data_root', 'storage.kb_store', 'storage.table_format', 'storage.lock',
               'rag.enabled', 'runtime.cpu_workers', 'vlm.default_backend')
+    groups += model_vision_groups(k2_env.root)
     groups += tuple('vlm.roles.' + role for role in
                     ('info_assessor', 'folder_namer', 'observer', 'card_builder', 'alias_generator'))
     groups += ('vlm.backends.main',)

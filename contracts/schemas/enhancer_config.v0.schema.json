@@ -2923,6 +2923,9 @@
         {
           "type": "object",
           "properties": {
+            "max_decode_pixels": {
+              "anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]
+            },
             "max_image_side": {
               "anyOf": [
                 {
@@ -3044,6 +3047,7 @@
           },
           "required": [
             "max_image_side",
+            "max_decode_pixels",
             "alpha_policy",
             "format",
             "quality",
@@ -3063,6 +3067,14 @@
           ]
         }
       ]
+    },
+    "request_overrides": {
+      "type": "object",
+      "properties": {
+        "allowed_keys": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      },
+      "required": ["allowed_keys"],
+      "additionalProperties": false
     },
     "profiles": {
       "anyOf": [
@@ -4752,6 +4764,9 @@
         {
           "type": "object",
           "properties": {
+            "intake_deadline_s": {
+              "anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "fit_from_bench"}]
+            },
             "gpus": {
               "anyOf": [
                 {
@@ -4983,6 +4998,7 @@
           },
           "required": [
             "gpus",
+            "intake_deadline_s",
             "vram_budget_gb",
             "vram_check",
             "cpu_workers",
@@ -5414,6 +5430,7 @@
     "writer",
     "validation",
     "vision",
+    "request_overrides",
     "profiles",
     "vlm",
     "runtime",

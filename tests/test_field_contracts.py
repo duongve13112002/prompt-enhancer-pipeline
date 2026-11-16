@@ -170,6 +170,8 @@ def test_config_override_and_refusal(path, tmp_path):
         parent[key] = 'alternate'
     if path == ('embedding', 'chosen'):  # T-008: the chosen embedder is one of the listed candidates
         parent[key] = EXAMPLE['embedding']['candidates'][1]['id']
+    if path == ('request_overrides', 'allowed_keys'):
+        parent[key] = ['rag.enabled']  # S0: exact existing leaf paths, not arbitrary strings.
     if path == ('embedding', 'request', 'text_template'):  # T-008: exactly one {text} placeholder
         parent[key] = 'query: {text}'
     if path == ('vision', 'format') or path[:2] == ('vlm', 'roles') and path[-2:] == ('image', 'format'):

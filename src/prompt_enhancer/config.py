@@ -37,6 +37,11 @@ WINDOWS_DEVICE_NAMES = frozenset(
 # server (T-018, src/prompt_enhancer/embed_server).
 LOCAL_ENGINES = ('vllm', 'llama_cpp', 'embed_server')
 
+# S0 owns its decode limit; model stages use their backend's independent limit.
+MODEL_VISION_READS = tuple('vision.' + field for field in
+                           ('max_image_side', 'alpha_policy', 'format', 'quality', 'transport'))
+REQUEST_COMMANDS = ('enhance once', 'enhance serve', 'eval run')  # protocol-bound command names
+
 # Only documented reads are listed; later stage tasks complete their read sets.
 COMMAND_READS = {
     'embed serve': ('runtime.gpus', 'runtime.vram_budget_gb', 'embedding.backend'),
@@ -457,8 +462,10 @@ def _filename(value, path, key):
         raise ConfigurationError(f'{path}: {key}: expected a filename')
 
 
-def _validate_configured_paths(config, root, path, sources):
+def _validate_configured_paths(config, root, path, sources, *, knowledge_access=True):
     for key in ('knowledge.root', 'storage.data_root', 'storage.kb_store', 'profiles.root'):
+        if not knowledge_access and key in ('knowledge.root', 'storage.kb_store'):
+            continue
         try:
             value = _get(config, key, path)
         except ConfigurationError:
@@ -667,12 +674,13 @@ def _get(config, key, path):
 
 def _command_reads(command, config):
     keys = COMMAND_READS[command]
-    if command not in ('enhance once', 'enhance serve', 'eval run'):
-        return keys
+    if command not in REQUEST_COMMANDS:
+        return tuple(part for key in keys for part in (MODEL_VISION_READS if key == 'vision' else (key,)))
+    keys = (*keys, 'request_overrides')
     if not isinstance(config['rag'], dict):
         return keys
     if config['rag']['enabled']:
-        return (*keys, 'storage.kb_store', 'storage.lock')
+        return (*keys, 'index', 'storage.kb_store', 'storage.lock')
     return tuple('rag.enabled' if key == 'rag' else key for key in keys
                  if key not in ('candidates', 'embedding', 'assembly'))
 
@@ -1121,7 +1129,8 @@ def validate_naming_reads(config, path='configuration', sources=None, project_ro
         codecs.lookup(config['knowledge']['info_file']['encoding'])
     except LookupError as error:
         refuse('knowledge.info_file.encoding', f'unknown codec: {error}')
-    checked('vision')
+    for key in MODEL_VISION_READS:
+        checked(key)
     default = checked('vlm.default_backend')
     backends = {default}
     for name in NAMING_ROLES:
@@ -1192,7 +1201,8 @@ def validate_observation_reads(config, path='configuration', sources=None, proje
             refuse('observe.' + field, f'expected {supported!r}')
     if observe['representatives_per_folder'] == 0:
         refuse('observe.representatives_per_folder', 'must be positive for observation')
-    checked('vision')
+    for key in MODEL_VISION_READS:
+        checked(key)
     checked('knowledge.root')
     checked('storage.kb_store')
     checked('storage.data_root')
@@ -1498,6 +1508,51 @@ def validate_sync_config(config, *, project_root):
     return _validate_loaded_config(config, 'kb sync', Path(project_root).resolve(), 'configuration', {})
 
 
+def _validate_override_policy(config, schema, path):
+    allowed = _get(config, 'request_overrides.allowed_keys', path)
+    _validate(allowed, _schema_at(schema, 'request_overrides.allowed_keys'), path,
+              'request_overrides.allowed_keys', validator=_EXACT_INTEGERS)
+    for key in allowed:
+        if key.split('.')[0] == 'request_overrides':
+            raise ConfigurationError(f'{path}: request_overrides.allowed_keys: policy is not overridable')
+        try:
+            _schema_at(schema, key)
+            value = _get(config, key, path)
+        except (KeyError, ConfigurationError):
+            raise ConfigurationError(f'{path}: request_overrides.allowed_keys: unknown path {key!r}') from None
+        if isinstance(value, dict):
+            raise ConfigurationError(f'{path}: request_overrides.allowed_keys: expected leaf path {key!r}')
+    return allowed
+
+
+def effective_request_config(config, overrides, *, project_root):
+    """Apply only administrator-permitted, strictly typed overrides, then run request preflight."""
+    try:
+        root = Path(project_root).resolve()
+        schema = _schema(root, 'enhancer_config.v0')
+        _validate(config, schema, 'configuration')
+        allowed = _validate_override_policy(config, schema, 'configuration')
+        if not isinstance(overrides, dict):
+            raise ConfigurationError('request.overrides: expected an object')
+        effective = deepcopy(config)
+        for key, value in overrides.items():
+            if not isinstance(key, str) or key not in allowed:
+                raise ConfigurationError('request.overrides: override not allowed')
+            node = _schema_at(schema, key)
+            _validate(value, node, 'request.overrides', key, validator=_EXACT_INTEGERS)
+            _sentinel(value, 'request.overrides', key, {})
+            _require_finite(value, 'request.overrides', key, {})
+            parent = effective
+            parts = key.split('.')
+            for part in parts[:-1]:
+                parent = parent[part]
+            parent[parts[-1]] = deepcopy(value)
+        return _validate_loaded_config(effective, 'enhance once', root, 'effective configuration', {})
+    except ConfigurationError as error:
+        # The request boundary must not expose validator values, permission keys or filesystem paths.
+        raise ConfigurationError(f'request configuration validation failed ({type(error).__name__})') from None
+
+
 def _validate_loaded_config(config, command, root, path, sources):
     try:
         config_schema = _schema(root, 'enhancer_config.v0')
@@ -1505,6 +1560,7 @@ def _validate_loaded_config(config, command, root, path, sources):
         raise ConfigurationError(f'{path}: schema_version: {error}') from error
     _index_migration(config, path)
     _validate(config, config_schema, path, sources=sources)
+    _validate_override_policy(config, config_schema, path)
     if command == 'kb sync':
         gate = _get(config, 'rag.enabled', path)
         if type(gate) is not bool:
@@ -1526,7 +1582,9 @@ def _validate_loaded_config(config, command, root, path, sources):
                     # unconvertible value is refused under its own key on every backend.
                     _require_float_seconds(value, path, key, {})
         _check_backoff_order(backend['http'], path, f'vlm.backends.{name}.http', {})
-    _validate_configured_paths(config, root, path, sources)
+    knowledge_access = (command not in REQUEST_COMMANDS or not isinstance(config['rag'], dict)
+                        or config['rag']['enabled'] is not False)
+    _validate_configured_paths(config, root, path, sources, knowledge_access=knowledge_access)
     for name, role in config['vlm']['roles'].items():
         if not isinstance(role, dict) or not isinstance(role.get('output'), dict):
             continue
@@ -1541,7 +1599,7 @@ def _validate_loaded_config(config, command, root, path, sources):
     for key in reads:
         value = _get(config, key, path)
         _sentinel(value, path, key, sources)
-        if command == 'kb sync':
+        if command == 'kb sync' or command in REQUEST_COMMANDS:
             _validate(value, _schema_at(config_schema, key), path, key, sources, _EXACT_INTEGERS)
             _require_finite(value, path, key, sources)
         if key.startswith('vlm.roles.'):
@@ -1559,6 +1617,10 @@ def _validate_loaded_config(config, command, root, path, sources):
         _sentinel(_get(config, default_key, path), path, default_key, sources)
     if command == 'embed serve':
         validate_embed_server_reads(config, path, sources, root)
+    if command in REQUEST_COMMANDS:
+        _require_float_seconds(config['runtime']['intake_deadline_s'], path, 'runtime.intake_deadline_s', sources)
+        if config['rag']['enabled']:
+            validate_index_reads(config, path, sources, root)
     if command == 'kb sync':
         for key in ('storage.lock.timeout_s', 'storage.lock.poll_s'):
             _require_float_seconds(_get(config, key, path), path, key, sources)

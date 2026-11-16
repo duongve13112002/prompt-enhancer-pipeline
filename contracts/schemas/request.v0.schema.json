@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "request.v0",
+  "title": "S0 request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["prompt", "task"],
+  "properties": {
+    "prompt": {"type": "string", "description": "Verbatim data, in any format or language (R-003)."},
+    "task": {"enum": ["generate", "edit"]},
+    "profile_id": {"type": ["string", "null"], "minLength": 1},
+    "source_image": {"type": ["string", "null"], "contentEncoding": "base64"},
+    "overrides": {"type": "object", "additionalProperties": true}
+  }
+}

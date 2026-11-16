@@ -1,0 +1,196 @@
+"""S0: fix a request's configuration, checked profile, source image and snapshot (R-009)."""
+
+import base64
+import binascii
+from dataclasses import dataclass
+import hashlib
+import json
+import time
+import uuid
+
+from PIL import Image
+
+from .config import ConfigurationError, _schema, _validate, effective_request_config
+from .model_image import (
+    ImageRejected, UndecodableImage, configure_decode_backstop, prepare_vision_image_with_info,
+)
+from .profile_prompt import ProfileError, sha256_tag
+from .profiles import resolve_profile
+from .storage import StorageError, open_knowledge_store
+
+
+class KnowledgeGateway:
+    """Request-owned knowledge boundary; construction and its single pin are enabled-only."""
+
+    def __init__(self, config, project_root):
+        self.snapshot = None
+        self.store = open_knowledge_store(config, 'enhance once', project_root=project_root)
+
+    def pin(self):
+        self.snapshot = self.store.pin()
+        return self.snapshot
+
+    def close(self):
+        snapshot, self.snapshot = self.snapshot, None
+        if snapshot is not None:
+            snapshot.release()
+
+
+@dataclass
+class IntakeResult:
+    """JSON payload plus live resources; close only after downstream stages finish."""
+
+    payload: dict
+    profile: object = None
+    knowledge: KnowledgeGateway | None = None
+
+    @property
+    def snapshot(self):
+        return None if self.knowledge is None else self.knowledge.snapshot
+
+    def close(self):
+        knowledge, self.knowledge = self.knowledge, None
+        if knowledge is not None:
+            knowledge.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        try:
+            self.close()
+        except StorageError as error:
+            if exc is None:
+                raise
+            exc.add_note(f'intake lease cleanup failed ({type(error).__name__})')
+        return False
+
+
+class _Refusal(ValueError):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def _image(data):
+    try:
+        return base64.b64decode(data, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise _Refusal('IMAGE_UNDECODABLE', 'source_image must contain valid base64 image bytes') from error
+
+
+def validate_request(request, *, project_root):
+    """Validate structure only: arbitrary prompt strings are never interpreted or normalized."""
+    try:
+        _validate(request, _schema(project_root, 'request.v0'), 'request')
+    except ConfigurationError as error:
+        raise ConfigurationError(f'request validation failed ({type(error).__name__})') from None
+    if request['task'] == 'edit' and request.get('source_image') is None:
+        raise _Refusal('SOURCE_IMAGE_REQUIRED', 'edit requires a source_image')
+    if request['task'] == 'generate' and request.get('source_image') is not None:
+        raise _Refusal('SOURCE_IMAGE_UNEXPECTED', 'generate does not accept a source_image')
+    return request
+
+
+def _refuse(payload, code, error):
+    payload['outcome'] = 'refused'
+    # Diagnostics describe structure only; exception text can contain request values or local paths.
+    payload['error'] = {'code': code, 'message': f'intake refused ({type(error).__name__})'}
+    # These are schema-bound refusal fields, not model output or inferred retrieval success.
+    state = 'disabled' if payload['retrieval']['state'] == 'disabled' else 'failed'
+    payload['retrieval'] = {'state': state, 'snapshot_id': None}
+    source = payload['source_image']
+    payload['envelope'] = {
+        'status': 'failed', 'output': None, 'attachments': [],
+        'source_binding': None if source is None else {'source_image_id': source['image_id']},
+        'retrieval': dict(payload['retrieval']), 'warnings': list(payload['warnings']),
+        'trace_id': payload['request_id'],
+    }
+    return IntakeResult(payload)
+
+
+def intake(request, config, *, project_root):
+    """Prepare S0 without model calls; every ordinary refusal returns a failed envelope.
+
+    The supplied config may contain unresolved values repaired by permitted typed overrides.
+    The monotonic budget includes validation but checks occur at stage boundaries: filesystem
+    and Pillow calls are synchronous and cannot be preempted by this deadline.
+    The caller owns a successful result's lease, preferably through a `with intake(...)` block.
+    """
+    started = time.monotonic()
+    base_disabled = (isinstance(config, dict) and isinstance(config.get('rag'), dict)
+                     and config['rag'].get('enabled') is False)
+    payload = {
+        'outcome': 'ready', 'request_id': uuid.uuid4().hex,
+        'prompt': request.get('prompt') if isinstance(request, dict) and isinstance(request.get('prompt'), str) else None,
+        'task': request.get('task') if isinstance(request, dict) and request.get('task') in ('generate', 'edit') else None,
+        'profile_id': None, 'effective_config': None, 'config_hash': None, 'source_image': None,
+        'retrieval': {'state': 'disabled' if base_disabled else 'failed',
+                      'snapshot_id': None}, 'warnings': [], 'error': None, 'envelope': None,
+    }
+    gateway = None
+
+    def boundary(stage):
+        if time.monotonic() - started >= effective['runtime']['intake_deadline_s']:
+            raise _Refusal('INTAKE_DEADLINE', f'intake deadline exceeded at {stage}')
+
+    try:
+        validate_request(request, project_root=project_root)
+        effective = effective_request_config(config, request.get('overrides', {}), project_root=project_root)
+        payload['effective_config'] = effective
+        payload['retrieval']['state'] = 'failed' if effective['rag']['enabled'] else 'disabled'
+        encoded = json.dumps(effective, sort_keys=True, ensure_ascii=True, separators=(',', ':'), allow_nan=False).encode()
+        payload['config_hash'] = 'sha256:' + hashlib.sha256(encoded).hexdigest()
+        boundary('validation')
+
+        boundary('profile start')
+        profile = resolve_profile(effective, request.get('profile_id'), project_root=project_root)
+        payload['profile_id'] = profile.profile_id
+        profile.require_task(request['task'])
+        boundary('profile end')
+
+        boundary('image start')
+        if request.get('source_image') is not None:
+            raw = _image(request['source_image'])
+            vision = effective['vision']
+            configure_decode_backstop([vision['max_decode_pixels']])
+            prepared, _ = prepare_vision_image_with_info(raw, vision, vision['max_decode_pixels'])
+            payload['source_image'] = {'image_id': sha256_tag(raw), 'role': 'source_image',
+                                       'data': base64.b64encode(prepared).decode('ascii')}
+        boundary('image end')
+
+        boundary('snapshot start')
+        if effective['rag']['enabled']:
+            gateway = KnowledgeGateway(effective, project_root)
+            snapshot = gateway.pin()
+            if snapshot is None:
+                payload['outcome'] = 'degraded'
+                payload['warnings'].append('SNAPSHOT_MISSING')
+            else:
+                payload['retrieval'] = {'state': 'pinned', 'snapshot_id': snapshot.snapshot_id}
+        boundary('snapshot end')
+        result = IntakeResult(payload, profile, gateway)
+        gateway = None  # transfer ownership only after every refusal boundary
+        return result
+    except (_Refusal, ProfileError) as error:
+        return _refuse(payload, error.code, error)
+    except ConfigurationError as error:
+        return _refuse(payload, 'CONFIGURATION_INVALID', error)
+    except ImageRejected as error:
+        return _refuse(payload, 'IMAGE_REJECTED', error)
+    except (UndecodableImage, Image.DecompressionBombError) as error:
+        return _refuse(payload, 'IMAGE_UNDECODABLE', error)
+    except StorageError as error:
+        return _refuse(payload, 'KNOWLEDGE_FAILED', error)
+    except Exception as error:
+        return _refuse(payload, 'INTAKE_FAILED', error)
+    finally:
+        if gateway is not None:
+            try:
+                gateway.close()
+            except Exception as error:
+                # Preserve the refusal and report cleanup failure without exposing exception text.
+                if payload['error'] is not None:
+                    payload['error']['message'] += f'; lease cleanup failed ({type(error).__name__})'
+                else:
+                    raise

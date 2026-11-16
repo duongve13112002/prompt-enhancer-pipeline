@@ -167,11 +167,15 @@ validation:                              # S5
   fallbacks: [minimal_output_valid_for_contract, user_prompt_with_status_degraded, failed]   # tried in this order, docs/stages/S5-validate.md
 
 vision:                                  # S0
+  max_decode_pixels: deploy_required      # S0's independent decode bound; never inferred from a VLM backend
   alpha_policy: {mode: flatten, background: '#FFFFFF'}  # Composite transparency onto this color; refuse rejects transparent inputs.
   max_image_side: none                   # decision 84: `none` sends the original image; an integer N downscales so the longer side is N, keeping the aspect ratio, never upscaling. Applies to every image sent to any model (VLM roles, image embedder); a role may override with `image.max_side`. Experiments and benchmarks use 1024 (N102: large originals cost latency and cloud tokens)
   format: jpeg
   quality: design_required
   transport: data_uri                    # the only accepted value: both engines document base64 data URIs; file:// needs a server --media-path and exposes paths (T-008)
+
+request_overrides:
+  allowed_keys: []                        # Exact existing leaf paths; requests cannot override this policy
 
 profiles:
   root: configs/profiles
@@ -368,6 +372,7 @@ vlm:                                     # R-018: rules name no model; models ar
       output: {format: json_schema, schema_id: eval_scenario.v0, strict: true, transport: response_format, validate_response: true}
 
 runtime:                                 # no fixed hardware (AGENTS.md section 8)
+  intake_deadline_s: fit_from_bench        # S0 checks elapsed time at stage boundaries; no synchronous-call preemption
   gpus: auto
   vram_budget_gb: deploy_required        # per GPU
   vram_check: {before: true, after: true}

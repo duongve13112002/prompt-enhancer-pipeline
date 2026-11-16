@@ -131,11 +131,32 @@ Decisions 9, 10, 30 and 31, R-007. Details for authors: [kb/README.md](../kb/REA
 - An optional `kb_overrides.yaml` at the knowledge-base root (`knowledge.overrides_file`) is keyed by the **source concept name**, matched by NFKC/casefold identity. [kb_overrides.v0](schemas/kb_overrides.v0.schema.json) validates five optional keys: `name` (one nonblank concept name), `concept_type` (existing kind enum), and string arrays `aliases`, `facts`, `suppress`. `{old_concept_name: {name: corrected_name}}` replaces that known concept in every folder membership after raw naming and before observation. Code derives the corrected concept ID, records name source `override`, and checkpoints the exact-file hash/data and applied mapping. Human declared names/text remain verbatim; physical folders never move. Other keys apply to the replacement concept. Chained/ambiguous renames, normalized target collisions and implicit merges are refused; unmatched sources create nothing and are reported in lint. Removing/changing the override reconstructs names from raw K0/naming results. Unknown fields, unsafe YAML and normalized source-key collisions are refused. Missing file or explicit `none` means absent. Unfaceted `facts` stay curated statements, not invented facets; `suppress` removes the indicated facet assertions. Aliases are retained for K4, with no alias-table write in K3 (decisions 125, 130).
 - For an individual folder, use the explicit form `{concepts: {old_name: {...}}, folders: [{folder_id: relative_path, name: corrected_name}]}` (decision 131). Both sections are required; empty sections are valid. This form reserves no concept-name key: legacy concepts literally named `concepts` or `folders` remain valid, because legacy values are override objects and the new `folders` section is an array. Folder paths exactly match K0's relative forward-slash `folder_id`, with no case or Unicode normalization; absolute, backslash and empty/dot/parent-segment spellings are refused. An unknown path is lint only. Within the selected folder, its name wins over a concept-name `name`; other memberships retain the concept-level name. Source-concept curation follows the resulting memberships. A known nameless folder gains one membership with no invented description. A folder with several raw concepts is refused as ambiguous, since the selector identifies no source membership. Conflicting names for one exact folder path, normalized targets belonging to distinct source concepts or nameless folders, and ambiguous curation selectors are refused; identical repeated folder entries are idempotent. Code uses the existing concept identity function and records `folder_override` in the folder row, rename report and applied checkpoint. Changing/removing the selector reconstructs the applied view from raw K0/naming results, before observation; no model naming cache is overwritten.
 
+## Intake contract (S0)
+
+`request.v0` accepts a verbatim string prompt, an explicit generate/edit task, optional admin profile ID,
+one optional base64 source image and typed overrides keyed by exact dotted configuration paths.
+`request_overrides.allowed_keys` is required in a configuration profile; an empty list permits no overrides.
+Every allowed path must already exist and name a leaf; the policy cannot authorize changing itself.
+Overrides are copied into an effective configuration and fully revalidated before any profile or knowledge access.
+They never come from prompt text. Deployment overlays retain their separate deployment-only restrictions.
+
+`intake_result.v0` describes the serializable payload of the library result. The live checked profile and
+snapshot lease stay outside JSON. `ready` means intake completed, not that enhancement succeeded.
+Intake retrieval state `pinned` precedes the later stages' response retrieval state. Missing snapshots produce
+`degraded`, retrieval `failed` and `SNAPSHOT_MISSING`. A refusal carries `{code, message}` in `error` beside
+the unchanged `response_envelope.v0` with status `failed` and null output; diagnostics never enter output.
+The caller closes the result (or uses its context manager) only after downstream stages finish.
+
+`vision.max_decode_pixels` is S0's independent, required positive decode limit; it never falls back to a
+VLM backend. `runtime.intake_deadline_s` is required positive finite seconds, checked with a monotonic clock
+at stage boundaries. It does not preempt an in-progress filesystem or Pillow call. Both example profiles
+retain `deploy_required` and `fit_from_bench` respectively until evidence supplies their values.
+
 ## Profile contract
 
 Two things are called a profile; see [Terms](#terms). This section describes the configuration profile.
 
-- **Full configuration profiles** define every key: `schema_version`, `status`, `purpose`, `knowledge`, `sync`, `embedding`, `observe`, `cards`, `aliases`, `index`, `rag`, `candidates`, `planner`, `resolution`, `clarification`, `assembly`, `edit`, `creativity`, `writer`, `validation`, `vision`, `profiles`, `vlm`, `runtime`, `storage`, `serving`, `evaluation`. A configuration profile may `extends:` another and override any key (the dev profile does).
+- **Full configuration profiles** define every key: `schema_version`, `status`, `purpose`, `knowledge`, `sync`, `embedding`, `observe`, `cards`, `aliases`, `index`, `rag`, `candidates`, `planner`, `resolution`, `clarification`, `assembly`, `edit`, `creativity`, `writer`, `validation`, `vision`, `request_overrides`, `profiles`, `vlm`, `runtime`, `storage`, `serving`, `evaluation`. A configuration profile may `extends:` another and override any key (the dev profile does).
 - **Deployment overlays** may override only deployment values: the `storage`, `runtime` and `serving` blocks and, inside `vlm.backends`, the endpoints, the served model identity, concurrency and the engine-specific request body; never a role, prompt or fitted value. A dev profile that `extends` the full profile may override any key. The merged profile is validated, then hashed.
 - Every key is required after merging; an unknown key is refused, and so is a missing one.
 - Relative paths supplied to `load_config` and `load_profile` start at the project root. Resolve `extends` and `overlay_of` relative to the referring file, refusing cycles. Merge mappings recursively, replacing scalars and lists, in base, derived, then explicitly selected overlay order. `overlay_of` refers to the overlay's base; overlay restrictions still apply. Configuration and manifest `schema_version` must be `1`. Schema IDs resolve to `contracts/schemas/<id>.schema.json`; unknown versions and IDs are refused.
@@ -151,7 +172,7 @@ Missing and unknown-key validation covers the keys defined in the configuration 
 | Setting without a defined key | Owner |
 | --- | --- |
 | Embedding backend, dimension, batch size (K1); devices belong to the embedding server's launch (`runtime.gpus`, `runtime.vram_budget_gb`, the `gpu-live-run` plan), not to a client key | T-008 |
-| Intake runtime deadlines (S0) | T-013 |
+| Intake runtime deadline (S0) | Defined by T-013: `runtime.intake_deadline_s` |
 
 ## Commit protocol and snapshots
 
@@ -159,4 +180,4 @@ A stage result of many files is committed **data first, manifest last**: the man
 
 ## Schemas
 
-JSON Schema draft 2020-12 files in [schemas/](schemas/), versioned in the name; a change is a new version. All are drafts: `enhancer_config.v0`, `intent_ir.v0`, `constraint_ledger.v0`, `knowledge_pack.v0`, `image_observation.v0`, `concept_card.v0`, `verifier_result.v0`, `profile_manifest.v0`, `golden_case.v0`, `response_envelope.v0`, `alias_set.v0`, `info_assessment.v0`, `folder_naming.v0`, `eval_scenario.v0`, `vlm_role.v0`. Ranges in them are the schemas' own bounds, not engine limits. VLM request fields and engine mapping: [vlm-request.md](vlm-request.md).
+JSON Schema draft 2020-12 files in [schemas/](schemas/), versioned in the name; a change is a new version. All are drafts: `enhancer_config.v0`, `request.v0`, `intake_result.v0`, `intent_ir.v0`, `constraint_ledger.v0`, `knowledge_pack.v0`, `image_observation.v0`, `concept_card.v0`, `verifier_result.v0`, `profile_manifest.v0`, `golden_case.v0`, `response_envelope.v0`, `alias_set.v0`, `info_assessment.v0`, `folder_naming.v0`, `eval_scenario.v0`, `vlm_role.v0`. Ranges in them are the schemas' own bounds, not engine limits. VLM request fields and engine mapping: [vlm-request.md](vlm-request.md).
