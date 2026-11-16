@@ -45,6 +45,7 @@ REQUEST_COMMANDS = ('enhance once', 'enhance serve', 'eval run')  # protocol-bou
 # Only documented reads are listed; later stage tasks complete their read sets.
 COMMAND_READS = {
     'embed serve': ('runtime.gpus', 'runtime.vram_budget_gb', 'embedding.backend'),
+    'embed reference-check': ('runtime.gpus', 'runtime.vram_budget_gb', 'embedding.backend'),  # + the backend's server.reference_check
     'kb status': ('storage.kb_store', 'storage.lock'),
     'kb sync': ('rag.enabled', 'knowledge', 'sync', 'embedding', 'observe', 'cards', 'aliases', 'index', 'storage.kb_store', 'storage.data_root',
                 'storage.lock', 'storage.table_format', 'runtime.cpu_workers',
@@ -1053,6 +1054,9 @@ def validate_embed_server_reads(config, path, sources, project_root=None):
     family = FAMILIES[server['family']]
     if server['dtype'] in family.forbidden_dtypes:
         refuse(f'{prefix}.server.dtype', f"{server['dtype']} is refused for {family.name} (model card)")
+    if server['attn_implementation'] not in family.attn_implementations:  # before any hash, bind or load (F6)
+        refuse(f'{prefix}.server.attn_implementation', f"{server['attn_implementation']} is not supported by "
+               f"{family.name} in the pinned transformers; expected one of {', '.join(family.attn_implementations)}")
     image, instruction = server['image'], config['embedding']['request']['image_instruction']
     if family.accepts_instruction:
         fields = {'min_pixels': int, 'max_pixels': int, 'max_soft_tokens': None}
@@ -1086,6 +1090,27 @@ def validate_embed_server_reads(config, path, sources, project_root=None):
         refuse('embedding.revision', f'differs from {prefix}.model.revision')
     if config['embedding']['dimension_mode'] == 'request_field':
         refuse('embedding.dimension_mode', 'request_field is not supported by the embedding server')
+
+
+REFERENCE_CHECK_READS = ('server.reference_check', 'server.reference_check.min_cosine',
+                         'server.reference_check.max_norm_deviation')
+
+
+def validate_reference_check_reads(config, path, sources, project_root=None):
+    """The reads of `embed reference-check` beyond the server's own (T-018 P2): the tolerances the check compares
+    against, `min_cosine` in the schema's (0, 1] and `max_norm_deviation` in [0, 1) (P2 fix round 1, N1). Present and
+    resolved (a sentinel such as `fit_from_bench` is refused). The server itself never reads them; `reference-check
+    reference` measures them and does not read them either."""
+    validate_embed_server_reads(config, path, sources, project_root)
+    name = config['embedding']['backend']
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    schema = _schema(root, 'enhancer_config.v0')
+    for field in REFERENCE_CHECK_READS:
+        key = f'vlm.backends.{name}.{field}'
+        value = _get(config, key, path)
+        _sentinel(value, path, key, sources)
+        _validate(value, _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
+        _require_finite(value, path, key, sources)  # the schema's number excludes bool (jsonschema is_number)
 
 
 # Protocol-bound supported naming policies (K2-observe.md, naming step); no content decisions live here.
@@ -1617,6 +1642,8 @@ def _validate_loaded_config(config, command, root, path, sources):
         _sentinel(_get(config, default_key, path), path, default_key, sources)
     if command == 'embed serve':
         validate_embed_server_reads(config, path, sources, root)
+    if command == 'embed reference-check':
+        validate_reference_check_reads(config, path, sources, root)
     if command in REQUEST_COMMANDS:
         _require_float_seconds(config['runtime']['intake_deadline_s'], path, 'runtime.intake_deadline_s', sources)
         if config['rag']['enabled']:

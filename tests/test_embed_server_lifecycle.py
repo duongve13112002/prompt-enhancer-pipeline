@@ -1110,6 +1110,9 @@ def test_a_socket_whose_close_fails_is_reported_and_does_not_end_the_stop(projec
             self.calls.append('close')
             raise OSError('labelled close failure')
 
+        def fileno(self):  # still open after the refused close
+            return 1234
+
     _, state, server, thread = stop_directly(project_root, model_test_profile)
     gone = threading.Thread(target=lambda: None)
     gone.start()
@@ -1118,7 +1121,82 @@ def test_a_socket_whose_close_fails_is_reported_and_does_not_end_the_stop(projec
     server._connections[sock] = gone  # its handler ended without forgetting it
     error = finish(state, server, thread)
     assert isinstance(error, ShutdownIncomplete) and '1 accepted socket(s) still registered' in str(error)
+    assert '1 accepted socket(s) could not be closed' in str(error)
     assert sock.calls.count('close') == 1 and state.engine is None  # tried once, and the stop went on
+
+
+class CloseRefused:
+    """Labelled socket double over a real socket: its close is refused (RT5F1). With `releases` the refusal comes
+    after the handle was released, as a native close may do; without it the real socket stays open."""
+
+    def __init__(self, real, releases=False):
+        self.real, self.releases, self.closes = real, releases, 0
+
+    def fileno(self):
+        return self.real.fileno()
+
+    def setblocking(self, flag):
+        self.real.setblocking(flag)
+
+    def recv(self, size):
+        return self.real.recv(size)
+
+    def send(self, data):
+        return self.real.send(data)
+
+    def shutdown(self, how):
+        self.real.shutdown(how)
+
+    def close(self):
+        self.closes += 1
+        if self.releases:
+            self.real.close()
+        raise OSError('labelled close failure')
+
+
+def _close_through(server, monkeypatch, path, sock):
+    """Run the real cleanup of one path on `sock`: a finished handler, or a turned-away connection."""
+    if path == 'handler':
+        # labelled double: the request was already served; the real `_serve_connection` cleanup runs
+        monkeypatch.setattr(server_module._Server, 'finish_request', lambda self, request, address: None)
+        with server._lock:
+            server._connections[sock] = threading.current_thread()
+        server._serve_connection(sock, ('127.0.0.1', 0))
+    else:
+        server._turn_away(sock)
+
+
+@pytest.mark.parametrize('path', ['handler', 'refusal'])
+def test_a_close_failure_that_leaves_the_socket_open_stays_a_survivor(project_root, model_test_profile, monkeypatch,
+                                                                     path):
+    _, state, server, thread = stop_directly(project_root, model_test_profile)
+    near, far = socket.socketpair()
+    sock = CloseRefused(near)
+    try:
+        _close_through(server, monkeypatch, path, sock)
+        assert server.registered() == 0  # the handler registry let it go, the stop must still see it
+        error = finish(state, server, thread)
+        assert isinstance(error, ShutdownIncomplete) and '1 accepted socket(s) could not be closed' in str(error)
+        assert near.fileno() != -1 and sock.closes == 2  # retried once at the stop, still open
+        assert state.engine is None and state.output._closed  # the rest of the stop ran
+    finally:
+        near.close()
+        far.close()
+
+
+@pytest.mark.parametrize('path', ['handler', 'refusal'])
+def test_a_close_failure_that_released_the_socket_is_not_a_survivor(project_root, model_test_profile, monkeypatch,
+                                                                   path):
+    _, state, server, thread = stop_directly(project_root, model_test_profile)
+    near, far = socket.socketpair()
+    sock = CloseRefused(near, releases=True)
+    try:
+        _close_through(server, monkeypatch, path, sock)
+        assert finish(state, server, thread) is None
+        assert near.fileno() == -1 and sock.closes == 1  # nothing left to retry
+    finally:
+        near.close()
+        far.close()
 
 
 FAILURE_HARNESS = r'''

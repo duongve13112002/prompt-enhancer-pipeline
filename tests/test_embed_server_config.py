@@ -100,20 +100,28 @@ def test_an_accepted_read_timeout_is_usable_by_a_socket(project_root, profile, v
 
 
 def test_every_schema_server_key_reaches_the_settings_record(project_root, profile):
-    """A validated key that no consumer receives would be ignored (review R1): the record carries each of them."""
+    """A validated key that no consumer receives would be ignored (review R1): the record carries each of them, except
+    the keys another command reads, named here with that command's read set (T-018 P2: `reference_check`, read only
+    by `embed reference-check`; optional for `serve`, which never reads it)."""
     import json
     from dataclasses import fields
 
-    from prompt_enhancer.config import _schema_at  # the loader's own schema lookup
+    from prompt_enhancer.config import REFERENCE_CHECK_READS, _schema_at  # the loader's own schema lookup
 
+    other_consumers = {'reference_check': REFERENCE_CHECK_READS}
     schema = json.loads((ROOT / 'contracts/schemas/enhancer_config.v0.schema.json').read_bytes())
     node = _schema_at(schema, 'vlm.backends.embedder.server')
     block = next(branch for branch in node['anyOf'] if branch.get('type') == 'object')
     carried = {field.name for field in fields(server_settings(load_server(project_root, profile), project_root))}
     for key, spec in block['properties'].items():
+        if key in other_consumers:
+            reads = other_consumers[key]
+            assert f'server.{key}' in reads and {f'server.{key}.{name}' for name in spec['properties']} <= set(reads)
+            continue
         names = list(spec['properties']) if key == 'image' else [key]
         assert set(names) <= carried, key
-    assert set(block['required']) == set(block['properties'])  # nothing optional, nothing defaulted
+    # nothing optional or defaulted for the server; the other command refuses its keys missing (reference tests)
+    assert set(block['required']) == set(block['properties']) - set(other_consumers)
 
 
 def test_the_qwen_family_resolves_its_own_image_and_instruction_keys(project_root, model_test_profile):
@@ -178,6 +186,20 @@ REFUSALS = [
 def test_refusal(project_root, profile, key, value, match):
     with pytest.raises(ConfigurationError, match=re.escape(match)):
         load_server(project_root, set_key(profile, key, value))
+
+
+@pytest.mark.parametrize('family, kernel', [('embedding_gemma2', 'eager'), ('qwen3_vl_embedding', 'sdpa'),
+                                            ('qwen3_vl_embedding', 'eager')])
+def test_a_kernel_the_family_supports_is_accepted(project_root, model_test_profile, family, kernel):
+    profile = set_key(server_profile(model_test_profile, family=family), S + 'attn_implementation', kernel)
+    assert server_settings(load_server(project_root, profile), project_root).attn_implementation == kernel
+
+
+def test_embedding_gemma_2_with_sdpa_is_refused_by_the_shared_validator(project_root, profile):
+    # F6: transformers 5.23.0 refuses sdpa for its audio tower at load; the profile check refuses it first
+    with pytest.raises(ConfigurationError, match=r'server\.attn_implementation: sdpa is not supported by '
+                                                 r'embedding_gemma2.*expected one of eager'):
+        load_server(project_root, set_key(profile, S + 'attn_implementation', 'sdpa'))
 
 
 QWEN_REFUSALS = [
@@ -308,7 +330,8 @@ def _shipped(tmp_path):
 
 LOCAL_VALUES = {'storage': {'lock': {'timeout_s': 5, 'poll_s': 0.05}},  # test-only values for the deploy_required keys
                 'runtime': {'gpus': [0], 'vram_budget_gb': 6}}
-SERVER_VALUES = {'attn_implementation': 'sdpa', 'forward_batch': 4, 'idle_exit_s': 0, 'max_request_bytes': 4000000,
+SERVER_VALUES = {'attn_implementation': 'eager',  # eager: the kernel both families support (F6)
+                 'forward_batch': 4, 'idle_exit_s': 0, 'max_request_bytes': 4000000,
                  'max_image_bytes': 2000000, 'max_pending_requests': 4, 'max_connections': 8,
                  'max_discard_bytes': 8000000, 'read_timeout_s': 5}
 

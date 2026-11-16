@@ -153,6 +153,23 @@ def test_qwen_uses_the_item_instruction_else_the_profile_default(qwen_settings):
     assert pipe.templates[0][1] == {'role': 'user', 'content': [{'type': 'text', 'text': 'plain text'}]}  # data stays user
 
 
+def test_a_gemma_image_is_rendered_through_the_model_chat_template(gemma_settings):
+    # P2 GPU run: an empty text carries no image placeholder and the real processor refused the image; the card
+    # recipe renders a lone user image part through the model's template, which writes the placeholder.
+    class Placeholder(Pipeline):  # labelled double: its template writes a marker per image part, as the real one does
+        def chat(self, messages, **kwargs):
+            self.templates.append(messages)
+            return ''.join(part.get('text', '<image>') for message in messages for part in message['content'])
+
+    built, pipe = engine(replace(gemma_settings, forward_batch=2), Placeholder())
+    first, second = image_item(), image_item()
+    built.embed([first, second])
+    assert pipe.templates == [[{'role': 'user', 'content': [{'type': 'image', 'image': item.image}]}]
+                              for item in (first, second)]
+    assert len(pipe.processor_calls) == 1 and pipe.processor_calls[0]['images'] == [first.image, second.image]
+    assert pipe.processor_calls[0]['text'] == ['<image>', '<image>']  # the template's rendering reaches the processor
+
+
 def test_a_family_without_an_instruction_sends_no_system_message(gemma_settings):
     built, pipe = engine(gemma_settings)
     built.embed([EmbedItem(text='abc')])

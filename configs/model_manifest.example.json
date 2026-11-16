@@ -6,7 +6,7 @@
       "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
       "file": "1_Pooling/config.json",
       "size": 90,
-      "sha256": "pin_required",
+      "sha256": "8759bdf7c77efc7df7723f64856a593c8943b71ee38baf2a88771fbaf78438f9",
       "licence": "apache-2.0",
       "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/1_Pooling/config.json",
       "gated": false
@@ -16,7 +16,7 @@
       "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
       "file": "2_Normalize/config.json",
       "size": 97,
-      "sha256": "pin_required",
+      "sha256": "cdb09dfca347a56aa2d691744e38d5ad3c7cbc2834e7181272b9a15328b82524",
       "licence": "apache-2.0",
       "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/2_Normalize/config.json",
       "gated": false
@@ -26,7 +26,7 @@
       "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
       "file": "chat_template.jinja",
       "size": 1016,
-      "sha256": "pin_required",
+      "sha256": "4b852efc0b9960283e735363331e6f325b33bc74bdbaa076f595bc4e9b94d85e",
       "licence": "apache-2.0",
       "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/chat_template.jinja",
       "gated": false
@@ -36,7 +36,7 @@
       "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
       "file": "config.json",
       "size": 4455,
-      "sha256": "pin_required",
+      "sha256": "b8f1e9931b57fbc054acdb445c41765d55b0074c58d145fa82839941ad1b5bb3",
       "licence": "apache-2.0",
       "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/config.json",
       "gated": false
@@ -46,7 +46,7 @@
       "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
       "file": "config_sentence_transformers.json",
       "size": 1565,
-      "sha256": "pin_required",
+      "sha256": "031e56a498d33c349ab489a21885bcfe25b4fcba841149dc99e1e90d4a7c28f5",
       "licence": "apache-2.0",
       "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/config_sentence_transformers.json",
       "gated": false
@@ -66,7 +66,7 @@
       "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
       "file": "modules.json",
       "size": 413,
-      "sha256": "pin_required",
+      "sha256": "3d02572a0455b832de67fb8e63a54981bc7e8b46e337c95e917bd8122a533bfd",
       "licence": "apache-2.0",
       "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/modules.json",
       "gated": false
@@ -76,7 +76,7 @@
       "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
       "file": "preprocessor_config.json",
       "size": 511,
-      "sha256": "pin_required",
+      "sha256": "ea2ae257e901064abdd98dceb19f2b0da06af600bed15e0f99f5c85c37ee9d78",
       "licence": "apache-2.0",
       "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/preprocessor_config.json",
       "gated": false
@@ -86,7 +86,7 @@
       "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
       "file": "processor_config.json",
       "size": 1788,
-      "sha256": "pin_required",
+      "sha256": "168f6a08522f3ce5dea596d94d003af2fd691742d4f41fe1f9d8cce76bfbf69c",
       "licence": "apache-2.0",
       "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/processor_config.json",
       "gated": false
@@ -96,7 +96,7 @@
       "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
       "file": "sentence_bert_config.json",
       "size": 747,
-      "sha256": "pin_required",
+      "sha256": "b1bcd9f2dce3ae863b359e87d0710b5dbc3314a59ecb4e2f97c7778fc8e4b228",
       "licence": "apache-2.0",
       "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/sentence_bert_config.json",
       "gated": false
@@ -126,7 +126,7 @@
       "revision": "f9972ac22e696a105c482202646979e33e4b5a1e",
       "file": "tokenizer_config.json",
       "size": 1599,
-      "sha256": "pin_required",
+      "sha256": "17bd5d6e9364ca49a534e1502076593317c298d4a663623091ed45388f004874",
       "licence": "apache-2.0",
       "path": "models/google--embeddinggemma-2/f9972ac22e696a105c482202646979e33e4b5a1e/tokenizer_config.json",
       "gated": false
@@ -136,7 +136,7 @@
       "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
       "file": "1_Pooling/config.json",
       "size": 96,
-      "sha256": "pin_required",
+      "sha256": "de764e01a063fc5f2e96100099bf745695edaaf904107fb3d24fbf4b106f488b",
       "licence": "apache-2.0",
       "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/1_Pooling/config.json",
       "gated": false
@@ -146,7 +146,7 @@
       "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
       "file": "added_tokens.json",
       "size": 707,
-      "sha256": "pin_required",
+      "sha256": "c0284b582e14987fbd3d5a2cb2bd139084371ed9acbae488829a1c900833c680",
       "licence": "apache-2.0",
       "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/added_tokens.json",
       "gated": false
@@ -156,7 +156,7 @@
       "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
       "file": "chat_template.jinja",
       "size": 5519,
-      "sha256": "pin_required",
+      "sha256": "a47e6afb389f86f45be7810f17d2686fd42b2bec7ba6e6958abf85845af258c5",
       "licence": "apache-2.0",
       "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/chat_template.jinja",
       "gated": false
@@ -166,7 +166,7 @@
       "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
       "file": "config.json",
       "size": 1570,
-      "sha256": "pin_required",
+      "sha256": "9172f55b0b9cce70b7f67b10c58a408ccf3ec15c587e6efd4d5f41631237fded",
       "licence": "apache-2.0",
       "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/config.json",
       "gated": false
@@ -176,7 +176,7 @@
       "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
       "file": "config_sentence_transformers.json",
       "size": 238,
-      "sha256": "pin_required",
+      "sha256": "ab0d95430e4a88750bf613c7bea69cf878818a77c4047150599e1b586a7e8ab0",
       "licence": "apache-2.0",
       "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/config_sentence_transformers.json",
       "gated": false
@@ -186,7 +186,7 @@
       "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
       "file": "merges.txt",
       "size": 1671853,
-      "sha256": "pin_required",
+      "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
       "licence": "apache-2.0",
       "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/merges.txt",
       "gated": false
@@ -206,7 +206,7 @@
       "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
       "file": "modules.json",
       "size": 429,
-      "sha256": "pin_required",
+      "sha256": "fa7d796a215e1b2416773062891923b191fc5a4849bc44e322997433c90f459c",
       "licence": "apache-2.0",
       "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/modules.json",
       "gated": false
@@ -216,7 +216,7 @@
       "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
       "file": "preprocessor_config.json",
       "size": 783,
-      "sha256": "pin_required",
+      "sha256": "d75c1f9f474add87cb0188d43c4fbf5c232d2af64f156fcefc5311089049100d",
       "licence": "apache-2.0",
       "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/preprocessor_config.json",
       "gated": false
@@ -226,7 +226,7 @@
       "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
       "file": "sentence_bert_config.json",
       "size": 770,
-      "sha256": "pin_required",
+      "sha256": "2c9dac0bf11e4282254502891eb84082debd7a68a775564c75303392f63787f8",
       "licence": "apache-2.0",
       "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/sentence_bert_config.json",
       "gated": false
@@ -236,7 +236,7 @@
       "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
       "file": "special_tokens_map.json",
       "size": 613,
-      "sha256": "pin_required",
+      "sha256": "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd",
       "licence": "apache-2.0",
       "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/special_tokens_map.json",
       "gated": false
@@ -256,7 +256,7 @@
       "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
       "file": "tokenizer_config.json",
       "size": 5404,
-      "sha256": "pin_required",
+      "sha256": "355f2b4e5bad7b01f11ef6cb68ebc176f61b95c3276092ea225b1bea0e01e95c",
       "licence": "apache-2.0",
       "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/tokenizer_config.json",
       "gated": false
@@ -266,7 +266,7 @@
       "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
       "file": "video_preprocessor_config.json",
       "size": 817,
-      "sha256": "pin_required",
+      "sha256": "59c5c9eb52182eb14c06ffb10ca9effd29adce5f238a95de23ca14a38dbd2cb1",
       "licence": "apache-2.0",
       "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/video_preprocessor_config.json",
       "gated": false
@@ -276,7 +276,7 @@
       "revision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
       "file": "vocab.json",
       "size": 2776833,
-      "sha256": "pin_required",
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
       "licence": "apache-2.0",
       "path": "models/Qwen--Qwen3-VL-Embedding-2B/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/vocab.json",
       "gated": false

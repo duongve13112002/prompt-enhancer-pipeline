@@ -223,7 +223,8 @@ vlm:                                     # R-018: rules name no model; models ar
         max_connections: deploy_required   # accepted sockets and handler threads at once, at least max_pending_requests; more are turned away
         max_discard_bytes: deploy_required   # most bytes read and dropped after a refusal, at least max_request_bytes
         read_timeout_s: deploy_required   # one deadline per connection for the whole request; also the reply send timeout
-    cloud_claude:                       # decision 28: optional cloud backend; used only when a role binds to it and the user granted requests
+        reference_check: {min_cosine: fit_from_bench, max_norm_deviation: fit_from_bench}   # read by `reference-check compare` only; both fitted on the deployment by `reference-check reference` (fit.json), never from a dev run
+    cloud_claude:                      # decision 28: optional cloud backend; used only when a role binds to it and the user granted requests
       provider: anthropic
       engine: {name: anthropic}
       anthropic_version: deploy_required

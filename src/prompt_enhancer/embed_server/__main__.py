@@ -1,4 +1,5 @@
-"""Command line: `python -m prompt_enhancer.embed_server serve --config <profile.yaml> [--overlay <file>]`.
+"""Command line: `python -m prompt_enhancer.embed_server serve --config <profile.yaml> [--overlay <file>]`, and
+`reference-check reference|compare` (reference.py, T-018 P2).
 
 The server reads everything from the profile (`embed serve` read set); a refusal prints one line on stderr and exits 2.
 SIGINT, SIGTERM and (Windows) SIGBREAK stop it cleanly and free the GPU. Once the profile is read, the last line (a
@@ -11,6 +12,7 @@ review).
 """
 
 import argparse
+import json
 from pathlib import Path
 import signal
 import sys
@@ -25,6 +27,7 @@ from .settings import load_server_settings
 REFUSED = 2  # protocol-bound: exit status of a configuration, manifest or startup refusal
 INCOMPLETE = 3  # protocol-bound: exit status when a stop left a resource live (a handler, a socket, an admitted request, the engine)
 FAILED = 1  # protocol-bound: exit status of an unexpected error once the profile is read (Python's own uncaught status)
+MISMATCH = 4  # protocol-bound: exit status of `reference-check compare` when an item failed its verdict
 
 
 def _loader(settings):
@@ -43,7 +46,28 @@ def main(argv=None):
     run.add_argument('--config', required=True, help='profile path, relative paths start at the project root')
     run.add_argument('--overlay', default=None, help='optional deployment overlay of the profile')
     run.add_argument('--project-root', default=None, help='project root (default: the root of this checkout)')
+    check = commands.add_parser('reference-check', help='compare the server with its model\'s documented recipe '
+                                '(reference.py); a smoke check, never a quality claim')
+    steps = check.add_subparsers(dest='step', required=True)
+    for step, text in (('reference', 'embed the inputs with the card recipe (GPU environment); write reference.json '
+                        'and the fitted min_cosine (fit.json)'),
+                       ('compare', 'send the same inputs to the running server through K1; judge each item against '
+                        'server.reference_check.min_cosine; write check.json')):
+        part = steps.add_parser(step, help=text)
+        part.add_argument('--config', required=True, help='profile path, relative paths start at the project root')
+        part.add_argument('--overlay', default=None, help='optional deployment overlay of the profile')
+        part.add_argument('--project-root', default=None, help='project root (default: the root of this checkout)')
+        part.add_argument('--image', action='append', default=[], help='an input image inside the project (repeatable)')
+        part.add_argument('--texts', default=None, help='a JSON list of input texts inside the project')
+        part.add_argument('--out', required=True, help='output directory inside the project (runs/...)')
+        if step == 'reference':
+            part.add_argument('--batch-size', type=int, action='append', required=True,
+                              help='a batch size of the recipe runs (repeatable; 1 is required, the baseline)')
+        else:
+            part.add_argument('--reference', required=True, help='the reference.json the reference step wrote')
     args = parser.parse_args(argv)
+    if args.command == 'reference-check':
+        return _reference_check(args)
     try:
         settings = load_server_settings(args.config, args.overlay, _project_root(args.project_root))
     except ConfigurationError as error:
@@ -53,6 +77,62 @@ def main(argv=None):
         return _serve(settings)
     except (Exception, KeyboardInterrupt) as error:  # the type only: a message may carry a path or request content
         return _last_line(f'failed: {type(error).__name__}', settings, FAILED)
+
+
+def _reference_check(args):
+    """`reference-check reference|compare`: the profile is read through `embed serve` (reference: the tolerances are
+    being measured, not read) or `embed reference-check` (compare: `server.reference_check.min_cosine` and
+    `.max_norm_deviation` are required and refused while a sentinel). Exit 0 when written or passed, MISMATCH when an
+    item failed, REFUSED on a refusal (a K1 `EmbeddingError` included: its code and structural detail only, never a
+    response body). Once the profile is read an unexpected error is one `failed: <type>` line and FAILED, as `serve`
+    does (P1 convention; P2 fix round 1, PM answer 5)."""
+    from ..config import load_config
+    from ..k1_embed import EmbeddingError
+    from . import reference as ref
+    from .settings import server_settings
+
+    refusals = (ConfigurationError, ManifestError, ref.ReferenceCheckError, EmbeddingError, OSError)
+    root = Path(args.project_root or Path(__file__).resolve().parents[3]).resolve()
+    command = 'embed serve' if args.step == 'reference' else 'embed reference-check'
+    try:
+        config = load_config(args.config, command, overlay=args.overlay, project_root=root)
+        settings = server_settings(config, root, str(args.config))
+    except ConfigurationError as error:
+        print(f'refused: {error}', file=sys.stderr)
+        return REFUSED
+    try:
+        return _reference_step(args, root, config, settings)
+    except refusals as error:
+        print(f'refused: {error}', file=sys.stderr)
+        return REFUSED
+    except (Exception, KeyboardInterrupt) as error:  # the type only: a message may carry a path or request content
+        return _last_line(f'failed: {type(error).__name__}', settings, FAILED)
+
+
+def _reference_step(args, root, config, settings):
+    from ..k1_embed import embedder_settings
+    from . import reference as ref
+
+    k1_settings = embedder_settings(config, str(args.config))
+    out = ref._inside(root, args.out, '--out')
+    inputs = ref.prepare_inputs(root, args.image, args.texts, k1_settings)
+    if args.step == 'reference':
+        ref.check_batch_sizes(args.batch_size)
+        fit = ref.run_reference(settings, verify_model(root, settings.model_id, settings.revision), inputs,
+                                args.batch_size, out)
+        print(json.dumps({'step': 'reference', **{key: fit[key] for key in (
+            'min_cosine', 'raw_min_cosine', 'max_norm_deviation', 'raw_max_norm_deviation')},
+            'out': out.relative_to(root).as_posix()}))
+        return 0
+    check = config['vlm']['backends'][settings.backend_name]['server']['reference_check']
+    reference = ref.load_reference(ref._inside(root, args.reference, '--reference'), settings, inputs)
+    verdict = ref.run_compare(config, settings, k1_settings, inputs, reference, check['min_cosine'],
+                              check['max_norm_deviation'], out)
+    print(json.dumps({'step': 'compare', 'passed': verdict['passed'], 'min_cosine': check['min_cosine'],
+                      'max_norm_deviation': check['max_norm_deviation'],
+                      'cosines': [item['cosine'] for item in verdict['items']],
+                      'norms': [item['norm'] for item in verdict['items']]}))
+    return 0 if verdict['passed'] else MISMATCH
 
 
 def _serve(settings):

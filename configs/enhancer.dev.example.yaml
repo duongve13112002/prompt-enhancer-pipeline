@@ -18,7 +18,7 @@ knowledge:
 runtime:
   intake_deadline_s: fit_from_bench        # No measured intake deadline yet
   gpus: [0]
-  vram_budget_gb: 8                      # the user's dev GPU, decision 20; a profile value
+  vram_budget_gb: 7                      # the user's dev GPU, decision 20: nvidia-smi reports 8151 MiB in total (T-018 P2), below 8 GiB, so 8 is refused at load
 
 vision:
   max_decode_pixels: deploy_required      # No measured dev decode limit; independent of VLM backend limits
@@ -73,7 +73,7 @@ vlm:
       server:                            # T-018; every key is a profile value, the server has no defaults
         family: embedding_gemma2
         dtype: bfloat16                  # card: "Run inference in bfloat16 or float32. Do not use float16." (N104)
-        attn_implementation: deploy_required   # sdpa | eager
+        attn_implementation: deploy_required   # EmbeddingGemma 2: eager only; sdpa is refused when the profile is read (its audio tower, Gemma4AudioModel, has no SDPA path in transformers 5.23.0; families.attn_implementations, T-018 P2)
         forward_batch: deploy_required   # images per forward pass, at most embedding.batch_size; VRAM measured in P2
         max_length: 8192                 # card: "a single shared 8,192-token context"
         image: {min_pixels: none, max_pixels: none, max_soft_tokens: 280}   # processor_config.json default; the card allows 70 to 1120
@@ -85,6 +85,9 @@ vlm:
         max_connections: deploy_required   # accepted sockets and handler threads at once, at least max_pending_requests; more are turned away
         max_discard_bytes: deploy_required   # most bytes read and dropped after a refusal, at least max_request_bytes
         read_timeout_s: deploy_required   # one deadline per connection for the whole request; also the reply send timeout
+        reference_check:                 # read by `reference-check compare` only; dev values (smoke only, never a deployment threshold), summarised in tasks/active/T-018-embedding-server.md
+          min_cosine: 0.9998             # T-018 P2 fit on the dev machine: the lowest cosine across the card recipe's bf16/float32, batch 1/2/4, forward/reversed runs (0.99987), floored to 4 decimals; evidence runs/T-018-p2/eg2/reference/fit.json
+          max_norm_deviation: 0.0016     # T-018 P2 fix round 1: the largest |norm - 1| of the same 12 recipe runs' 48 vectors (0.0015440, the card recipe normalises in bf16), rounded up to 4 decimals; recomputed on the CPU from runs/T-018-p2/eg2/reference/reference.json
     embedder_qwen3vl2b:                  # the second dev embedder for the accuracy comparison (decision 137); selected by enhancer.dev-qwen3vl2b.example.yaml
       provider: openai_compatible
       engine: {name: embed_server, version: pin_required}
@@ -103,7 +106,7 @@ vlm:
         attn_implementation: deploy_required
         forward_batch: deploy_required
         max_length: 8192                 # MAX_LENGTH of the card's scripts/qwen3_vl_embedding.py
-        image: {min_pixels: 4096, max_pixels: 1843200, max_soft_tokens: none}   # [A] MIN_PIXELS and MAX_PIXELS of that script (4*32*32 and 1800*32*32); P2 compares them with preprocessor_config.json
+        image: {min_pixels: 4096, max_pixels: 1310720, max_soft_tokens: none}   # preprocessor_config.json at the pinned revision (size.longest_edge 1310720, shortest_edge 4096), the limits the card's sentence-transformers recipe uses; the card script's MAX_PIXELS 1800*32*32 differs (T-018 P2 stage B)
         default_instruction: Represent the user's input.   # card: the default system instruction of every input
         idle_exit_s: deploy_required
         max_request_bytes: deploy_required
@@ -112,3 +115,6 @@ vlm:
         max_connections: deploy_required   # accepted sockets and handler threads at once, at least max_pending_requests; more are turned away
         max_discard_bytes: deploy_required   # most bytes read and dropped after a refusal, at least max_request_bytes
         read_timeout_s: deploy_required   # one deadline per connection for the whole request; also the reply send timeout
+        reference_check:                 # read by `reference-check compare` only; dev values (smoke only, never a deployment threshold), summarised in tasks/active/T-018-embedding-server.md
+          min_cosine: 0.9996             # T-018 P2 fit on the dev machine: the lowest cosine across the card recipe's bf16 batch 1/2/4, forward/reversed runs (0.99970), floored to 4 decimals; evidence runs/T-018-p2/qwen/reference/fit.json
+          max_norm_deviation: 0.0023     # T-018 P2 fix round 1: the largest |norm - 1| of the same 6 recipe runs' 24 vectors (0.0022919), rounded up to 4 decimals; recomputed on the CPU from runs/T-018-p2/qwen/reference/reference.json

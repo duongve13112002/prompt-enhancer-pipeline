@@ -1,8 +1,9 @@
 """Model adapters of the embedding server: the only module that imports torch and transformers (T-018).
 
 Written from the model cards and the `transformers` v5.23.0 source (docs/stages/K1-embed.md, task file T-018), and
-NOT yet run against the real libraries: the labelled P2 reference check against each card's sentence-transformers
-path decides whether the calls below are right. Every import of a heavy library is inside a function, so the CPU
+checked on the dev GPU by the P2 reference check against each card's sentence-transformers path (EmbeddingGemma 2
+and Qwen3-VL-Embedding-2B, 2 images and 2 texts each, every item at or above the fitted `min_cosine`): a smoke
+check, not a quality claim. Every import of a heavy library is inside a function, so the CPU
 suite (no torch) imports this module without cost and tests the engine through a labelled double.
 
 Request path: group the items by kind, run each group in chunks of `server.forward_batch`, pool and normalise on
@@ -51,8 +52,12 @@ class TransformersEngine:
         if items[0].image is None:
             return self._processor(text=[item.text for item in items], padding=True, return_tensors='pt',
                                    **self._text_limit())
-        return self._processor(text=[''] * len(items), images=[item.image for item in items], padding=True,
-                               return_tensors='pt')
+        # The card recipe (sentence-transformers' message modality) renders an image through the model's own chat
+        # template, which writes the image placeholder the processor then expands; an empty text carries none, and
+        # the processor refuses the image (P2 GPU run). The template, a model artifact, decides the placeholder.
+        texts = [self._processor.apply_chat_template([{'role': 'user', 'content': [{'type': 'image', 'image': item.image}]}],
+                                                     tokenize=False) for item in items]
+        return self._processor(text=texts, images=[item.image for item in items], padding=True, return_tensors='pt')
 
     def _qwen_inputs(self, items):
         texts, images = [], []

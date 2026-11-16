@@ -30,8 +30,9 @@ def server_profile(model_test_profile, port=9100, family='embedding_gemma2'):
     backend['engine'] = {'name': 'embed_server', 'version': 'test-version'}
     backend['base_urls'] = [f'http://127.0.0.1:{port}']
     qwen = family == 'qwen3_vl_embedding'
-    backend['server'] = {
-        'family': family, 'dtype': 'bfloat16', 'attn_implementation': 'sdpa', 'forward_batch': 2, 'max_length': 64,
+    backend['server'] = {  # attention: a kernel the family supports (EG2 eager only, families.attn_implementations)
+        'family': family, 'dtype': 'bfloat16', 'attn_implementation': 'sdpa' if qwen else 'eager', 'forward_batch': 2,
+        'max_length': 64,
         'image': ({'min_pixels': 4, 'max_pixels': 4096, 'max_soft_tokens': 'none'} if qwen else
                   {'min_pixels': 'none', 'max_pixels': 'none', 'max_soft_tokens': 16}),
         'default_instruction': 'Represent the input.' if qwen else 'none', 'idle_exit_s': 0,

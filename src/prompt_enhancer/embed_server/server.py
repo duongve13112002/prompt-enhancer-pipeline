@@ -440,6 +440,7 @@ class _Server(ThreadingHTTPServer):
         self._state = state
         self._lock = threading.Lock()
         self._connections = {}  # accepted socket -> its handler thread (None while the thread is being created)
+        self._unclosed = set()  # accepted sockets whose close was refused while they kept their handle (RT5F1)
         self._stopping = threading.Event()
         super().__init__(address, handler)
         # `select` can report a connection that is gone before `accept` takes it; with a timeout the accept gives up
@@ -512,8 +513,10 @@ class _Server(ThreadingHTTPServer):
 
     def shutdown_request(self, request):
         """The stdlib guards only the `shutdown`; a `close` that raises would escape a handler's `finally` (a trace on
-        stderr from that thread) or cut the stop short (fix round 5). Both are guarded here; a socket that stays
-        open is still judged by the stop (registry, listener)."""
+        stderr from that thread) or cut the stop short (fix round 5). Both are guarded here. A refused close whose
+        socket still has its handle is kept in `_unclosed`, apart from the handler registry that a finished handler
+        or a refusal never fills, so the stop retries it once and names it (RT5F1); a refused close that released the
+        handle anyway (`fileno()` is -1) leaves nothing owned."""
         try:
             request.shutdown(socket.SHUT_WR)
         except OSError:
@@ -521,7 +524,15 @@ class _Server(ThreadingHTTPServer):
         try:
             self.close_request(request)
         except OSError:
-            pass
+            still_open = request.fileno() != -1
+            with self._lock:
+                if still_open:
+                    self._unclosed.add(request)
+                else:
+                    self._unclosed.discard(request)
+            return
+        with self._lock:
+            self._unclosed.discard(request)
 
     def _forget(self, request):
         with self._lock:
@@ -576,9 +587,10 @@ class _Server(ThreadingHTTPServer):
         return sum(thread.is_alive() for thread in threads)
 
     def close_connections(self):
-        """Close what is left (a handler that did not finish): no accepted socket outlives the stop."""
+        """Close what is left (a handler that did not finish) and retry once every socket whose close was refused:
+        no accepted socket outlives the stop unreported. Each socket is tried once here."""
         with self._lock:
-            sockets = list(self._connections)
+            sockets = list(self._connections) + [sock for sock in self._unclosed if sock not in self._connections]
         for sock in sockets:
             self.shutdown_request(sock)
 
@@ -586,6 +598,11 @@ class _Server(ThreadingHTTPServer):
         """How many accepted sockets are still registered (a finished handler has forgotten its own)."""
         with self._lock:
             return len(self._connections)
+
+    def unclosed(self):
+        """How many accepted sockets kept their handle after a refused close."""
+        with self._lock:
+            return len(self._unclosed)
 
 
 def _close_engine(state, deadline, window):
@@ -634,14 +651,15 @@ def stop_server(server, accept_thread, state):
        up to `server.read_timeout_s` to finish; their own send deadline ends a reply sooner, a decoder or the engine
        is not interrupted. A client still sending its body is not waited for.
     4. Every accepted socket is shut down, which wakes handlers blocked reading or writing.
-    5. Handler threads are joined within a second `server.read_timeout_s`; sockets still registered are closed.
+    5. Handler threads are joined within a second `server.read_timeout_s`; sockets still registered are closed, and
+       each socket whose earlier close was refused while it kept its handle is tried once more (RT5F1).
     6. The engine is closed only while holding the GPU lock, so no forward pass runs under it; the lock is awaited
        for what is left of that second window, and the engine stays open (never raced) when it is not free. The close
        itself gets its own `server.read_timeout_s` (`_close_engine`).
     7. The log summary is queued (it names the lines the output dropped) and the output gets at most one more
        `server.read_timeout_s` to deliver; a console nobody reads loses those lines, it does not hold the stop.
     8. Success means all of: accept thread joined, listener closed, no handler thread alive, no socket registered, no
-       admitted request, engine closed. Each survivor is named in the exception (kinds and counts only). Undelivered
+       socket left open by a refused close, no admitted request, engine closed. Each survivor is named in the exception (kinds and counts only). Undelivered
        output is not a survivor: it holds no port, thread slot, admission or GPU memory.
 
     Each step is bounded, so the whole stop takes at most `5 * server.read_timeout_s` plus scheduling (accept join,
@@ -667,12 +685,13 @@ def stop_server(server, accept_thread, state):
     state.log.summary()
     state.output.close(window)
     in_flight, working = state.counts()
-    registered = server.registered()
+    registered, unclosed = server.registered(), server.unclosed()
     survivors = [
         (accept_thread.is_alive(), 'the accept thread is still running'),
         (server.socket.fileno() != -1, 'the listening socket is still open'),
         (alive, f'{alive} handler thread(s) still running'),
         (registered, f'{registered} accepted socket(s) still registered'),
+        (unclosed, f'{unclosed} accepted socket(s) could not be closed'),
         (in_flight or working, f'{in_flight} request(s) still admitted, {working} of them past their body read'),
         (engine_note, engine_note),
     ]

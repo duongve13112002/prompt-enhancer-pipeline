@@ -1,6 +1,6 @@
 # Model and data storage
 
-Design only; nothing exists yet.
+The model manifest and its verifier exist (T-018, `src/prompt_enhancer/embed_server/manifest.py`).
 
 ## Models
 

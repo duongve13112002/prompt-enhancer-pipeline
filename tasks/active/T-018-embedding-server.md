@@ -578,3 +578,431 @@ No hidden default, no unclassified literal; the labelled doubles (`refuse_thread
 - **Changed files:** `src/prompt_enhancer/embed_server/{server,__main__}.py`, `tests/test_embed_server_lifecycle.py` (still untracked `??`: the PM must stage it), `docs/stages/K1-embed.md`, this task file.
 - **Cleanup:** removed `.tmp/T-018/fix5/bt`, `hypothesis`, `mut` and my run scripts; kept `.tmp/T-018/fix5/mutants.py`, `fix5-focused.log`, `fix5-mutants.log`, `fix5-lifecycle.log`. Reviewer folders (`rev`, `retest1` to `retest4`) and `tests/test_zz_golden_probe.py` untouched. Every child process was waited for or killed by its test; nothing of mine is running.
 - **Noticed, not done:** `serve` still does not notice an accept loop that ended on its own error (E6, from round 4); the retest-4 scratch `.tmp/T-018/retest4/bt` and `hypothesis` are still there (the reviewer's cleanup was blocked); a `BaseException` other than `KeyboardInterrupt` inside `Thread.start` (after the OS thread exists) is still re-raised, as before.
+
+## P2
+
+Builder: fresh Claude Opus, `high`, worktree `.tmp/worktrees/T-018-p2` at `ca57f32`. R-016, R-017, R-018, R-015, R-025. **Status: Step 0 written, waiting for PM approval. Nothing downloaded, installed or run on the GPU.** Network reads so far: Hub model API and tree at the pinned revisions, both model cards (raw README at the pinned revision), PyPI JSON, the PyTorch cu130 index and `HEAD` of two wheels and of the Qwen card's demo image. Saved under `.tmp/T-018-p2/hub/` (scratch, deleted at handoff).
+
+### Research evidence (P2 Step 0, read 2026-11-17)
+
+| Question | Source | Finding | Class |
+|---|---|---|---|
+| EG2 pinned identity and gating | `api/models/google/embeddinggemma-2?blobs=true`, `…/tree/f9972ac2…5a1e?recursive=true` | `sha f9972ac22e696a105c482202646979e33e4b5a1e`, `gated False`, `private False`, `lastModified 2026-10-28T07:19:46Z`, `model_type embedding_gemma2`, no `auto_map`; 15 files, 1,525,810,627 B | documented |
+| Qwen 2B pinned identity and gating | same for `Qwen/Qwen3-VL-Embedding-2B` at `9f2f7e71…7bda` | `gated False`, `private False`, `lastModified 2026-04-16T08:54:25Z`, `model_type qwen3_vl`, no `auto_map`; 18 files, 4,271,068,726 B; **no `2_Normalize/` folder** although `modules.json` names the Normalize module (P1 row) | documented |
+| Sizes vs manifest example | `configs/model_manifest.example.json` (13 EG2 + 15 Qwen entries) vs the tree | every listed size equals the tree size; the example leaves out `README.md`, `.gitattributes` and (Qwen) `scripts/qwen3_vl_embedding.py`; small-file hashes `pin_required` | documented |
+| Small-file integrity source | tree JSON `oid` per non-LFS file (e.g. `config.json` `"oid":"dc524b2c…340a","size":4455`) | the git blob SHA-1 lets each small file be checked independently of the downloader (`sha1(b"blob <size>\0" + bytes)`); LFS files carry the SHA-256 `lfs.oid` | documented |
+| Qwen documented reference output | card at the pinned revision, lines 133-144 and 197-205 | ST recipe prints `tensor([[0.8160, 0.7155, 0.7054], [0.5173, 0.3295, 0.4446], [0.3863, 0.2987, 0.3312], [0.1061, 0.0433, 0.0839]])` for 4 text queries × (text, image `…/Qwen-VL/assets/demo.jpeg`, text+image); the helper-script path prints `[[0.8158, 0.7178, 0.7173], [0.5195, 0.3303, 0.4392], [0.3884, 0.2858, 0.3314], [0.1093, 0.0387, 0.0695]]` (rounded here) for the same inputs. The two documented implementations differ by up to 0.0144 (row 4 col 3), 0.0129 within cols 1-2 | documented |
+| Qwen demo image | `HEAD https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg` | `200`, `image/jpeg`, `Content-Length: 496395`, `ETag F10E0F33…1A8C`, `Last-Modified 2023-08-22` | documented |
+| EG2 documented reference output | card lines 111-123, 196-227 | the card prints `model.similarity(...)` but **publishes no numbers**; the documented reference is the card's recipe (`SentenceTransformer`, `prompt_name="Document"`, `encode({"image": …})`, bf16 if supported else float32) run locally | documented (recipe only) |
+| torch wheel | `download.pytorch.org/whl/cu130/torch/` index; `HEAD download-r2.pytorch.org/…/torch-2.14.1%2Bcu130-cp312-cp312-win_amd64.whl` | listed with `sha256=0a09031e…5be9`, `Content-Length: 1990608063`; `.metadata` `Requires-Dist`: filelock, typing-extensions, setuptools, sympy, networkx, jinja2, fsspec (**no `nvidia-*` wheels on Windows**: CUDA runtime is inside the wheel) | documented |
+| torchvision wheel | same index | `torchvision-0.29.1+cu130-cp312-cp312-win_amd64.whl` `sha256=14d3195e…91c6`, `Content-Length: 6566385` | documented |
+| PyPI pins | `pypi.org/pypi/<name>[/<ver>]/json` | `transformers 5.23.0` py3 wheel 13,336,114 B (needs `huggingface-hub>=1.31,<3`, `tokenizers>=0.23.1,<0.24`, `safetensors>=0.8.0`); `sentence-transformers 6.3.0` (2026-11-11) 780,346 B (needs `transformers>=5,<6`, `torch>=2.2`, scikit-learn, scipy); `safetensors 0.8.0` 355,540; `huggingface-hub 2.4.0` 857,021 (needs `hf-xet`, `httpx2`); `tokenizers 0.23.3` 2,872,101 | documented |
+| Sm_120 in the cu130 wheel | — | not readable without the wheel; checked after install by `torch.cuda.get_arch_list()` | assumption until P2 |
+| GPU now | `nvidia-smi --query-gpu=…` | `RTX 5070 Laptop GPU, 0 MiB, 8151 MiB, 616.92` (not the baseline; that is taken right before the job) | documented |
+| Disk | `Get-PSDrive D` | 155.4 GB free | documented |
+| Dev VRAM budget | `configs/enhancer.dev.example.yaml:20` `vram_budget_gb: 8`; `models.py:141-145` | 8 GiB = 8192 MiB > 8151 MiB total, so `load_engine` refuses this profile value on this GPU (`runtime.vram_budget_gb exceeds the memory of the configured GPU`) | source-verified |
+| Integration fix `BoundedOutput` | `server.py:94-95`; installed Python 3.12.10 `Lib/io.py` | `io.py` does `RawIOBase.register(FileIO)` and `RawIOBase.register(_WindowsConsoleIO)`; a probe printed `FileIO True` for stdout to a pipe and to a file. A pytest capture or `StringIO` has no `buffer.raw` (or a `BytesIO` buffer) and takes `stream.write`. The console case (`_WindowsConsoleIO`) is source-verified only: opening a console is refused here (footer 7) | source-verified / experiment |
+| RT5F1 | `.tmp/pm-archive/T-018/T-018/retest5.md:105-115`; `server.py:502-546` | `_serve_connection`'s `finally` always `_forget`s (S:511) after `shutdown_request` swallowed the close `OSError` (S:523); `_turn_away` never registers its socket; so `registered()` in `stop_server` (S:670) cannot see a socket whose close failed | source-verified |
+
+**Gemma authentication:** the brief calls the Gemma download gated; the Hub says `gated: False` for both repositories at the pinned revisions (rows above). So the download reads **no credential**: every call passes `token=False` (no stored or `.secrets/` token is looked up) with `HF_HOME` under `<project>/.cache/hf`. If the Hub answers 401 or 403 the download stops and reports; adding a credential path then is a new PM decision (only project Python would read it from `.secrets/`, and nothing here opens, lists or prints it).
+
+### Downloads (total against the 12 GB cap of decision 139)
+
+| What | Files | Bytes |
+|---|---|---|
+| EG2 `google/embeddinggemma-2` @ `f9972ac22e696a105c482202646979e33e4b5a1e` | the 13 manifest-example files: `model.safetensors` 1,488,915,288; `tokenizer.json` 32,170,510; `tokenizer.model` 4,689,013; `config.json` 4,455; `processor_config.json` 1,788; `tokenizer_config.json` 1,599; `config_sentence_transformers.json` 1,565; `chat_template.jinja` 1,016; `sentence_bert_config.json` 747; `preprocessor_config.json` 511; `modules.json` 413; `2_Normalize/config.json` 97; `1_Pooling/config.json` 90 | 1,525,787,092 |
+| Qwen 2B `Qwen/Qwen3-VL-Embedding-2B` @ `9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda` | the 15 manifest-example files: `model.safetensors` 4,255,140,312; `tokenizer.json` 11,423,705; `vocab.json` 2,776,833; `merges.txt` 1,671,853; `chat_template.jinja` 5,519; `tokenizer_config.json` 5,404; `config.json` 1,570; `video_preprocessor_config.json` 817; `preprocessor_config.json` 783; `sentence_bert_config.json` 770; `added_tokens.json` 707; `special_tokens_map.json` 613; `modules.json` 429; `config_sentence_transformers.json` 238; `1_Pooling/config.json` 96 | 4,271,029,649 |
+| Not downloaded | `README.md` (read already), `.gitattributes`, `scripts/qwen3_vl_embedding.py` (downloaded code, not run: P1 Q3) | 0 |
+| Wheels measured | torch 1,990,608,063; torchvision 6,566,385; transformers 13,336,114; tokenizers 2,872,101; huggingface-hub 857,021; sentence-transformers 780,346; safetensors 355,540 | 2,015,375,570 |
+| Wheels not yet measured | the rest of the resolved set (numpy, scipy, scikit-learn, sympy, networkx, hf-xet, httpx2, regex, pyarrow, Pillow, jsonschema, …): measured from a `pip install --dry-run --report` (metadata only; the torch index serves PEP 658 `.metadata`, so no wheel is fetched) summed against index sizes **before** the real install | estimate ≤ 0.3 GB (assumption) |
+| Qwen card demo image (reference only, Q2) | `demo.jpeg` | 496,395 |
+| **Total** | | **7,812,688,706 B measured (weights 5,796,816,741 + wheels 2,015,375,570 + image) + ≤ 0.3 GB = ≤ 8.2 GB** (cap 12 GB; I stop and ask if the dry-run sum pushes the total past 12 GB) |
+
+**Download method:** a scratch driver under `.tmp/T-018-p2/` run with `.venv-gpu` Python `-I`: `huggingface_hub.hf_hub_download(repo_id, filename, revision=<40-hex>, local_dir=<project>/.cache/hf-staging/<owner>--<name>/<revision>, token=False)` per listed file (never `snapshot_download`, so no unlisted file arrives). Staging is needed because `local_dir` mode keeps its own `.cache/huggingface/` metadata in that folder, which `manifest.verify_model` refuses as an unlisted entry (assumption from the huggingface_hub docs, re-read in the installed source before use). Each file is then checked twice before it moves: size equal to the tree size, and LFS SHA-256 equal to `lfs.oid` or git blob SHA-1 equal to `oid` for small files; then moved (same drive, a rename, no second copy) to `models/<owner>--<name>/<revision>/<file>`; staging removed. `models/manifest.json` (Git-ignored) gets the 28 entries with the measured SHA-256 (a copy of the old file kept under `.tmp/T-018-p2/` until verification passes); `configs/model_manifest.example.json` gets the measured small-file SHA-256 in place of `pin_required` (EG2, Qwen 2B only; 8B unchanged). Then `manifest.verify_model` (the production check) runs on both. Resumable: a file already in place with the right size and hash is skipped.
+
+### `.venv-gpu` install plan
+
+1. Base interpreter: the one the CPU `.venv` was made from (Python 3.12.10, cp312; read from `.venv/pyvenv.cfg`, not a guess). `python -m venv <project>/.venv-gpu`.
+2. Environment for every install command: `PYTHONNOUSERSITE=1`, `PIP_NO_CACHE_DIR=1` (`--no-cache-dir`: torch is not stored twice), `TEMP`/`TMP` = `<project>/.tmp/T-018-p2/tmp`, `HF_HOME=<project>/.cache/hf`, `HF_HUB_DISABLE_TELEMETRY=1`.
+3. Pins finished in `requirements-gpu.txt` (tracked): add `sentence-transformers==6.3.0`, `safetensors==0.8.0`, `huggingface-hub==2.4.0`, `tokenizers==0.23.3` (all satisfy transformers 5.23.0's ranges above). The rest stays resolver-chosen and is recorded from `pip freeze` into `docs/dependencies-and-environments.md` (observed, not pinned; no lockfile is invented).
+4. `pip install --dry-run --report .tmp/T-018-p2/pip-report.json -e . -r requirements-gpu.txt`, sum sizes, compare against the cap; then the real install. Wheel source: PyPI plus `--extra-index-url https://download.pytorch.org/whl/cu130` (already in `requirements-gpu.txt`); pip checks each wheel's `#sha256=` from the index.
+5. **Blackwell and cu130 check** (first GPU touch, after the VRAM baseline): `torch.__version__ == '2.14.1+cu130'`, `torch.version.cuda` starts with `13.0`, `'sm_120' in torch.cuda.get_arch_list()`, `torch.cuda.get_device_capability(0) == (12, 0)`, and a 256×256 bf16 matmul on `cuda:0` equals the CPU float32 result within bf16 rounding. Any failure: stop and report; no other torch is tried without the PM.
+6. The server must not import `sentence_transformers` (it is reference-only): a CPU test asserts no `embed_server` runtime module names it except the reference module's lazy import.
+
+### Reference check method
+
+Tool: new `src/prompt_enhancer/embed_server/reference.py` and the subcommand `python -m prompt_enhancer.embed_server reference-check --config <profile> --backend <name> --inputs <dir> --out runs/T-018-p2/reference/<utc>/ [--fit]`, run in `.venv-gpu`. Pure-Python comparison and fitting functions sit in the module (CPU-tested with labelled doubles); `sentence_transformers` and `torch` are imported lazily inside the run function. It is the consumer of **`vlm.backends.<name>.server.reference_check.min_cosine`** (schema: number in (0, 1]; sentinel `fit_from_bench` in the examples; `check` mode refuses a missing value or a sentinel with a precise message; `--fit` mode does not read it and prints the fitted value with its evidence file). Inputs: two images from `database/` (read only, copied to `.tmp/T-018-p2/inputs/` as files so nothing writes under `database/`), prepared once by `prepare_vision_image_with_info` at `vision.max_image_side` so both paths see the same bytes, plus two short texts.
+
+- **Reference vectors (documented recipe, in process):** `SentenceTransformer(<models/… local dir>, local_files_only=True, trust_remote_code=False, model_kwargs={"dtype": torch.bfloat16})`, `encode([...], normalize_embeddings=True)`; EG2 text with `prompt_name="Document"`, images as `{"image": PIL}`; Qwen with its default prompt (system "Represent the user's input."). The model is unloaded (`del`, `gc.collect()`, `empty_cache`) before the server starts, so one model is resident at a time.
+- **Fit (`--fit`):** the spread that the documented recipe itself allows: the same inputs under ST bf16 at batch size 1, 2 and 4 (and the input order reversed), and ST float32 (the EG2 card names both dtypes: "`torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32`"). `min_cosine` = the lowest pairwise cosine across those runs per input, floored to 4 decimals; the per-input table and the floor rule go into the evidence JSON and this file. If every pair is ≥ 0.99999 (the spread collapses), I report that and ask instead of writing a value that would demand bit-identical output (Q1).
+- **Check:** the server, started from the same profile, embeds the same items sent in the K1 shape (`Embedder.image_bodies`/`text_bodies`, so the bytes are K1's); pass when cosine(server, ST bf16 batch 1) ≥ `min_cosine` for every item, plus server native dimension and unit norm.
+- **Qwen card agreement (documented numbers):** with the demo image (Q2), the server reproduces the card's 4 queries × columns 1-2 (text document, image document; the card's column 3 text+image item has no K1 shape: a text part before an image is the instruction) and the 8 similarities are compared with the card's ST matrix; reported with the documented spread between the card's two implementations (≤ 0.0129 in those columns) as context, not as a second gate (Q3).
+- This is a `smoke` plumbing check (R-020), never a quality claim; dev values never enter a deployment threshold (gpu-live-run preflight 6).
+
+### VRAM plan and server smoke
+
+Order (one job at a time, `gpu-live-run`; one model resident): baseline (`nvidia-smi` per device and the holder processes) → arch check → EG2: ST fit/reference (unload) → EG2 server reference check → EG2 K1 smoke → server stop → VRAM back at baseline → the same for Qwen 2B → final baseline. **K1 smoke on 2 images:** a scratch profile `extends` the dev example (`data_root`, `kb_store`, `knowledge.root` under `.tmp/T-018-p2/`, a 2-image scratch knowledge root copied from `database/`, the loopback port, `vram_budget_gb` 7, Q4), K0 sync then `k1_embed.embed_images` (the production client); evidence: both vectors present, dimension, unit norm, cosine to the reference vector of the same image. Server started with `subprocess.Popen(..., creationflags=CREATE_NO_WINDOW)`, stopped by recorded PID; then port free, no child left, VRAM equal to the baseline. Runs go under `runs/T-018-p2/` (Git-ignored).
+
+### RT5F1 regression and fix
+
+Tests first (they fail now, using the retest's labelled close-refusal double: a wrapper over a real `socketpair` that raises `OSError` before closing): (a) a finished handler whose close fails, (b) a turned-away connection whose close fails; each expects `stop_server` to raise `ShutdownIncomplete` naming the unclosed socket, and the backing socket still open. Fix: `shutdown_request` records a socket whose `close` raised **and** whose `fileno()` is still not `-1` in a separate `_unclosed` set (under `_lock`), independent of `_connections`; `close_connections` retries those; `stop_server` adds `(unclosed, f'{n} accepted socket(s) could not be closed')`. A failed close after which `fileno()` is `-1` is not a survivor (the retest's limit: a native close can invalidate the handle). Mutants: drop the `fileno` test, drop the refusal-path record, drop the survivor row.
+
+### Hazards and the test that catches each
+
+| Hazard | Caught by |
+|---|---|
+| cu130 wheel lacks sm_120 or cannot run on this driver | arch check step 5 (stop) |
+| A downloaded file differs from the Hub (size, LFS SHA-256, blob SHA-1) or the wrong revision lands | driver double check; `manifest.verify_model` (existing tests + new size property test) |
+| huggingface_hub `local_dir` metadata or an unlisted file in `models/…` | staging + move; `verify_model` refuses unlisted files (existing test) |
+| A credential is picked up silently | `token=False` on every call; `HF_HOME` under `.cache/`; a scratch check that no `Authorization` header is sent is not possible without a proxy, so this is source-verified only |
+| Qwen `2_Normalize` folder absent makes ST fail to load | reference run itself (the error, if any, is reported, not patched) |
+| Server and ST differ (pooling, padding, prompt, image limits, `AutoModel` choosing `Qwen3VLModel` for a `…ForConditionalGeneration` checkpoint) | the reference check; the server profile's image limits must equal the processor's own `preprocessor_config.json` values for the comparison, else the check compares different images (asserted in the tool) |
+| Tolerance fitted from a spread that is too wide hides a defect | fit uses only recipe-sanctioned variations; the Qwen card numbers are a second, external comparison |
+| `vram_budget_gb: 8` refused on an 8151 MiB GPU | Q4; the existing `load_engine` refusal |
+| OOM at batch 4 on 8 GB | `forward_batch` 1 for the smoke; OOM maps to `EngineError` (existing test) |
+| A server or child left running, VRAM not back | teardown checks; PID-scoped stop |
+| `server.reference_check.min_cosine` ignored, defaulted or accepted while a sentinel | config override + refusal tests (below) |
+| RT5F1 | the two new lifecycle tests above |
+
+### Questions (ranked, each with my proposed answer)
+
+1. **Where may the fitted `min_cosine` live?** gpu-live-run says dev runs never enter thresholds. *Proposed: write the fitted value only in the dev example profiles (`purpose: smoke_only`) with the evidence path in a comment; the full example keeps `fit_from_bench` until the deployment measures it.*
+2. **Fetch the Qwen card's demo image (496,395 B, a non-Hub URL)** to compare with the card's published numbers? *Proposed: yes, into `.tmp/T-018-p2/inputs/`, deleted at handoff; it is the only documented numeric reference either model has.*
+3. **Card agreement as a gate or as evidence?** *Proposed: evidence only (no second key); a mismatch beyond 0.0129 is reported and stops P2 for a PM decision.*
+4. **`runtime.vram_budget_gb`** for the dev runs: 8 is refused on this GPU (8151 MiB). *Proposed: 7 in the scratch run profile only, and a one-line fix of the dev example to 7 with the reason (it is the dev machine's own value, decision 20; PM decision pending user review).*
+5. **`run_approval_gate.py check`** (gpu-live-run preflight 5) needs a user-approved profile record, which does not exist for these runs. *Proposed: the PM records/approves the scratch profile, or waives the gate for P2's smoke runs in the approval message.*
+
+#### PM answers (P2; each a PM decision pending user review)
+
+1. The fitted `min_cosine` goes only into the dev example profiles; the base example keeps `fit_from_bench`.
+2. Fetch the Qwen card demo image into `.tmp/T-018-p2/inputs/`, record size and SHA-256, open it only through Pillow, delete it at handoff (reference data, never code).
+3. Agreement with the card's numbers is reported evidence, not a second gate.
+4. `vram_budget_gb: 7` in the dev example profile, the measured total (8151 MiB) quoted as the reason.
+5. `run_approval_gate.py` is waived for P2's smoke runs: the dev profile is `purpose: smoke_only`, and no record may claim a user approval that does not exist.
+6. Two stages: A (no GPU, no CUDA context: install, downloads, arch check from torch metadata, RT5F1, `reference-check`, focused tests) then `READY FOR GPU`; B only after `GPU GO`, reply `GPU DONE` as soon as the GPU is released.
+
+### Configuration impact (P2, before any runtime edit)
+
+| Setting | Schema / profile | Validation and tests |
+|---|---|---|
+| `vlm.backends.<name>.server.reference_check.min_cosine` (new, returns with its consumer) | schema `server.reference_check` object (`additionalProperties: false`), `min_cosine` number `(0, 1]` or sentinel; dev examples: fitted value (Q1); full example and `dev-qwen3vl2b`: fitted or `fit_from_bench` | refused missing, sentinel, ≤ 0, > 1, non-number, bool; override test: a non-default value changes the verdict of the comparison; the server itself ignores the key (only `reference-check` consumes it; an audit row says so) |
+| `runtime.vram_budget_gb` (dev example) | existing | Q4; existing refusal at load |
+| `requirements-gpu.txt` pins | tracked file | exact versions; doc update in `docs/dependencies-and-environments.md` |
+| `models/manifest.json` entries, example small-file SHA-256 | existing schema `model_manifest.v0` | existing schema and manifest tests; new size property test |
+| Download driver settings (repo, revision, file list, staging dir) | read from `configs/model_manifest.example.json` and the profile, never typed in the driver | scratch only, not runtime |
+| Reference inputs dir, output dir | CLI arguments (validated: inside the project root, after resolving links) | refusal test for a path outside the root |
+| Retained literals | `token=False` safety-bound; `fit_from_bench` protocol-bound sentinel; the 4-decimal floor of the fit: `artifact-bound` (a rule of the fit method, recorded with the value in the evidence JSON) | classified in the audit |
+
+### Plan (checkable finish)
+
+1. CPU work in the worktree (no network, no GPU): RT5F1 tests + fix; `reference.py` + subcommand + schema key + example profiles + tests; `requirements-gpu.txt` pins; size property test. Done: the brief's test sets green through `test_slot.py` (one process, no `-n`).
+2. `.venv-gpu`: dry-run size sum ≤ cap, install, arch check. Done: the five assertions of step 5 printed.
+3. Downloads into staging, double check, move, `models/manifest.json`, `verify_model` on both. Done: both verified; total bytes reported.
+4. GPU runs per model (EG2, then Qwen 2B): fit, reference check, K1 2-image smoke, teardown. Done: cosine ≥ fitted `min_cosine` for every item of both models; Qwen card table; VRAM back at baseline; no process left; port free.
+5. Docs (`dependencies-and-environments.md` tested versions, `model-storage.md` "Design only" line, K1-embed reference check), Configuration audit, mutants (3-10 on changed lines), cleanup of `.tmp/T-018-p2/`, Completion report.
+
+### Steps (P2 Stage A)
+
+1. Pins: `requirements-gpu.txt` gains `tokenizers==0.23.3`, `safetensors==0.8.0`, `huggingface-hub==2.4.0`, `sentence-transformers==6.3.0`; the install line no longer says `-e .` (an editable install would write build metadata into whichever tree it ran from; the package runs from `PYTHONPATH=<tree>/src`, as in the CPU `.venv`).
+   Dry run (`pip install --dry-run --report`, metadata only): 57 wheels, **2,130,737,465 B** by `HEAD` of each index URL; with the weights (5,796,816,741 B) and the demo image (496,395 B) **7,928,050,601 B**, under 12 GB.
+2. `.venv-gpu` created from the CPU venv's base interpreter (`.venv/pyvenv.cfg`: Python 3.12.10), installed with `--no-cache-dir`, temp under `.tmp/T-018-p2/tmp` (empty afterwards): exit 0, **3.6 GB** installed (`du -sh`).
+   Torch metadata without a CUDA context (`torch.cuda.is_initialized()` False before and after): `2.14.1+cu130`, `torch.version.cuda` `13.0`, arch list `sm_75 … sm_100, sm_120`.
+3. RT5F1: tests first (`CloseRefused` double over a real `socketpair`; handler and refusal paths; a refused close that keeps the handle stays a survivor, one that releases it does not): 3 failed before the fix (the two survivor cases and the updated `Unclosable` test), all 60 of the lifecycle file pass after. Fix: `_Server._unclosed`, filled by `shutdown_request` when `close` raises and `fileno()` is not -1, retried once by `close_connections`, named by `stop_server` as `N accepted socket(s) could not be closed`.
+4. `reference-check reference|compare` (`embed_server/reference.py`, `__main__.py`), loader command `embed reference-check` with `validate_reference_check_reads` (config.py), schema `server.reference_check.min_cosine` (`(0, 1]` or `fit_from_bench`, optional for `serve`), `Family.reference_text_prompt_name`; examples hold `fit_from_bench`; dev `vram_budget_gb: 7`. Tests: `tests/test_embed_server_reference.py` (49), the no-heavy-import test now also covers `reference` and `sentence_transformers`, a manifest size property test.
+5. Demo image: 496,395 B, SHA-256 `9eeaa87013b4e800930e8a411b58ff9e2fd5383906b1a022f4a712720af34cc2`, Pillow `JPEG (2048, 1365) RGB`, in `.tmp/T-018-p2/inputs/` (deleted at handoff).
+6. Downloads (`.tmp/T-018-p2/download.py`, `token=False`, `HF_HUB_DISABLE_IMPLICIT_TOKEN=1`, `HF_HOME` under `<project>/.cache/hf`, staging under `<project>/.cache/hf-staging`): source-verified that `token=False` sends no token (`huggingface_hub/utils/_headers.py:132`) and that `local_dir` keeps `.cache/huggingface` inside it (`_local_folder.py:446-448`), hence the staging and move.
+
+7. Downloads finished: 28 files, **5,796,816,741 B**, every file size == Hub tree, LFS SHA-256 / blob SHA-1 == Hub oid (`.tmp/T-018-p2/download.log`, `download-result.json`); staging removed (`.cache` holds only `hf` 576 KB and a `pip` folder from 11-16 that is not mine). `models/manifest.json`: 30 entries (2 GGUF kept, 28 new; old copy in `.tmp/T-018-p2/manifest.before.json`). `configs/model_manifest.example.json`: 23 `pin_required` small-file hashes filled with the measured SHA-256 (identical to the generated `.tmp/T-018-p2/model_manifest.example.json`); 8B entries unchanged.
+8. Focused sets (first run, before the guard-test fix): `1 failed, 1608 passed, 34 skipped in 383.70s`; the failure is `test_every_schema_server_key_reaches_the_settings_record` (`reference_check` is not in `ServerSettings` by design: the server does not read it).
+9. Guard test `test_every_schema_server_key_reaches_the_settings_record` now names `reference_check` as read by another command (`REFERENCE_CHECK_READS`) and still requires every other server key, unchanged otherwise.
+10. `manifest.verify_model` (production check) on the downloaded trees: `google/embeddinggemma-2 verified, files 13`; `Qwen/Qwen3-VL-Embedding-2B verified, files 15`.
+11. Focused sets rerun through `test_slot.py` (one process, no `-n`): `tests/test_embed_server_*.py tests/test_k1_*.py tests/test_field_contracts.py tests/test_real_contracts.py` → **`1609 passed, 34 skipped in 359.28s`** (log `.tmp/T-018-p2/focused2.log`).
+12. Mutants (scratch copy of `src/prompt_enhancer` under `.tmp/T-018-p2/mut`, removed; log `mutants.log`): **10/10 killed** — M1 fileno test dropped, M2 unclosed not recorded, M3 no retry, M4 survivor row dropped (lifecycle); M5 floor → half-even, M6 `>=` → `>`, M7 lowest → highest, M8 sentinel not refused, M9 identity not checked, M10 compare read through `embed serve` (reference tests). Control on the unmutated copy: `5 passed, 104 deselected` (the `-k close_fail` filter; the full reference file passed in step 11).
+13. `ruff check` / `ruff format --check`: **not_run** (`No module named ruff` in `.venv`).
+14. Stage A stopped here: `READY FOR GPU` sent. Stage B (after `GPU GO`): EG2 then Qwen 2B, each `reference-check reference` (batch sizes 1, 2, 4), server start by PID with `CREATE_NO_WINDOW`, `reference-check compare`, K1 2-image smoke, teardown with VRAM back at baseline.
+
+#### Configuration audit (P2 Stage A: rows new or changed)
+
+| Setting / literal | Consumer | Validation | Example profile | Override test | Refusal test / class |
+|---|---|---|---|---|---|
+| `vlm.backends.<name>.server.reference_check.min_cosine` | `reference-check compare` (`__main__._reference_check` → `reference.judge`) | schema `(0, 1]` or `fit_from_bench`; `validate_reference_check_reads` refuses missing, sentinel, NaN; bool refused by the schema's number (jsonschema `is_number`) | `fit_from_bench` in the full example and both dev embedders (dev values written in Stage B, Q1) | `test_the_configured_tolerance_decides_the_verdict` (0.99 → exit 4, 0.9 → exit 0 on the same vectors); `test_reference_check_reads_a_measured_tolerance` | `test_reference_check_refuses_a_missing_unresolved_or_out_of_range_tolerance` (10 cases), `test_compare_refuses_an_unresolved_tolerance_before_contacting_the_server`; configurable |
+| same key, not read by `serve` or `reference` | — | — | — | `test_the_server_does_not_read_the_tolerance` (absent and sentinel both load for `embed serve`) | configurable (documented non-consumers) |
+| loader command `embed reference-check` | `config.load_config` | `COMMAND_READS` entry; runs `validate_embed_server_reads` first | — | via the tests above | protocol-bound |
+| `--batch-size` (repeatable, required, 1 required, positive, distinct) | `reference.run_reference` | `check_batch_sizes` before any import or manifest read | — | — | `test_batch_sizes_need_the_baseline_one…` (7 cases), `test_the_reference_step_refuses_before_loading_anything`; configurable (CLI, recorded in reference.json) |
+| `--image`, `--texts`, `--out`, `--reference` paths | `reference.prepare_inputs`, `_inside` | inside the project root after resolving links; texts a JSON list of non-empty strings; images through K1's own preparation | — | `test_inputs_are_prepared_as_k1_prepares_them…` | same test (outside root, bad JSON, empty text, broken image, no inputs); configurable |
+| `runtime.vram_budget_gb` (dev example 8 → 7) | `models.load_engine`, `reference.run_reference` | existing refusal above the device total | dev example 7, reason quoted | existing `test_every_value_comes_from_the_profile` (2.5) | existing; configurable |
+| `FIT_DECIMALS = 4` | `reference.floor_to` | — | — | `test_the_fit_floors_to_four_decimals`, floor property | artifact-bound (recorded in fit.json) |
+| `FORMAT = 'embed_reference.v0'` | reference files | `load_reference` refuses another | — | — | `test_a_reference_made_for_something_else_is_refused`; artifact-bound |
+| `REFERENCE_FALLBACK_DTYPE = 'float32'`, `ORDERS`, `BASELINE_ORDER` | `run_reference` | — | — | Stage B | artifact-bound (the card's sanctioned dtype; the fit method) |
+| `MISMATCH = 4` | CLI exit status | — | — | `test_the_configured_tolerance_decides_the_verdict` | protocol-bound |
+| `Family.reference_text_prompt_name` (`Document`, None) | `reference._encode` | — | — | Stage B (the reference itself) | artifact-bound (card / `config_sentence_transformers.json`) |
+| `_Server._unclosed` survivor row | `stop_server` | — | — | `test_a_close_failure_that_leaves_the_socket_open_stays_a_survivor[handler,refusal]` | `test_a_close_failure_that_released_the_socket_is_not_a_survivor`; not a setting |
+| `requirements-gpu.txt` pins | `.venv-gpu` | exact `==` pins | — | installed versions recorded (`arch-check.json`) | — ; configurable (file) |
+| download driver values (repos, revisions, file list) | scratch `download.py` | read from `configs/model_manifest.example.json` and the Hub tree, nothing typed | — | — | scratch, removed at handoff |
+
+#### PM decisions pending user review (P2 Stage A)
+
+- `server.reference_check` is optional in the schema: only `reference-check compare` reads it (and refuses it missing or a sentinel); requiring it for `serve` would force an unread key on a deployment that never runs the check (an ignored configured field).
+- `reference-check reference` reads the profile through `embed serve` (the tolerance is what it measures); its batch sizes are command-line values recorded in `reference.json`, not profile keys (a measurement procedure, not a deployment choice).
+- The reference compares the K1-rendered text with the card recipe: EmbeddingGemma 2 `prompt_name="Document"` on the raw text (its prefix is K1's `text_template`), Qwen the recipe's default prompt; a fact of each card, held in `families.py`.
+
+### Stage B (GPU, 2026-11-17 04:16-04:41 +07:00; builder continuing the retired stage A worker)
+
+Step 0 (approved plan, continued without waiting): re-read `## P2` (plan, PM answers, method), skill `gpu-live-run`, `embed_server/{__main__,reference,models,families,manifest}.py`, both dev example profiles; ran the plan's order (device check, EG2 reference, EG2 server compare and K1 smoke, teardown, then Qwen likewise, card agreement, final baseline).
+
+Run harness (scratch, deleted; profiles kept in `runs/T-018-p2/profiles/`): `monitor.py` started each process with `CREATE_NO_WINDOW`, recorded the launcher PID and its interpreter child (the venv `python.exe` is a redirector), sampled `nvidia-smi` and each process's peak working set every 0.5 s. `launch.py` called the production CLI `prompt_enhancer.embed_server.__main__.main(argv)` unchanged except that `verify_model` read the main checkout's `models/` (this worktree has none; the manifest check refuses a link, and `--project-root <main>` would load main's schema, which lacks `server.reference_check`). Scratch run profiles extend the dev examples and set only the `deploy_required` values of this run (port 18431/18432, `forward_batch 1`, `idle_exit_s 120`, `vision.quality 90`, storage under `.tmp/T-018-p2/`, `engine.version` the worktree label). Servers stopped by their own `idle_exit_s`, watched by recorded PID (fallback `taskkill /PID <launcher> /T /F`, not needed).
+
+1. Device check (`gpu_check.py`, first CUDA context): `torch 2.14.1+cu130`, CUDA `13.0`, `sm_120` present, capability `[12, 0]`, `bf16_supported true`, 256×256 bf16 matmul vs CPU float32 max relative error 0.0043 (< 4·2⁻⁷). VRAM 0 → 0 MiB.
+2. EG2 reference, attempt 1: refused, `vision.quality: unresolved sentinel design_required` (scratch profile then set 90). Attempt 2: manifest not found (worktree has no `models/`; harness `launch.py` above). Attempt 3: **`attn_implementation: sdpa` refused at load**: `ValueError: Gemma4AudioModel does not support an attention implementation through torch.nn.functional.scaled_dot_product_attention yet` (transformers 5.23.0, `modeling_utils.py:1666`); EG2 runs with `eager`. Attempt 4: **CUDA OOM on the float32 load** (`Tried to allocate 20.00 MiB … 4.02 GiB is free. 7.00 GiB allowed; 2.78 GiB allocated`; `CUDACachingAllocator.cpp:3934 … free: 4319084544`). Probes (`probe_load.py`): float32 alone 2842 MiB allocated, bf16 then float32 in one process 1432 then 2842 MiB, both released to 0; attempt 5 (unchanged inputs) passed. **Not reproduced; cause unknown** (finding F3).
+3. EG2 reference (attempt 5): `{"min_cosine": 0.9998, "raw_min_cosine": 0.9998735781429398}`; 12 runs (bf16/float32 × b1/b2/b4 × forward/reversed); per input lowest 0.99991 / **0.99987** (image 2, bf16/b1 vs float32/b1) / 0.99994 / 0.99993 (texts, bf16/b1 vs bf16/b2). 44.9 s, peak VRAM 5186 MiB, peak RSS 5.61 GB, VRAM after 0.
+4. EG2 server 1 (PID 25996, launcher 27032, 127.0.0.1:18431): health `ok`; `compare` → **HTTP 500** on the image request; the body: `engine_failed: The total number of <|image|> tokens in the prompts should be the same as the number of images passed. Found total 0 <|image|> tokens and 1 images.`; a text request returned 200. Defect F1 in `models._gemma_inputs` (images sent with `text=['']`). Stopped by idle exit: exit 0, 195.9 s, peak VRAM 1624 MiB, RSS 2.58 GB, no child left, port free, VRAM 0.
+5. Fix F1 (`models.py`): each EG2 image is rendered through the model's own chat template as a lone user image part (the card recipe's sentence-transformers "message" modality: `transformer.py:1407-1421`; the model's `chat_template.jinja` writes `<|image|>` for an image part); the processor then gets the rendered text and the image. `processing_utils.py:2404-2406`: `apply_chat_template(tokenize=True)` drops special tokens only when the prompt starts with BOS, which this template never writes, so rendering then calling the processor equals the recipe. Test `test_a_gemma_image_is_rendered_through_the_model_chat_template` (labelled template double that writes a marker per image part).
+6. EG2 server 2 (PID 16552, launcher 15652): `compare` **passed**: `min_cosine 0.9998`, cosines `0.9999975, 0.9999972` (images), `0.9999964, 0.9999959` (texts), dim 768. K1 smoke (`stage_b.py k1`: K0 scan of a 2-image scratch knowledge root copied from `database/Ao_nhat_binh_5day/`, then the production `k1_embed.embed_images`): `embedded 2, failed {}`, both dim 768, norm 1.0000000 ± 2e-9. Stopped by idle exit: exit 0, 214.5 s, peak VRAM 2566 MiB, RSS 2.58 GB, no child, port free, VRAM 0.
+7. Qwen reference, attempt 1: encodes done (peak 4678 MiB) but writing failed: `TypeError: Object of type SizeDict is not JSON serializable` (transformers 5 holds `image_processor.size` as `SizeDict`, `image_utils.py:1034-1063`, not a dict). Fix F2 (`reference._recipe`: non-scalar limits through `dict()`, which keeps the set fields) + test. Before that run, `reference_dtypes` (F4): the fit's float32 run is the EG2 card's fact; the Qwen card names no other dtype (its script `--dtype` default `bfloat16`, card lines 312, 434) and float32 2B (≈ 8.5 GB) exceeds the 7 GiB budget; now `Family.reference_extra_dtypes` (EG2 `('float32',)`, Qwen `()`) + test.
+8. Qwen reference (attempt 2): `{"min_cosine": 0.9996, "raw_min_cosine": 0.9996996817750564}`; 6 runs (bf16 × b1/b2/b4 × both orders). 23.1 s, peak VRAM 4678 MiB, RSS 5.25 GB, VRAM after 0. Recorded processor limits `size {longest_edge 1310720, shortest_edge 4096}` = the model's `preprocessor_config.json` (`max_pixels 1310720`), **not** the dev profile's `[A]` 1843200 (the card script's 1800·32·32); `compare` refuses differing limits, so the dev example now holds 1310720 (PM decision pending user review, below).
+9. Qwen server (PID 4656, launcher 14900, :18432): `compare` **passed**: `min_cosine 0.9996`, all four cosines 0.9999986, dim 2048. K1 smoke: `embedded 2`, dim 2048, norm 1 ± 3e-9, cosine to the reference 0.9999986 / 0.9999987. Stopped by idle exit: exit 0, 164.6 s, peak VRAM 4662 MiB, RSS 5.19 GB, no child, ports 18431 and 18432 free, **VRAM 0 of 8151 MiB = baseline, 04:41:40 (GPU DONE)**.
+10. Qwen card agreement (evidence only, PM answer 3; card lines 118-144): 4 queries × (text document, demo image) through K1's client. With K1's preparation (`max_image_side 1024`: the 2048×1365 demo sent at 1024×683): text column |Δ| ≤ 0.0044, image column |Δ| up to **0.0351** (above the cards' 0.0129 spread). With the image at its original size (scratch `qwen-full.yaml`, `max_image_side: none`): **all 8 |Δ| ≤ 0.0083**, inside the documented 0.0129. The gap is K1's downscale (the card embeds the original), not the server.
+11. Fitted values (step 3 of the brief): dev example `embedder` `min_cosine 0.9998`, `embedder_qwen3vl2b` `0.9996`, each with its evidence path; `configs/enhancer.example.yaml` keeps `fit_from_bench`.
+12. CPU: focused sets `1614 passed, 34 skipped in 375.30s` (`.tmp/T-018-p2/focused3.log`); after the models test's double was sharpened, `tests/test_embed_server_models.py` `18 passed`. Mutants (scratch copy, `mutants.py`): M11 Gemma image text empty again, M12 dtypes ignore the family, M13 Qwen gains float32, M14 `SizeDict` kept as is: **4/4 killed** (`1 failed` each); control = the same tests on the tree, passed.
+
+#### K1 smoke, per item
+
+| Model | Image | Sent size | Dim, norm | Cosine to reference | Verdict |
+|---|---|---|---|---|---|
+| EG2 | `ao_nhat_binh_000430.jpg` (source 1024×1380) | 759×1024 | 768, 1.0000000 | 0.9999975 | meets target (plumbing: embedded, native dim, unit norm, matches the card recipe) |
+| EG2 | `ao_nhat_binh_000916.jpg` (source 1080×1621) | 682×1024 | 768, 1.0000000 | 0.9999972 | meets target |
+| Qwen 2B | `ao_nhat_binh_000430.jpg` | 759×1024 | 2048, 1.0000000 | 0.9999986 | meets target |
+| Qwen 2B | `ao_nhat_binh_000916.jpg` | 682×1024 | 2048, 1.0000000 | 0.9999987 | meets target |
+
+The input image (opened: a red brocade court robe, lotus pond) decodes normally; the verdict concerns plumbing only, never retrieval quality (R-020).
+
+#### gpu-live-run evidence
+
+- Label: GPU live (smoke). Dev profile, never a threshold, calibration or timing claim (preflight 6).
+- Commands (from the worktree root; env `PYTHONNOUSERSITE=1`, `PYTHONDONTWRITEBYTECODE=1`, `PYTHONPATH=<tree>/src`, `HF_HOME=<project>/.cache/hf`, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `TEMP`/`TMP` under `.tmp/T-018-p2/tmp`): `.venv-gpu python -B monitor.py <out> <timeout> -- .venv-gpu python -B -X faulthandler launch.py reference-check reference --config <eg2|qwen>.yaml --image <kb>/ao_nhat_binh_000430.jpg --image <kb>/ao_nhat_binh_000916.jpg --texts texts.json --out runs/T-018-p2/<m>/reference --batch-size 1 --batch-size 2 --batch-size 4`; `… launch.py serve --config <m>.yaml`; `.venv python -B launch.py reference-check compare … --reference runs/T-018-p2/<m>/reference/reference.json --out runs/T-018-p2/<m>/compare`; `stage_b.py k1 …`, `stage_b.py card …`.
+- Profiles (SHA-256 prefix): dev example `dd5482d4c45eb7ab` (after this stage's edits), dev-qwen3vl2b `8fc7f566bc43efe7`; run profiles `runs/T-018-p2/profiles/eg2.yaml` `92812a23d56623bc`, `qwen.yaml` `8907c03a0d2ca648`, `qwen-full.yaml` `f56ee847cc48f99a`.
+- Models: `google/embeddinggemma-2@f9972ac22e696a105c482202646979e33e4b5a1e` (`model.safetensors` 1,488,915,288 B, SHA-256 `197a3296…5d79`), `Qwen/Qwen3-VL-Embedding-2B@9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda` (4,255,140,312 B, `c73fa9ca…09c1`); every file verified by `manifest.verify_model` at each load.
+- Runtime: driver 616.92, RTX 5070 Laptop GPU 8151 MiB (`mem_get_info` free at start 7013 MiB), torch 2.14.1+cu130 (CUDA 13.0), transformers 5.23.0, sentence-transformers 6.3.0, Python 3.12.10.
+- Outputs: `runs/T-018-p2/{gpu-check,eg2,qwen,profiles}/` (Git-ignored): `reference.json` `aa750fbe…`/`b1331e95…`, `fit.json` `b6e90737…`/`bde4265d…`, `check.json` `6404bcb6…`/`412ffbdb…`, `k1.json` `d9307516…`/`451482e7…`, `card.json` `71e6ff59…`, `card-original-size.json` `107cb083…`, per-process `monitor.json` with the VRAM samples.
+- Durations, peaks: in steps 1-9 (reference EG2 44.9 s incl. load; Qwen 23.1 s; servers ready ≈ 15 s after start by health polling, total lifetimes include 120 s idle). No throughput claim.
+- Teardown: every process stopped by its own exit, watched by recorded PID; `children_alive_after []` each time; ports 18431 and 18432 free; VRAM 0 MiB after every job.
+- `run_approval_gate.py`: **waived** (PM answer 5): the dev profile is `purpose: smoke`; no user-approved run record exists and none was created or claimed.
+
+#### Configuration audit (Stage B: rows new or changed)
+
+| Setting / literal | Consumer | Validation | Example profile | Override test | Refusal test / class |
+|---|---|---|---|---|---|
+| `server.reference_check.min_cosine` (dev values) | `reference-check compare` | as Stage A | dev example 0.9998 (EG2), 0.9996 (Qwen) with evidence paths; full example `fit_from_bench` | `test_the_configured_tolerance_decides_the_verdict`; the GPU compares ran with the fitted values | Stage A refusal tests (sentinel, missing, range); configurable |
+| `server.image.max_pixels` (dev Qwen 1843200 → 1310720) | `models._apply_image_limits`, `reference.processor_limits` | existing schema | dev example, reason quoted | existing `test_embed_server_config` overrides (5000) | existing refusals; configurable |
+| `server.attn_implementation` (EG2 note: eager) | `models.load_engine` | existing (`deploy_required` kept) | comment only | existing | existing; configurable |
+| `Family.reference_extra_dtypes` (EG2 `('float32',)`, Qwen `()`) | `reference.reference_dtypes` → `run_reference` | — | — | `test_the_fit_runs_the_profile_dtype_first_then_the_card_s_other_dtypes` (3 cases) | artifact-bound (card facts; replaces `REFERENCE_FALLBACK_DTYPE`) |
+| Gemma image message `{'role': 'user', 'content': [{'type': 'image', …}]}` | `models._gemma_inputs` | — | — | `test_a_gemma_image_is_rendered_through_the_model_chat_template` | protocol-bound (the chat-message shape the model's template reads) |
+| scalar types `(bool, int, float, str)` in `_recipe` | `reference._recipe` | — | — | `test_the_recipe_records_image_limits_held_in_a_non_dict_size_type` | protocol-bound (JSON scalars) |
+| scratch run values (ports, `forward_batch 1`, `idle_exit_s 120`, `vision.quality 90`, storage paths, `engine.version` label) | this run only | the loader | `runs/T-018-p2/profiles/` | — | scratch, not tracked |
+
+#### Findings
+
+- F1 (fixed): EG2 image requests failed with HTTP 500 (no `<|image|>` placeholder); now through the model's chat template.
+- F2 (fixed): `reference._recipe` could not serialise the Qwen processor's `SizeDict`.
+- F3 (open): one transient CUDA OOM on the EG2 float32 reference load with 4.1 GB reported free and 2.78 of 7.00 GiB allocated; not reproduced in 3 later loads; cause unknown (WDDM, a GPU peer for a moment, or the allocator: not measured).
+- F4 (fixed, PM decision pending user review): the fit's extra dtype became a per-family card fact; Qwen's fit has no float32 run.
+- F5 (open, not fixed): `reference-check compare` lets a K1 `EmbeddingError` (e.g. HTTP 500) escape as a traceback, exit 1, instead of a one-line refusal; `__main__._reference_check` catches `ConfigurationError, ManifestError, ReferenceCheckError, OSError` only.
+- F6 (open): EG2 rejects `attn_implementation: sdpa` at load; nothing refuses that combination before the weights load (a load-time `ServerStartError`/traceback instead).
+
+#### PM decisions pending user review (Stage B)
+
+- Dev Qwen `max_pixels` 1310720 (the model's `preprocessor_config.json`, the recipe's own) instead of the card script's 1843200; the full example still holds 1843200 (`[A]`), not changed here.
+- `Family.reference_extra_dtypes`: Qwen's fit runs bf16 only (card names no other dtype; float32 does not fit 8 GB).
+- Run harness `launch.py` (models from the main checkout) instead of moving or linking 5.8 GB of weights into the worktree.
+
+#### Noticed, not done
+
+- `configs/enhancer.example.yaml:213` Qwen `max_pixels: 1843200 [A]` differs from the processor's 1310720; a deployment comparing with the recipe would be refused by `compare`.
+- K1 sends images at `max_image_side` (1024 in dev); the Qwen card's numbers were made at full size, so card agreement depends on that setting (step 10).
+- F5 and F6 above.
+
+## Completion report
+
+- **Behaviour:** both dev embedders were checked on the dev GPU against their cards' sentence-transformers recipes. Every served item reached at least 0.99999 cosine, against fitted tolerances of 0.9998 (EG2) and 0.9996 (Qwen 2B), now in the dev example. The K1 2-image smoke through the server meets target for both models. Stage B fixed two defects: EG2 images (HTTP 500) and Qwen reference serialisation. The fit's extra dtype is now per family. Card agreement holds within the documented spread at full image size.
+- **Commands and output:** see Stage B steps 1-12 and the gpu-live-run evidence; focused sets `1614 passed, 34 skipped in 375.30s`; models file `18 passed`; mutants 4/4 killed (stage A 10/10).
+- **not_run:** `ruff check` / `ruff format --check` (`No module named ruff` in `.venv`; not installed, per brief); `run_approval_gate.py check` (waived, PM answer 5); full test suite (not required by the brief); EG2/Qwen `forward_batch > 1` in the server (smoke used 1); F3 root cause.
+- **Changed files (stage B):** `src/prompt_enhancer/embed_server/models.py`, `families.py`, `reference.py`; `tests/test_embed_server_models.py`, `tests/test_embed_server_reference.py`; `configs/enhancer.dev.example.yaml`; `docs/stages/K1-embed.md`; this task file.
+- **Open issues:** F3, F5, F6; the full example's Qwen `max_pixels`; the PM decisions pending user review above.
+
+## P2 fix round 1
+
+Builder: fresh Claude Opus, `high`, continuing the retired P2 builder on top of the staged P2 change. Review `.tmp/T-018/review-p2.md` (REWORK: N1 P2, OPEN-F6 P2, E1 = F5 P3, E2 P3). R-015, R-016, R-017, R-018, R-025. **Status: Step 0 approved by the PM; implemented; handed to the Codex reviewer for retest.**
+
+### Step 0
+
+**Research done (read in place, CPU only):**
+
+| Question | Source | Finding | Class |
+|---|---|---|---|
+| Where the norm is ignored | `embed_server/reference.py:98-100` | `norm` is computed and recorded; `passed` uses only cosine and length | source-verified |
+| Norms already recorded | scratch `.tmp/T-018-p2/fix1/norms.py` over `runs/T-018-p2/{eg2,qwen}/{reference/reference.json,compare/check.json}` | recipe runs: EG2 12 runs / 48 vectors, max \|‖v‖−1\| **0.0015440438051930183**; Qwen 6 runs / 24 vectors **0.0022919215404879623** (the card recipe normalises in bf16). Served: EG2 **4.18e-9**, Qwen **2.63e-9** | experiment (replayed evidence) |
+| What K1 does to served vectors | `k1_embed.py:193-202, 205-225` | native mode keeps the scale (no normalisation), rounds to float32, refuses non-finite values, a wrong count and (native) a wrong length with `EmbeddingError` | source-verified |
+| K1 error types | `k1_embed.py:52-57, 282-294` | `EmbeddingError(RuntimeError)` with `.code` `HTTP_ERROR` (status or httpx exception type name), `RESPONSE_INVALID`, `DIMENSION_MISMATCH`; details are structural, never the body | source-verified |
+| EG2 attention kernels | installed transformers 5.23.0: `models/embedding_gemma2/modeling_embedding_gemma2.py:649` (`self.audio_tower = AutoModel.from_config(config.audio_config)`), `models/gemma4/modeling_gemma4.py:1963,1968-1971` (`Gemma4AudioModel`: "The chunked local attention is only implemented in eager", `_supports_sdpa = False`), `modeling_utils.py:1665-1669` (raises `ValueError` "... does not support an attention implementation through torch.nn.functional.scaled_dot_product_attention yet"); Stage B attempt 3 hit it | EG2 supports `eager` only of the schema's `sdpa`/`eager` | source-verified + experiment |
+| Qwen attention kernels | `models/qwen3_vl/modeling_qwen3_vl.py:598,606` (`Qwen3VLPreTrainedModel._supports_sdpa = True`) | `sdpa` and `eager` | source-verified |
+| Where the shared validator runs | `config.py:1045-1048` (dtype check), callers `config.py:1581,1583`, `settings.py:59`; `__main__.py:94-101` | `serve`, `reference` (`embed serve`) and `compare` (`embed reference-check`) all pass `validate_embed_server_reads` before `verify_model`, `load_engine` or a bind | source-verified |
+| Fixture pairing EG2 with `sdpa` | `tests/embed_server_fixtures.py:34` | one `attn_implementation: sdpa` for both families | source-verified |
+| Reference parser | `reference.py:263-283` | `json.loads` and `reference['identity']`, `['recipe']['image_limits']`, `['runs'][baseline]` unchecked | source-verified |
+| Prior decisions | `recall.py search "unit norm reference check bound"`, `"attn_implementation sdpa eager family"` | no hits | documented |
+
+**Unknowns and failure modes:** a bound fitted from the server under test would be circular; a bound tighter than the recipe's own bf16 rounding would fail a correct server that normalises in bf16; JSON `NaN`/`Infinity` and integers beyond the float range are accepted by `json.loads`; a deeply nested file raises `RecursionError`; DIMENSION_MISMATCH is raised by K1 before `judge` sees a vector, so a length failure reaches the CLI as an error, not a verdict.
+
+**Questions (ranked, each with my proposed answer):**
+
+1. **Source and name of the norm bound.** *Proposed:* `server.reference_check.max_norm_deviation`, the largest allowed \|‖v‖−1\| of a served vector (the name states the measured quantity and its direction, like `min_cosine`). Fitted from the **recipe's own runs**, not from the served vectors: the tolerance must come from the documented reference, as `min_cosine` does, and fitting it on the server under test would pass whatever the server does. Rule: the largest deviation across every run and input, rounded **up** to `FIT_DECIMALS` (4; outward for a maximum, as the cosine is floored for a minimum). Dev values EG2 **0.0016**, Qwen **0.0023**, each citing `runs/T-018-p2/<m>/reference/reference.json` and this table; base example `fit_from_bench`. Schema: number in (0, 1) or `fit_from_bench`, required beside `min_cosine` in `reference_check`. The narrower design dropped: a fixed numerical epsilon in code (an unmeasured literal).
+2. **Does `reference-check reference` also write the new fit?** *Proposed:* yes: `fit.json` gains `max_norm_deviation` and its raw value, and the command prints it, so a deployment fits both keys from one run.
+3. **Exit status of a K1 `EmbeddingError` in `compare`.** *Proposed:* one line `refused: the server's embeddings were refused by K1 (<code>: <structural detail>)` and status 2 (`REFUSED`) for every code, DIMENSION_MISMATCH included: K1 refuses the response before any vector exists to judge.
+4. **EG2 `attn_implementation` in the dev example.** *Proposed:* keep `deploy_required` (a deployment value) and change the comment to say `sdpa` is refused at start; no example pairs EG2 with `sdpa` today.
+5. **Unexpected errors in `reference-check`** (a CUDA out-of-memory, a library bug). *Proposed:* not translated: Python's own traceback and status 1 (`FAILED`, documented as Python's uncaught status), so programming errors stay visible; the sweep table lists them.
+
+**Plan (checkable finish):**
+
+1. N1: `judge` passes an item only with a finite norm within `max_norm_deviation` (no normalising); `fit_max_norm_deviation` in the fit; schema key, `REFERENCE_CHECK_READS`, examples, docs; tests: scaled vectors fail (exit 4), rounding inside the bound passes, override changes the verdict, refusal (missing, sentinel, 0, 1, bool, NaN). Done: the review's ×2 mutant dies.
+2. F6: `Family.attn_implementations` (EG2 `('eager',)`, Qwen `('sdpa', 'eager')`, artifact-bound with the source lines above), refused in `validate_embed_server_reads` next to the dtype; fixture per family; tests: EG2/eager accepted, EG2/sdpa refused by `serve`, `reference` and `compare` with spies proving no `verify_model`, `load_engine` or bind; Qwen sdpa and eager accepted.
+3. E1 and E2: `EmbeddingError` caught in `_reference_check`; `load_reference` validates the whole artifact (format, identity, inputs, recipe, baseline, runs, counts, dimensions, finite floats) and maps decode errors (`ValueError`, `RecursionError`) to `ReferenceCheckError`; property tests (malformed, truncated, wrong-typed JSON) and CLI refusal-before-contact tests.
+4. Rerun the review's probes and mutant, 3-5 own mutants, the brief's test sets through `test_slot.py` (one process, fixed `--basetemp` under `.tmp/T-018-p2/`, deleted after). Done: green, mutants reported.
+5. Class-sweep tables, Configuration audit rows, `### Completion report (P2 fix round 1)`; remove `.tmp/T-018-p2/fix1/` except the cited norms output.
+
+#### PM answers (P2 fix round 1; each a PM decision pending user review)
+
+1. `server.reference_check.max_norm_deviation`, fitted from the card recipe's own recorded runs (not from the server under test): the largest \|norm − 1\| rounded up to 4 decimals; dev EG2 0.0016, Qwen 0.0023 with the evidence path; base `fit_from_bench`; required next to `min_cosine` for `compare` only (the server never reads it).
+2. `reference-check reference` writes and prints the norm fit in `fit.json`.
+3. Every K1 `EmbeddingError` in `compare` becomes one `refused: <code>` line (code and structural detail only, no payload or response text) and exit status 2.
+4. Per-family supported attention kernels as artifact-bound capability facts with the cited source lines; refused in the shared validator before manifest hashing, binding or load; the fixture fixed; the dev example comment updated.
+5. No catch-all for programming errors beyond the existing convention: `reference` and `compare` share `cli.main` with `serve`, so once the profile is read an unexpected error is one `failed: <Type>` line and exit 1 (type only, no message text), exactly as `serve`.
+
+#### PM decisions pending user review (fix round 1, builder)
+
+- Schema range of `max_norm_deviation`: `[0, 1)` (inclusive 0), so any value the fit writes can be stored; a fitted 0 demands exactly unit length. `min_cosine` keeps `(0, 1]`.
+- `fit.json` does not gain the norm fit retroactively: the recorded dev runs predate it, so the dev values were recomputed on the CPU from `reference.json` (rule identical to `fit_max_norm_deviation`).
+- Before the profile is read, `reference-check` keeps the existing behaviour of `serve`: a configuration refusal is printed directly; anything else there is Python's own traceback (nothing is owned yet).
+
+### Completion report (P2 fix round 1)
+
+**Behaviour.** N1: `reference.judge` passes an item only when cosine ≥ `min_cosine`, length = native dimension **and** the received norm is finite and within `max_norm_deviation` of 1; the checker never normalises. `fit.json` gains `max_norm_deviation` / `raw_max_norm_deviation` (`fit_max_norm_deviation`, `ceil_to`); the command prints them; `compare` reads the new key through `embed reference-check` (required, sentinel refused). F6: `Family.attn_implementations` (EG2 `('eager',)`, Qwen `('sdpa', 'eager')`) is enforced in `validate_embed_server_reads`, which `serve`, `reference` and `compare` all run before `verify_model`, a bind or `load_engine`. E1: `EmbeddingError` is a refusal (`refused: HTTP_ERROR: status 500`, exit 2). E2: `load_reference` validates the whole artifact and maps decode failures to `ReferenceCheckError`; it runs before `run_compare` sends anything. PM answer 5: after the profile is read, an unexpected error in `reference-check` is `failed: <Type>`, exit 1, through the same bounded `_last_line` as `serve`.
+
+**Norm evidence (CPU recomputation of recorded runs, scratch `norms.py`, read only, real output):**
+
+```
+eg2 reference runs=12 vectors=48 max|norm-1|=0.0015440438051930183
+eg2 served vectors=4 max|norm-1|=4.175389145544273e-09 recorded norms=[0.9999999980545426, 1.0000000021537825, 0.9999999975128938, 1.0000000041753891]
+qwen reference runs=6 vectors=24 max|norm-1|=0.0022919215404879623
+qwen served vectors=4 max|norm-1|=2.6263941022008908e-09 recorded norms=[0.9999999973736059, 1.0000000020983384, 0.9999999978366492, 1.0000000010318235]
+```
+
+`ceil_to` gives 0.0016 and 0.0023 (asserted in `test_the_norm_fit_rounds_up_to_four_decimals`). The recorded served vectors stay inside both bounds by about 10⁶×, so the dev compares recorded in Stage B would still pass.
+
+#### Class sweep (a): every measured quantity of a verdict
+
+| Quantity | Where measured | Decides? | Test that fails if it is ignored |
+|---|---|---|---|
+| cosine to the baseline | `judge` | yes, item fails below `min_cosine` | `test_the_configured_tolerance_decides_the_verdict`; earlier mutant M6 `>=`→`>` |
+| norm of the served vector | `judge` (as received) | **yes (new)**, finite and \|norm−1\| ≤ `max_norm_deviation` | `test_the_verdict_needs_a_norm_within_the_bound_and_never_normalises` (7 cases), `test_the_norm_bound_decides_the_verdict_end_to_end` (3); mutants R1, M1, M2 killed |
+| served vector length | `judge`; K1 `_reduce` (native) refuses first | yes (fail in `judge`; DIMENSION_MISMATCH refusal via K1) | `test_the_verdict_passes_at_the_tolerance_and_fails_below_it_or_at_another_length`; `test_a_k1_embedding_error_is_one_refusal_line[DIMENSION_MISMATCH]` |
+| served count | `judge` raises; K1 `parse_embeddings` refuses first | yes (refusal) | `test_the_verdict…` (`ReferenceCheckError`); `…refusal_line[expected]` |
+| served finiteness | K1 `parse_embeddings`/`_reduce` refuse; `judge` `isfinite(norm)` | yes (refusal / fail) | K1's own tests; `(1e30, 0.5)` case |
+| reference count, dimension, finiteness, one length | `load_reference` / `_check_runs` | **yes (new)**, refusal before HTTP | `test_a_malformed_reference_file_is_a_reference_refusal` (26), `test_a_non_finite_reference_number_is_refused` (4), property test; mutant M4 killed |
+| reference identity, inputs, limits, baseline, native mode | `load_reference` | yes, refusal | `test_a_reference_made_for_something_else_is_refused` (8) |
+| fit: lowest pairwise cosine | `fit_min_cosine` | writes `min_cosine` | existing fit tests |
+| fit: largest \|norm−1\| | `fit_max_norm_deviation` | **writes `max_norm_deviation` (new)** | `test_the_norm_fit_is_the_largest_deviation_of_any_run_rounded_up`, ceiling property |
+
+#### Class sweep (b): every family capability and where it is enforced
+
+| Capability (`Family`) | Enforced by | Before hash / bind / load? | Test |
+|---|---|---|---|
+| `model_type` | `check_weights_config` in `load_engine` | after the manifest hash, before weights | `test_weights_config_refusals` |
+| `forbidden_dtypes` | `validate_embed_server_reads` | yes | `test_refusal[...dtype='float16']` |
+| `attn_implementations` (**new**) | `validate_embed_server_reads` | yes | `test_embedding_gemma_2_with_sdpa_is_refused_by_the_shared_validator`, `test_embedding_gemma_2_with_sdpa_is_refused_before_hashing_binding_or_loading[serve,reference,compare]` (spies on `verify_model` in both modules, `load_engine`, `serve`, `run_reference`, `load_reference`, `run_compare`: none touched), `test_a_kernel_the_family_supports_is_accepted` (EG2 eager, Qwen sdpa, Qwen eager); mutant M8 killed |
+| `accepts_instruction` | `validate_embed_server_reads` | yes | `test_refusal[...default_instruction...]`, `QWEN_REFUSALS` |
+| image limits (`min/max_pixels` vs `max_soft_tokens`) | `validate_embed_server_reads` | yes | `test_refusal`, `test_qwen_refusal` |
+| `native_dimension_path` | `check_weights_config` | reads `config.json` only, after the hash | `test_weights_config_refusals` |
+| `pooling`, `reference_text_prompt_name`, `reference_extra_dtypes` | used, not limits (no invalid profile value) | — | existing |
+
+#### Class sweep (c): exceptions that can reach `cli.main`
+
+| Command | Exception | Maps to |
+|---|---|---|
+| all | `argparse` errors | `SystemExit(2)` from argparse (before the profile; unchanged) |
+| all | `ConfigurationError` while reading the profile | `refused: …`, 2 |
+| `serve` | `ManifestError`, `ServerStartError`, `OSError` | `refused: …`, 2 (bounded last line) |
+| `serve` | `ShutdownIncomplete` | `stopped incompletely: …`, 3 |
+| `serve` | any other `Exception`/`KeyboardInterrupt` after settings | `failed: <Type>`, 1 |
+| `reference`, `compare` | `ConfigurationError` (K1 settings), `ManifestError`, `ReferenceCheckError` (inputs, batch sizes, missing libraries, reference file), `OSError` | `refused: …`, 2 |
+| `compare` | K1 `EmbeddingError`: `HTTP_ERROR` (status, `ConnectError`/`ConnectTimeout`, `ReadTimeout`), `RESPONSE_INVALID`, `DIMENSION_MISMATCH` | **`refused: <code>: <detail>`, 2 (new)** |
+| `reference`, `compare` | any other `Exception`/`KeyboardInterrupt` after settings (e.g. a CUDA out-of-memory, a library `ValueError`, a programming error) | **`failed: <Type>`, 1 (new; was a traceback)** |
+| `compare` | item verdict fail | JSON line on stdout, `MISMATCH` 4 |
+
+#### Review probes and mutants (scratch copies under `.tmp/T-018-p2/fix1/`, removed; the reviewer's own scratch left untouched)
+
+Probe copy changes: `setup()` adds the now-required `max_norm_deviation`; the F6 probe sets `sdpa` itself; the two E2 assertions split into two probes. Each probe asserts the **old defect**, so a failure means the defect is gone:
+
+```
+FAILED ...::test_observe_http_500_escapes            Failed: DID NOT RAISE EmbeddingError
+FAILED ...::test_observe_scaled_vectors_pass_comparison   AssertionError: assert 4 == 0
+FAILED ...::test_observe_eg2_sdpa_accepted           ConfigurationError: ...server.attn_implementation: sdpa is not supported by embedding_gemma2 in the pinned trans…
+FAILED ...::test_observe_bad_reference_json_escapes  Failed: DID NOT RAISE JSONDecodeError   (stderr: refused: the reference file is not UTF-8 JSON (JSONDecodeError))
+FAILED ...::test_observe_missing_identity_escapes    Failed: DID NOT RAISE KeyError
+5 failed in 3.32s
+```
+
+The scaled probe's own stdout: `{"step": "compare", "passed": false, ..., "cosines": [1.0, 1.0, 1.0, 1.0], "norms": [2.0, 2.0, 2.0, 2.0]}`.
+
+Mutants (in-memory `exec` over the imported module, as the reviewer's `run_mutant.py`; M8 on a scratch package copy because `exec` over `config.py` would create a second `ConfigurationError`); `pytest -x`:
+
+| Id | File, change | Result |
+|---|---|---|
+| control | `reference.py` unmutated | `125 passed in 17.09s` |
+| R1 (review) | `norm = 2 * math.sqrt(...)` | **killed** `1 failed, 12 passed` |
+| M1 | norm dropped from `passed` | **killed** `1 failed, 13 passed` |
+| M2 | bound replaced by constant `0.01` | **killed** `1 failed, 17 passed` |
+| M4 | `_check_runs` finiteness dropped | **killed** `1 failed, 96 passed` |
+| control | `__main__.py` unmutated | `125 passed in 15.48s` |
+| M6 | `EmbeddingError` dropped from the refusals | **killed** `1 failed, 108 passed` |
+| control | `config.py` copy unmutated (`-k "sdpa or kernel"`) | `7 passed, 278 deselected` |
+| M8 | attention check disabled | **killed** `1 failed, 3 passed, 278 deselected` |
+
+#### Commands and real output
+
+- Environment: interpreter `<project>/.venv/Scripts/python.exe` (worktree has none), `PYTHONNOUSERSITE=1`, `PYTHONDONTWRITEBYTECODE=1`, `PYTHONPATH=src` (probes: `src;tests`); every pytest through `tools/agent-workflow/test_slot.py`, one process, no `-n`, `-X faulthandler`, `--basetemp=.tmp/T-018-p2/fix1/bt` deleted after each run.
+- Focused sets `tests/test_embed_server_*.py tests/test_k1_*.py tests/test_field_contracts.py tests/test_real_contracts.py`: **`1691 passed, 34 skipped in 410.03s (0:06:50)`** (was 1614 + 34 before this round).
+- After the final line-wrapping edits, `tests/test_embed_server_{reference,config,cli,identity}.py`: **`320 passed in 33.68s`**.
+- `ruff check …/reference.py`: `D:\Project_github\prompt-enhancer-pipeline\.venv\Scripts\python.exe: No module named ruff`; `ruff format --check`: **not_run** (same cause; no install, per brief).
+- `git diff --check`: exit 0. No Git writes.
+
+#### Configuration audit (fix round 1: rows new or changed)
+
+| Setting / literal | Consumer | Validation | Example profile | Override test | Refusal test / class |
+|---|---|---|---|---|---|
+| `vlm.backends.<name>.server.reference_check.max_norm_deviation` (new) | `reference-check compare` → `reference.judge` | schema `[0, 1)` or `fit_from_bench`, required in `reference_check`; `validate_reference_check_reads` refuses missing, sentinel, NaN, inf; bool refused by the schema number | dev EG2 0.0016, dev Qwen 0.0023 (evidence `runs/T-018-p2/<m>/reference/reference.json`, the table above); base `fit_from_bench` | `test_the_norm_bound_decides_the_verdict_end_to_end[1.0003-0.001 → 0, 1.0003-0.0002 → 4]`; `test_reference_check_reads_a_measured_tolerance` (0.0023, 0, 0.5) | `test_reference_check_refuses_…` (missing, sentinel, −0.0001, 1, True, string, NaN, inf), `test_compare_refuses_an_unresolved_tolerance_before_contacting_the_server`; configurable |
+| same key, not read by `serve` / `reference` | — | — | — | `test_the_server_does_not_read_the_tolerance` (absent; both sentinels) | configurable (documented non-consumers) |
+| `server.reference_check.min_cosine` | unchanged | `required` now beside the new key | dev comments moved into a block mapping | existing | existing; configurable |
+| `server.attn_implementation` × family | `validate_embed_server_reads` | value must be in `Family.attn_implementations` | dev EG2 comment: eager only, sdpa refused when the profile is read; Qwen `deploy_required` | `test_a_kernel_the_family_supports_is_accepted` (EG2 eager, Qwen sdpa, Qwen eager) | `test_embedding_gemma_2_with_sdpa_is_refused_…` (validator + 3 commands); configurable value, closed by an artifact-bound fact |
+| `Family.attn_implementations` | the row above | — | — | — | artifact-bound: transformers 5.23.0 `modeling_embedding_gemma2.py:649`, `gemma4/modeling_gemma4.py:1968-1971`, `modeling_utils.py:1665-1669`, `qwen3_vl/modeling_qwen3_vl.py:606` |
+| `FIT_DECIMALS` for the norm fit (ceiling) | `reference.ceil_to` | — | — | `test_the_norm_fit_rounds_up_to_four_decimals`, ceiling property | artifact-bound (recorded in fit.json) |
+| `1.0` (unit length) in `judge`/`norm_deviation` | — | — | — | — | protocol-bound (the servers return L2-normalised vectors, K1 native mode) |
+| floats-only rule of reference vectors | `_check_runs` | — | — | — | artifact-bound (the reference step writes `float` values only) |
+| `FAILED = 1` for `reference-check` | `_reference_check` | — | — | `test_an_unexpected_error_after_the_profile_is_one_failed_line` | protocol-bound (the existing `serve` status) |
+| test-only: `CHECK` tolerances, `ScaledEngine`, MockTransport handlers, fixture kernel per family, `SERVER_VALUES` eager | tests | — | — | — | test-only, labelled |
+
+#### Changed files (this round, unstaged on top of the staged P2 change)
+
+`src/prompt_enhancer/embed_server/{reference,__main__,families}.py`, `src/prompt_enhancer/config.py`, `contracts/schemas/enhancer_config.v0.schema.json`, `configs/enhancer.dev.example.yaml`, `configs/enhancer.example.yaml`, `docs/stages/K1-embed.md`, `tests/embed_server_fixtures.py`, `tests/test_embed_server_config.py`, `tests/test_embed_server_reference.py`, this task file.
+
+#### not_run
+
+`ruff check` / `ruff format --check` (ruff not installed); full suite (PM-owned); Linux run of the closed-port case (the test accepts `ConnectError` or `ConnectTimeout`: Windows gave `ConnectTimeout` against the 1 s test connect timeout); any GPU or model run (forbidden; F3 stays open as reported, not rerun or explained).
+
+#### Noticed, not done
+
+- `refused: {error}` for an `OSError` in `reference-check` (pre-existing) prints the OS message, which can hold a path; `serve` does the same.
+- The full example's Qwen `max_pixels` 1843200 still differs from the processor's 1310720 (carried from Stage B).
+- `docs/stages/K1-embed.md` paragraph 15 still says the adapters are "not yet run" (carried from the review).
+
+#### Cleanup
+
+`.tmp/T-018-p2/fix1/` (scripts, logs, mutant copies, basetemp) deleted after this report; the evidence they produced is quoted above. The reviewer's scratch under `.tmp/T-018-p2/` was left for the PM. No process started by this round is running.

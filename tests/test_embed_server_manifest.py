@@ -268,3 +268,24 @@ def test_property_any_single_byte_change_is_refused(project_root, data, position
         target.write_bytes(bytes(changed))
         with pytest.raises(ManifestError):
             verify_model(root, *MODEL)
+
+
+@given(st.binary(min_size=1, max_size=64), st.integers(-64, 64).filter(bool), st.booleans())
+@FAST
+def test_property_any_size_difference_is_refused(project_root, data, delta, in_manifest):
+    """A file longer or shorter than its entry, or an entry whose size differs from the file, is refused by size."""
+    import tempfile
+    with tempfile.TemporaryDirectory(dir=project_root) as name:  # scratch stays under the test base temp
+        root = Path(name)
+        shutil_schemas(project_root, root)
+        manifest = make_model(root, {'config.json': data})
+        target = root / 'models/acme--tiny' / ('a' * 40) / 'config.json'
+        if in_manifest:
+            manifest['entries'][0]['size'] = max(len(data) + delta, 0)
+            if manifest['entries'][0]['size'] == len(data):
+                return
+            write_manifest(root, manifest)
+        else:
+            target.write_bytes(data[:max(len(data) + delta, 0)] if delta < 0 else data + b'\x00' * delta)
+        with pytest.raises(ManifestError, match='size'):
+            verify_model(root, *MODEL)

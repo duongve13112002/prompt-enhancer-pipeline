@@ -19,7 +19,8 @@ from prompt_enhancer.embed_server.settings import load_server_settings
 
 ROOT = Path(__file__).resolve().parents[1]
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)  # Windows only; 0 elsewhere (PLATFORM_GPU_RULES)
-LOCAL_MODULES = ('protocol', 'pooling', 'families', 'settings', 'manifest', 'server', 'models', '__main__')
+LOCAL_MODULES = ('protocol', 'pooling', 'families', 'settings', 'manifest', 'server', 'models', 'reference', '__main__')
+HEAVY = ('torch', 'transformers', 'sentence_transformers')  # the GPU environment's packages (requirements-gpu.txt)
 
 
 def run_python(args, project_root=None, timeout=120):
@@ -29,10 +30,10 @@ def run_python(args, project_root=None, timeout=120):
 
 
 def test_no_module_the_cpu_suite_imports_needs_torch_or_transformers():
-    code = ('import sys\nsys.modules["torch"] = None\nsys.modules["transformers"] = None\n'
+    code = ('import sys\n' + ''.join(f'sys.modules["{name}"] = None\n' for name in HEAVY)
             + ''.join(f'import prompt_enhancer.embed_server.{name}\n' for name in LOCAL_MODULES)
             + 'import prompt_enhancer.k1_embed, prompt_enhancer.config\n'
-            'bad = [name for name in sys.modules if name.split(".")[0] in ("torch", "transformers") and sys.modules[name]]\n'
+            f'bad = [name for name in sys.modules if name.split(".")[0] in {HEAVY!r} and sys.modules[name]]\n'
             'assert not bad, bad\nprint("ok")\n')
     done = run_python(['-c', code])
     assert done.returncode == 0 and done.stdout.strip() == 'ok', done.stderr

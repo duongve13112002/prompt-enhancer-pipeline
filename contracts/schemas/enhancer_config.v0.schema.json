@@ -3571,7 +3571,15 @@
                                   "max_pending_requests": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]},
                                   "max_connections": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]},
                                   "max_discard_bytes": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]},
-                                  "read_timeout_s": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "deploy_required"}]}
+                                  "read_timeout_s": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "deploy_required"}]},
+                                  "reference_check": {
+                                    "type": "object",
+                                    "properties": {
+                                      "min_cosine": {"anyOf": [{"type": "number", "exclusiveMinimum": 0, "maximum": 1}, {"const": "fit_from_bench"}]},
+                                      "max_norm_deviation": {"anyOf": [{"type": "number", "minimum": 0, "exclusiveMaximum": 1}, {"const": "fit_from_bench"}]}
+                                    },
+                                    "required": ["min_cosine", "max_norm_deviation"], "additionalProperties": false
+                                  }
                                 },
                                 "required": ["family", "dtype", "attn_implementation", "forward_batch", "max_length", "image",
                                              "default_instruction", "idle_exit_s", "max_request_bytes", "max_image_bytes",

@@ -16,13 +16,29 @@ class Family:
     forbidden_dtypes: tuple  # EmbeddingGemma 2 card: "Do not use `float16`" (N104)
     native_dimension_path: tuple  # keys in config.json that hold the native vector size
     pooling: str  # `mean` (EG2 card: Mean Pooling) or `last_token` (Qwen 1_Pooling/config.json: lasttoken)
+    # The sentence-transformers prompt name the card's document-side text recipe uses, for the reference check only
+    # (reference.py): EG2 `prompt_name="Document"` (its config_sentence_transformers.json: "title: none | text: ", the
+    # prefix K1's text_template renders); Qwen None, its recipe's own default prompt (a system instruction).
+    reference_text_prompt_name: str | None
+    # Dtypes the card sanctions besides the profile's, run by the reference check's fit only: the EG2 card "Run
+    # inference in `bfloat16` or `float32`"; the Qwen card names none (its script's `--dtype` default is bfloat16),
+    # and a float32 2B model does not fit the dev GPU's budget (T-018 P2 stage B).
+    reference_extra_dtypes: tuple
+    # Attention kernels the family's model classes support in the pinned transformers 5.23.0 (artifact-bound; checked
+    # by `config.validate_embed_server_reads` before any manifest hash, bind or load, T-018 P2 fix round 1, F6).
+    # EG2: `EmbeddingGemma2Model` builds an audio tower (`models/embedding_gemma2/modeling_embedding_gemma2.py:649`),
+    # `Gemma4AudioModel`, whose "chunked local attention is only implemented in eager" (`_supports_sdpa = False`,
+    # `models/gemma4/modeling_gemma4.py:1968-1971`), and `modeling_utils.py:1665-1669` then raises for `sdpa` (seen at
+    # load in P2 stage B). Qwen: `Qwen3VLPreTrainedModel._supports_sdpa = True`
+    # (`models/qwen3_vl/modeling_qwen3_vl.py:606`).
+    attn_implementations: tuple
 
 
 FAMILIES = {
     'embedding_gemma2': Family('embedding_gemma2', 'embedding_gemma2', False, ('float16',),
-                               ('text_config', 'embedding_dim'), 'mean'),
+                               ('text_config', 'embedding_dim'), 'mean', 'Document', ('float32',), ('eager',)),
     'qwen3_vl_embedding': Family('qwen3_vl_embedding', 'qwen3_vl', True, (), ('text_config', 'hidden_size'),
-                                 'last_token'),
+                                 'last_token', None, (), ('sdpa', 'eager')),
 }
 
 
