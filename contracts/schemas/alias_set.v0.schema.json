@@ -27,6 +27,7 @@
           "collides_with"
         ],
         "properties": {
+          "language": {"type": ["string", "null"], "minLength": 1},
           "text": {
             "type": "string",
             "minLength": 1
@@ -63,14 +64,19 @@
       ],
       "properties": {
         "model_revision": {
-          "type": "string",
+          "type": ["string", "null"],
           "minLength": 1
         },
         "prompt_id": {
-          "type": "string",
+          "type": ["string", "null"],
           "minLength": 1
         }
       }
     }
-  }
+  },
+  "allOf": [{
+    "if": {"properties": {"aliases": {"contains": {"properties": {"origin": {"const": "generated"}}, "required": ["origin"]}}}},
+    "then": {"properties": {"revisions": {"properties": {"model_revision": {"type": "string"}, "prompt_id": {"type": "string"}}}}},
+    "else": {"properties": {"revisions": {"properties": {"model_revision": {"type": "null"}, "prompt_id": {"type": "null"}}}}}
+  }]
 }

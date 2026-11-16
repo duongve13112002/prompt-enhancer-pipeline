@@ -1166,6 +1166,73 @@ def validate_card_reads(config, path='configuration', sources=None, project_root
     _validate_configured_paths(scoped, root, path, sources)
 
 
+def validate_alias_reads(config, path='configuration', sources=None, project_root=None):
+    """Validate K4's complete read set before constructing a writer or model client."""
+    sources = sources or {}
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    schema = _schema(root, 'enhancer_config.v0')
+
+    def checked(key, node=None):
+        value = _get(config, key, path)
+        _sentinel(value, path, key, sources)
+        _validate(value, node or _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
+        _require_finite(value, path, key, sources)
+        return value
+
+    def refuse(key, message):
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {message}')
+
+    aliases = checked('aliases')
+    # Safety/protocol invariants from K4: no alternate linking or collision policy is implemented.
+    for field, supported in {'collision_policy': 'drop_and_queue_for_review',
+                             'review_queue': True, 'only_add_candidates': True}.items():
+        if aliases[field] != supported:
+            refuse('aliases.' + field, f'expected {supported}')
+    for key in ('storage.kb_store', 'storage.data_root', 'storage.lock', 'storage.table_format',
+                'sync.resume', 'knowledge.root'):
+        checked(key)
+    default = checked('vlm.default_backend')
+    key = 'vlm.roles.alias_generator'
+    role = checked(key, _schema(root, 'vlm_role.v0'))
+    for field, supported in {'mode': 'generate', 'image': 'none'}.items():
+        if role[field] != supported:
+            refuse(key + '.' + field, f'expected {supported}')
+    prompt_id = role['prompt_id']
+    if (not prompt_id or not set(prompt_id) <= set('abcdefghijklmnopqrstuvwxyz0123456789_.')
+            or prompt_id.strip('.') != prompt_id or '..' in prompt_id):
+        refuse(key + '.prompt_id', 'invalid prompt id')
+    output = role['output']
+    if output['format'] not in ('json_schema', 'json_object'):
+        refuse(key + '.output.format', 'alias generator requires structured JSON')
+    if output['transport'] != 'response_format':
+        refuse(key + '.output.transport', 'expected response_format')
+    if output['validate_response'] is not True:
+        refuse(key + '.output.validate_response', 'expected true')
+    configured = _schema(root, output['schema_id'])
+    expected = _schema(root, 'alias_generator_reply.v0')
+    metadata = ('$id', 'title', '$comment')
+    if ({name: value for name, value in configured.items() if name not in metadata}
+            != {name: value for name, value in expected.items() if name not in metadata}):
+        refuse(key + '.output.schema_id', 'expected alias_generator_reply.v0 or an equivalent local schema')
+    backends = {}
+    for name in sorted({role['backend'], default}):
+        backend_key = 'vlm.backends.' + name
+        backend = checked(backend_key)
+        backends[name] = backend
+        resolve_backend_engine(backend, backend_key)
+        _check_backoff_order(backend['http'], path, backend_key + '.http', sources)
+        for section in ('http', 'probe'):
+            for field in backend[section]:
+                dotted = f'{backend_key}.{section}.{field}'
+                if 'number' in _schema_types(_schema_at(schema, dotted)):
+                    _require_float_seconds(backend[section][field], path, dotted, sources)
+    scoped = {'vlm': {'roles': {'alias_generator': role}, 'backends': backends, 'default_backend': default},
+              'knowledge': {'root': config['knowledge']['root']},
+              'storage': {field: config['storage'][field] for field in ('kb_store', 'data_root')}}
+    _validate_model_bindings(scoped, path)
+    _validate_configured_paths(scoped, root, path, sources)
+
+
 def _validate_embedding(config, path, sources):
     """Cross-field rules of the embedder settings; sentinel values are checked when a command reads them."""
     embedding = config['embedding']
@@ -1301,6 +1368,7 @@ def load_config(path, command, *, overlay=None, project_root=None):
         validate_naming_reads(config, path, sources, root)
         validate_observation_reads(config, path, sources, root)
         validate_card_reads(config, path, sources, root)
+        validate_alias_reads(config, path, sources, root)
         source = _resolve_within(_lexical_path(config['knowledge']['root'], root, path, 'knowledge.root'), root,
                                  {os.path.normcase('.secrets'), os.path.normcase('models')}, path, 'knowledge.root')
         for key in ('storage.kb_store', 'storage.data_root'):

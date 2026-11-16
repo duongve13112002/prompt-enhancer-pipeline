@@ -1194,6 +1194,12 @@
                 }
               ]
             },
+            "languages": {
+              "anyOf": [
+                {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+                {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}
+              ]
+            },
             "only_add_candidates": {
               "anyOf": [
                 {
@@ -1217,7 +1223,8 @@
             "generated",
             "collision_policy",
             "review_queue",
-            "only_add_candidates"
+            "only_add_candidates",
+            "languages"
           ],
           "additionalProperties": false
         },

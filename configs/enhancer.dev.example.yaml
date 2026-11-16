@@ -6,6 +6,9 @@ extends: enhancer.example.yaml
 status: template
 purpose: smoke
 
+aliases:
+  languages: [vi, en, ja, zh]              # decision 135: explicit dev targets, passed to the prompt as data
+
 observe:
   near_duplicate_cosine_distance: fit_from_gt   # E14; a smoke run never fits this value
 

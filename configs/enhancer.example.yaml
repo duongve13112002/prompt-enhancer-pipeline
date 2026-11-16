@@ -78,6 +78,7 @@ cards:                                   # K3
   lint_report: true
 
 aliases:                                 # K4
+  languages: design_required              # expected languages/scripts; set by the deployment, never inferred
   generated: true                        # a model writes them offline; R-015 forbids hand-written tables
   collision_policy: drop_and_queue_for_review   # an alias shared by two concepts is dropped from automatic use and queued for review (K4)
   review_queue: true
@@ -317,7 +318,7 @@ vlm:                                     # R-018: rules name no model; models ar
       max_tokens: design_required
       sampling: *sampling_default
       reasoning: {mode: design_required, effort: design_required, budget_tokens: design_required, template_kwargs_key: enable_thinking}
-      output: {format: json_schema, schema_id: alias_set.v0, strict: true, transport: response_format, validate_response: true}
+      output: {format: json_schema, schema_id: alias_generator_reply.v0, strict: true, transport: response_format, validate_response: true}
     manifest_drafter:
       backend: main
       mode: generate

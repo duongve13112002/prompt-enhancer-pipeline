@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "alias_generator_reply.v0",
+  "title": "Alias generator reply without pipeline identity or provenance",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["aliases"],
+  "properties": {
+    "aliases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "language"],
+        "properties": {
+          "text": {"type": "string", "minLength": 1},
+          "language": {"type": ["string", "null"], "minLength": 1}
+        }
+      }
+    }
+  }
+}

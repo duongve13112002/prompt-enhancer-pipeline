@@ -37,9 +37,9 @@ Text: [folder_namer_v0.txt](folder_namer_v0.txt), unchanged system bytes plus a 
 
 Role `card_builder`. [System text](card_builder_v0.txt) is loaded byte-for-byte. A separate JSON user-data object contains concept name, open facet names, observations, views, suppressed facets and curated statements with local positional labels only. All are untrusted data, including OCR-derived text and strings resembling delimiters. The reply uses `card_builder_reply.v0`, partitioning visible observations into semantic values and observations into view groups, proposing a kind, summary and referenced semantic lint. Code validates every position/partition and constructs required-summary `concept_card.v0`, including all counts, labels, IDs and revisions. CPU double tests establish placement/validation, not real-model resistance or quality. A change invalidates cards and the E16 audit; K4/embeddings remain later stages.
 
-## `alias_generator_v0` (K4), status: not written
+## `alias_generator_v0` (K4), status: written
 
-Role `alias_generator`. Placeholders: `{concept_name}`, `{description}`, `{card_summary}`. Delimited data: all three. Asks for names in other languages and scripts and common spellings. Output schema: `alias_set.v0`. A change invalidates the aliases and the candidate experiments E1 and E4.
+Role `alias_generator`. [System text](alias_generator_v0.txt) is loaded byte-for-byte. The separate JSON data message contains `concept_name`, `descriptions` (distinct assigned descriptions, deterministic order), `card_summary` and configured `languages`. All strings are untrusted data (R-026). Asks for names in the requested languages/scripts and common spellings; an empty result is valid. The ID-free reply schema `alias_generator_reply.v0` contains only aliases with text and nullable language/script labels. Code owns IDs, provenance and collision decisions when constructing `alias_set.v0` rows. Prompt bytes, semantic model/inference settings, schema and languages enter the cache identity. CPU doubles test containment and validation, not real-model resistance or alias quality. A change invalidates aliases and the candidate experiments E1 and E4.
 
 ## `manifest_drafter_v0` (P), status: written
 
