@@ -1006,3 +1006,471 @@ Mutants (in-memory `exec` over the imported module, as the reviewer's `run_mutan
 #### Cleanup
 
 `.tmp/T-018-p2/fix1/` (scripts, logs, mutant copies, basetemp) deleted after this report; the evidence they produced is quoted above. The reviewer's scratch under `.tmp/T-018-p2/` was left for the PM. No process started by this round is running.
+
+## P3
+
+Builder: fresh Claude Opus, `high`, worktree `.tmp/worktrees/T-018-p3` at `763b043` (= `<project>` `main`). R-015, R-016, R-017, R-018, R-020. **Status (10:40): CPU and GPU steps done; Completion report (P3) below. GPU at baseline, nothing running.**
+
+### Research evidence (P3 Step 0, read 2026-11-17)
+
+| Question | Source | Finding | Class |
+|---|---|---|---|
+| RT1-N1 cause | `reference.py:124-127`, `:52-59` | `judge` calls `cosine(expected, got)` before the norm gate; `cosine` raises `ReferenceCheckError('a zero or non-finite vector')` for a zero served vector, which `__main__.py:94,105-107` prints as `refused:`, exit 2 instead of a failed item and `MISMATCH` 4 | source-verified; retest `.tmp/T-018/p2-reports/retest1-p2.md:44-48` |
+| RT1-E2 cause | `reference.py:302-317` | `_check_runs` checks finite floats and one length per vector, not that a vector has a usable length; a zero baseline passes `load_reference`, then `run_compare` sends both requests before `cosine` refuses it (retest: transport saw `[2,2]` calls) | source-verified; retest `:50-54` |
+| Same class, unsafe norm | `reference.py:56,74,124` (`math.sqrt(math.fsum(x * x …))`) | a finite reference value near 1e154 makes `fsum` raise `OverflowError` ("intermediate overflow"), which after the profile is read is `failed: OverflowError`, exit 1, after the HTTP work; served vectors cannot reach it (K1 `_reduce` packs to float32, `k1_embed.py:195-201`). `k1_embed._reduce` and `k2_observe.py:57` already scale first | source-verified; Python `math.fsum` overflow is an assumption checked by a test before the fix |
+| `_write` fix (PM) | `reference.py:185-199`; `storage/_anchored.py:43-46,60-69,143-162`; `storage/_fs.py:85-100` | every report goes through `atomic_write_bytes(root, relative)` with `check_segment` per part; a path outside the root makes `relative_to` raise `ValueError` → `ReferenceCheckError('cannot write <name> (ValueError)')`; **no test names `_write`** (`grep _write tests/test_embed_server_reference.py`: none) | source-verified |
+| F3 message (P2) | `<project>/runs/T-018-p2/eg2/reference-mon/stderr.txt:49` | `Tried to allocate 20.00 MiB. GPU 0 has a total capacity of 7.93 GiB of which 4.02 GiB is free. 7.00 GiB allowed; Of the allocated memory 2.78 GiB is allocated by PyTorch, and 2.98 MiB is reserved by PyTorch but unallocated`; raised in `Module.to` (`sentence_transformers/base/model.py:1809` → `torch/nn/modules/module.py:1374`), i.e. moving the float32 weights to the GPU | experiment (recorded) |
+| F3 device use (P2) | same run's `monitor.json` (scratch summary) | 55 nvidia-smi samples at 0.5 s: peak 3730 MiB used on the device, baseline and after 0, peak working set of the interpreter 5,622,034,432 B | experiment (recorded) |
+| Machine now | `Win32_OperatingSystem`, `nvidia-smi` (read only) | 31.6 GB RAM, 11.1 GB free; **commit limit 39.6 GB, commit free 5.9 GB**; GPU 0 MiB of 8151 MiB, driver model `WDDM` | experiment |
+| Dev knowledge base | `find <project>/database` | 42 flat concept folders, **910 images** (4 to 69 per folder), one `info.txt` each (line 1 = declared name, e.g. `Bánh chưng`, `Áo Nhật Bình`), 359 JSON side files; 179 MB | experiment |
+| Concept names | `k0.py:46-62`, `kb_sync.py:33-40` | K0 parses info line 1 (split by `knowledge.concept_separator`) into names and `concept_id`s; K1 part 2 embeds `(concept_id, 'name', display_name)` as production concept text | source-verified |
+| Paths | `config.py:390` (schema from `<root>/contracts/schemas`), `:1667-1668` (`knowledge.root` resolved inside the root, `models` and `.secrets` excluded), `manifest.py:58-82` (weights at `<root>/models/…`), `__main__.py:48,59` (`--project-root`) | the worktree has no `models/` or `database/`; both the server and K1 reach them only with project root `<project>`, which contains this worktree | source-verified |
+
+### Comparison driver (production entry points first)
+
+- **Server:** the production command, unchanged: `.venv-gpu python -m prompt_enhancer.embed_server serve --config <run profile> --project-root <project>`. `--project-root` is the documented flag, so no harness patches `verify_model` (P2's `launch.py` is not reused). The schema then comes from `<project>/contracts/schemas`; preflight refuses the run unless every file under `contracts/` hashes equal in `<project>` and the worktree.
+- **K1:** the production library functions `k0_sync.sync` (unpublished K0 scan into the run's store, as `kb_sync` calls it), `k1_embed.embed_images` (part 1) and `k1_embed.embed_concept_texts` (part 2, `ConceptText(concept_id, 'name', declared name)` from K0's folder rows); checkpoints are per embedder revision, so a rerun skips finished images (R-017).
+- **Driver (code under test, tracked):** new `src/prompt_enhancer/embed_server/dev_compare.py`, CPU `.venv`, no torch: pure metric functions plus `run_dev_compare(config, project_root, out_dir, top_k)` that calls the three functions above, times each K1 part, and writes `compare.json` through `reference._write` (anchored, below the root). CLI `python -m prompt_enhancer.embed_server dev-compare --config … --project-root … --out … --top-k 5`, loader command `embed dev-compare` (Q3).
+- **Run monitor (scratch, as in P2):** starts each process with `CREATE_NO_WINDOW`, records the launcher PID and its interpreter child, samples every 0.25 s `nvidia-smi` total used and `--query-compute-apps`, the process working sets and the system commit (`GlobalMemoryStatusEx`); its peaks are cross-checked against one `nvidia-smi` reading before and after. Under WDDM nvidia-smi has no per-process VRAM, so peak VRAM = total used − baseline, valid only while the compute-apps list holds our PID alone (otherwise the sample is marked foreign and the run stops).
+
+### Metrics (smoke-only; no quality claim, no sentinel written, R-020)
+
+Vectors: K1's stored float32 vectors per `image_id`; cosine in float64 after dividing by `math.hypot` (overflow-safe). Ranking: descending cosine, ties by `image_id` (deterministic). Same concept = the two images share a K0 `folder_id` (an image in two folders counts for both).
+
+1. **Leave-one-out nearest neighbour:** share of images whose nearest other image shares a folder; **recall@k**: per image `|top-k ∩ same-folder others| / min(k, |same-folder others|)`, mean over images with at least one same-folder other (Q2).
+2. **Concept name → image top-k:** each K0 declared name (K1 part 2 vector) ranks all images; share of names whose top-k holds an image of its folder. Folders without a parsed name are excluded and counted.
+3. **Per model, this machine only:** K1 part 1 wall time per embedded image, part 2 per text, server peak VRAM above baseline, peak RSS, embedded/failed/decode-failed counts.
+
+Oracle tests (property, `hypothesis`): random tiny vectors (2-6 dims, 2-12 images, 1-4 folders, forced ties and duplicate vectors) against a brute-force oracle that sorts every pair in plain Python; hand-computed fixtures for each metric; refusal of a zero vector, `k < 1`, a folder-less image, and an image without a vector. Driver test: a tiny synthetic knowledge root (3 folders, generated PNGs, `info.txt`) through K0 and K1 with a labelled `httpx.MockTransport` serving deterministic vectors, the metrics in `compare.json` equal to the oracle's.
+
+### Exact commands (environment for every process: `PYTHONNOUSERSITE=1`, `PYTHONDONTWRITEBYTECODE=1`, `PYTHONPATH=<wt>/src`, `TEMP`/`TMP=<wt>/.tmp/T-018/tmp`; GPU env also `HF_HOME=<project>/.cache/hf`, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`; `R` = `.tmp/worktrees/T-018-p3/runs/T-018-p3`, relative to `<project>`)
+
+- CPU tests: `<venv python> -B tools/agent-workflow/test_slot.py -- <venv python> -B -X faulthandler -m pytest -q tests/test_embed_server_*.py tests/test_k1_*.py tests/test_field_contracts.py tests/test_real_contracts.py tests/test_storage_anchored_writes.py tests/test_property_settings.py --basetemp=.tmp/T-018/bt` (one process, no `-n`; basetemp deleted after).
+- Preflight per job: `nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv`; `nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv`; commit free; `contracts/` hash equality.
+- EG2: `monitor.py $R/eg2/server-mon -- <project>/.venv-gpu/Scripts/python.exe -B -X faulthandler -m prompt_enhancer.embed_server serve --config $R/profiles/eg2.yaml --project-root <project>`; after health `ok`: `<venv python> -B -X faulthandler -m prompt_enhancer.embed_server dev-compare --config $R/profiles/eg2.yaml --project-root <project> --out $R/eg2/compare --top-k 5`; the server stops by its own `idle_exit_s` (60, scratch), watched by PID.
+- Qwen 2B: the same with `$R/profiles/qwen.yaml` (extends `configs/enhancer.dev-qwen3vl2b.example.yaml`), `$R/qwen/…`.
+- F3: three times `monitor.py $R/f3/run-<n> -- <venv-gpu python> -B -X faulthandler -m prompt_enhancer.embed_server reference-check reference --config $R/profiles/eg2.yaml --project-root <project> --image database/Ao_nhat_binh_5day/ao_nhat_binh_000430.jpg --image database/Ao_nhat_binh_5day/ao_nhat_binh_000916.jpg --texts $R/profiles/texts.json --out $R/f3/run-<n>/reference --batch-size 1 --batch-size 2 --batch-size 4` (P2's exact inputs and batch sizes; `database/` only read).
+- Run profiles (Git-ignored, under `$R/profiles/`): extend the worktree's dev examples and set only this run's `deploy_required` values: loopback ports 18441/18442, `forward_batch 1` (P2's measured VRAM), `idle_exit_s 60`, `vision.quality 90`, `knowledge.root database`, `storage.*` under `$R/<m>/data`, `engine.version` the worktree label.
+
+### VRAM and RAM plan; GPU peers
+
+- Order, one model resident: baseline → EG2 server + K1 (910 images, 42 texts) → server exit → baseline → Qwen 2B likewise → baseline → F3 runs 1-3, baseline after each. Budget `runtime.vram_budget_gb 7`; P2 peaks: EG2 server 2566 MiB, Qwen 4662 MiB, EG2 reference 5186 MiB.
+- **RAM gate** before each job: system commit free ≥ the job's P2 peak RSS + 2 GB (EG2 server 2.6 → 4.6 GB, Qwen server 5.2 → 7.2 GB, EG2 reference 5.6 → 7.6 GB). **Now 5.9 GB free:** EG2 passes; Qwen and F3 would wait (Q5).
+- GPU peers: the PM sends the messages. I reply `READY FOR GPU` when the CPU work is done (estimate ≤ 45 min of GPU: EG2 ≈ 5-10 min, Qwen ≈ 10-20 min, F3 3 × ≈ 1 min, plus idle exits), start only after `GPU GO`, and reply `GPU DONE` the moment the last process exits and VRAM is back at baseline. A foreign process on the GPU or a failed gate: I stop, report and wait; nothing is killed.
+
+### Fix plan with root cause
+
+- **RT1-N1** (verdict classification): `judge` classifies the served vector before any cosine: norm by `math.hypot`; cosine only when the lengths match and both norms are finite and non-zero, else `cosine: null`, verdict `fail`, so `compare` writes `check.json` and exits 4. Non-finite served values stay K1 refusals (exit 2, PM answer 3; the retest's wording question is the PM's). Tests first: zero served vector through `judge` and the CLI with a labelled transport (exit 4, `check.json` written, `norm 0.0`, `cosine null`).
+- **RT1-E2** (incomplete artifact validation): `_check_runs` also refuses a reference vector whose `hypot` length is zero or not finite, before any request. Tests first: zero baseline and a near-overflow baseline (1e154 values) → `ReferenceCheckError`, counting transport records 0 calls; property test over vectors with a zero or huge length.
+- **Class fix:** one overflow-safe `vector_norm` (`math.hypot`) used by `cosine`, `norm_deviation` and `judge`; `cosine` divides by the norms before the dot product. Test: a finite 1e154 vector no longer raises `OverflowError` in `cosine`/`norm_deviation`.
+- **`_write` pin** (PM fix): tests that (a) a report lands at `<root>/<out>/check.json` through `storage._anchored.atomic_write_bytes` (spy: called with the resolved root and a `/`-joined relative path; nothing else writes); (b) `out_dir` outside the root → `ReferenceCheckError` naming only the file name and `ValueError`, no path, nothing written outside; (c) a segment `check_segment` refuses (`nul`) → refused; (d) a junction swapped in below the root → refused (`StorageError`), using the storage tests' existing link helper, skipped with the reason where the OS cannot make one.
+- **F3:** P2's own numbers exclude two causes: the process cap (2.78 GiB allocated + 2.98 MiB cached of 7.00 GiB allowed) and device exhaustion (4.02 GiB free at the message, peak 3730 MiB used in the samples). So `cudaMalloc` failed while CUDA reported memory free. Remaining candidates: (H1) WDDM backing failing on **system commit** (the float32 load holds ≈ 5.6 GB; 5.9 GB commit is free now: an assumption to measure, not a known mechanism); (H2) a GPU peer between two 0.5 s samples. P3 reruns P2's exact command three times with 0.25 s samples of device use, compute apps and commit; a reproduction is explained by the samples at the failure; no reproduction is reported as "not reproduced in 3 (+3 in P2)", with H1/H2 still open and the commit headroom recorded. No code change unless the cause is in project code.
+
+### Hazards and the test that catches each
+
+| Hazard | Caught by |
+|---|---|
+| Metric off by one (self counted, k vs k−1, ties order-dependent) | oracle property test with forced ties and duplicate vectors |
+| recall@k unreachable for big folders or divided by zero for single-image folders | fixture: folder sizes 1, 2, k+3; single-image folders excluded and counted |
+| Text metric silently uses a folder without a name, or the wrong concept | driver test with one `pending_naming` folder: excluded, counted |
+| Driver writes outside the root or around the anchored layer | `_write` tests; `tests/test_storage_anchored_writes.py` scans the new module |
+| A key the driver reads is ignored, defaulted or accepted while a sentinel | override and refusal tests for every key in `embed dev-compare` (below); `tests/test_property_settings.py` |
+| Main's schema differs from the worktree's (run validated against other rules) | preflight `contracts/` hash equality; refuse on a difference |
+| Peak VRAM includes a peer's memory (WDDM, no per-process figure) | compute-apps list checked every sample; a foreign PID stops the run |
+| Host commit runs out (F3 class; Qwen RSS 5.2 GB) | commit gate before each job; commit sampled |
+| A server or child left, port held, VRAM not back | PID-scoped teardown checks after each job (gpu-live-run) |
+| A dev number read as quality | every table row labelled `smoke-only, this machine`; nothing written to a profile |
+| Zero served vector exits 2 / zero reference passes preflight / overflow escapes | the RT1-N1, RT1-E2 and class tests above; mutants below |
+
+### Questions (ranked, each with my proposed answer)
+
+1. **Query text of metric 2.** The plan says "the folder name"; production K1 part 2 embeds K0's declared name from `info.txt` line 1 (verbatim, e.g. `Áo Nhật Bình`) with the profile's document template. *Proposed: the declared names through `embed_concept_texts` unchanged (the production text, no rewriting of folder names, which would be a hand-written rule); the EG2 query prompt is not used, stated as a caveat.*
+2. **recall@k definition.** *Proposed: `|top-k ∩ same-folder| / min(k, |same-folder others|)` (reaches 1.0); plain `|∩| / |same-folder|` would cap a 69-image folder at 5/68.*
+3. **Driver placement.** *Proposed: tracked `embed_server/dev_compare.py`, subcommand `dev-compare`, loader command `embed dev-compare` with an exact read set (`knowledge`, `storage.*` K0 and K1 use, `sync` K0 settings, `embedding`, `vision`, the embedder backend); `--top-k` is a required CLI value recorded in the report (a measurement procedure, like `--batch-size`). Dropped: a scratch driver (not code under test) and reusing `kb sync` (forces resolving the VLM role backends the run never calls).*
+4. **Reaching `models/` and `database/`.** *Proposed: `--project-root <project>` for both processes, run profiles and outputs under the worktree's `runs/T-018-p3/` (inside `<project>`), `contracts/` hash check; no copy or link of weights (decision 129).*
+5. **RAM gate.** *Proposed: commit free ≥ P2 peak RSS + 2 GB per job; if not met I report and wait while the PM asks the peers; EG2 may run first.*
+
+#### PM answers (P3; each a PM decision pending user review)
+
+1. Metric 2 uses the declared names through the production `embed_concept_texts` unchanged; the table states the EG2 query-prompt caveat.
+2. recall@k = `|top-k ∩ same-folder| / min(k, |same-folder others|)`; the plain hit rate (at least one same-folder image in the top k) is reported beside it.
+3. Tracked `embed_server/dev_compare.py`, loader command `embed dev-compare` with an exact read set; dev-only in its docstring and in the command help (smoke-only outputs, never thresholds, R-020).
+4. `--project-root <project>`; no copy or link of weights; outputs under the worktree's `runs/T-018-p3/`.
+5. RAM gate: the stricter of (a) the peers' machine agreement, at least 8 GB free physical memory and at least 6 GB commit free, and (b) commit free at least the job's P2 peak RSS + 2 GB. Not met: report and wait; EG2 may go first.
+6. GPU protocol: CPU step first, then `READY FOR GPU` and stop; GPU work only after `GPU GO`; `GPU DONE` with VRAM against the baseline. F3: at most three reruns, stop at the first reproduction.
+
+### Steps (P3 CPU)
+
+1. Tests first (`tests/test_embed_server_reference.py`, new P3 section): before the fix `9 failed, 5 passed, 1 skipped` (zero served vector, zero/overflow baseline, huge-value length, property, a segment case that was a Windows drive spelling `x:y`, replaced by `a?b`; the outside test now uses its own root).
+2. Fix (`reference.py`): `vector_norm` (`math.hypot`) and `usable`; `cosine` divides first; `judge` classifies the norm before any cosine (`cosine: null`, item `fail`); `_check_runs` refuses a zero or non-finite length. Test values: `[1e308, 1e308]` has a finite length (1.41e308), so the overflow cases use `1.5e308`; the old fit test case `[1e200, 1e200]` now has a finite length and moved to `1.5e308` (behaviour change, intended: 1e200 values no longer overflow). Reference file: `140 passed`.
+3. `embed_server/dev_compare.py` (DEV-ONLY), CLI `dev-compare`, loader command `embed dev-compare`; `config.py` K0 checks moved into `_validate_store_reads` and `_validate_k0_reads`, `kb sync` keeps its check order. The read set grew from the plan by what the run showed the store reads: `storage.table_format` (K1 table build), `sync.resume` (skip rule of a rerun); `embedding` is listed key by key (K1's keys, `embedding.query_text_limit` is a query-side key K1 never reads). Report written and then refused when K1 left items unembedded. `tests/test_embed_server_dev_compare.py`: `49 passed`.
+4. Focused sets (`tests/test_embed_server_*.py tests/test_k1_*.py tests/test_field_contracts.py tests/test_real_contracts.py tests/test_storage_anchored_writes.py tests/test_property_settings.py`, one process through `test_slot.py`, `-X faulthandler`): first attempt stopped by the tool's 30-minute background limit at about 85% (`not_run` beyond that; no process left). Rerun: **`1 failed, 1914 passed, 39 skipped, 1 warning in 1640.07s (0:27:20)`** (`.tmp/T-018/focused2.log`; the machine was shared with other sessions' pytest and mypy; `test_all_constrained_fields_are_known` alone 272 s). The failure: `test_embed_server_http.py::test_the_server_exits_when_idle_and_not_while_a_request_runs` (`assert 'reason' not in {'reason': 'idle'}`): the test's request thread must reach the server within `idle_exit_s` 1 s, a wall-clock race under load in code this round did not change; alone three times: `1 passed in 6.38s`, `6.36s`, `6.79s`.
+5. Mutants (`.tmp/T-018/mutants.py`: a scratch copy with the `src/` layout plus `contracts/` and `configs/`, because the package finds its root from its own location; the first attempt without that layout failed its controls and was discarded): controls first, `14 passed` (reference) and `21 passed` (dev_compare); **10/10 killed**: M1 zero norm not classified first, M2 `_check_runs` length check dropped, M3 length by a sum of squares, M4 dot before dividing, M5 query not excluded, M6 ties by position, M7 recall divided by k, M8 `_write` bypasses the anchored layer, M9 dev-compare skips the K0 checks, M10 dev-compare does not read `sync.resume` (`.tmp/T-018/mutants.log`).
+6. `ruff check` / `ruff format --check`: **not_run** (`No module named ruff` in `.venv`). `git diff --check`: exit 0.
+7. GPU preflight on the CPU (`.tmp/T-018/preflight.py`): `contracts files: project 25, worktree 25, differing []`; `eg2.yaml 4e9b320b1d30fa6a` and `qwen.yaml ffaf132f9156908f` load through `embed serve` and `embed dev-compare` with project root `<project>`. Monitor dry run on a CPU-only command: exit 0, child peak working set 325 MB for a 300 MB allocation, VRAM 0 → 0. Specs `.tmp/T-018/specs/{eg2,qwen,f3-1,f3-2,f3-3}.json`, gates 8 GB free physical and commit free ≥ 6 / 7.19 / 7.62 GB.
+8. `READY FOR GPU` at 09:05: `RTX 5070 Laptop GPU, 0 MiB, 8151 MiB`, no compute app; free physical 12.81 GB, commit free 10.14 GB of 39.6 GB (every gate met at that moment).
+
+### Steps (P3 GPU, after `GPU GO` 09:06; builder continuing the retired P3 builder)
+
+1. Preflight 09:07:25: `RTX 5070 Laptop GPU, 0 MiB, 8151 MiB`, no compute app, ports 18441/18442 free. EG2 gate (monitor): free physical 13.25 GB ≥ 8, commit free 9.99 GB ≥ 6: met.
+2. **EG2 job** (`monitor.py .tmp/T-018/specs/eg2.json`, GPU live): server healthy after 109.3 s (VRAM 0 → 1552 MiB); `dev-compare` exit 2, `refused: K1 left 904 image(s) and 46 name(s) unembedded; compare.json records their codes`. `compare.json` counts: 42 folders, 906 images, 2 decode-failed, **0 embedded, 904 `HTTP_ERROR`; 46 names, 0 embedded, 46 `HTTP_ERROR`**; K0 scan 74.3 s, K1 images 330.8 s, names 15.3 s. Server: exit 0 by its own idle stop, log `connection_error:ConnectionAbortedError` ×2, no `engine_error`. Teardown: children alive after `[]`, VRAM after 0 MiB (= baseline), no foreign compute app, no listener on 18441; min commit free during the run 5.51 GB, min free physical 10.85 GB; server peak working set 2,581,594,112 B.
+3. **Cause (experiment, `monitor.json` samples):** VRAM 1552 MiB from t=109.5 s, flat, then 114 → 0 MiB at t=170-172 s, i.e. the server stopped by `idle_exit_s` 60 at about health + 60 s, while `dev-compare` was still in its 74 s K0 scan; no forward ever ran (VRAM never above the post-load level). Every K1 request then met a closed port (≈ 2.5-2.9 s per request whatever its content, consistent with a refused loopback connect on Windows: an assumption, not measured separately). **A run-design error in the scratch run profile, not project code.** CPU checks that exclude the other causes (labelled `EngineDouble`, no model): K1's real text and image bodies pass the server's `parse_request` (`.tmp/T-018/probe_body.py`); K1's real transport against the real `serve` with the double returns `200, 8 vectors` for the 8 texts (`.tmp/T-018/probe_http.py`; its image 400 is the probe sending raw files instead of K1's re-encoded bytes). Fix: `idle_exit_s 180` in both run profiles (Git-ignored), 2.4× the measured scan.
+4. **Blocked at 09:10:45:** `<project>`'s working tree gained uncommitted `contracts/` changes (`schemas/enhancer_config.v0.schema.json`, `README.md`, new `schemas/candidate_shortlist.v0.schema.json`; with `configs/`, `config.py`, `candidates.py`; `main` still `763b043`). The loader reads the schema from `<root>/contracts` (`config.py:390`), so with `--project-root <project>` the worktree's configs are refused: `configs/enhancer.example.yaml: candidates.sources.alias.depth: 'depth' is a required property`. The EG2 processes loaded before the change (09:07:30 and about 09:09:15), so run 1 was not affected. **Not run:** the EG2 rerun, Qwen 2B, F3 ×3 (`not_run`: every one loads through `--project-root <project>`). Dropped as not conservative: extending `<project>`'s uncommitted configs (validates against rules nobody reviewed) and copying or linking weights into the worktree (decision 129). PM decision needed: bring the worktree onto the commit that holds those contracts (PM-owned Git write), then the GPU step reruns from step 1 with the same specs.
+5. State at stop (09:23): GPU 0 MiB, no compute app, no listener on 18441/18442, no process of this session running. Scratch kept for the rerun (`.tmp/T-018/`: `monitor.py`, `specs/`, probes, logs; `runs/T-018-p3/eg2/` run 1 evidence); removed at handoff.
+6. **Unblocked (PM, after 09:32):** T-013 P2 committed on `main` (`637611f`) and applied unstaged to this worktree (`config.py` hand-merged by the PM; T-013 P2 lines not edited here). `diff -rq contracts <wt>/contracts`: no output; the three dev/base config examples byte-equal. Both run profiles load for `embed serve` and `embed dev-compare` with `--project-root <project>` (`probe_body.py`): the `candidates` block and `embedding.query_text_template` come through `extends` from the dev examples, so **no key was added to the run profiles** (nothing else needed; PM decision pending user review: inheriting rather than restating them).
+7. **CPU set after the merge** (one process through `test_slot.py`, `-X faulthandler`, `--basetemp=.tmp/T-018/bt`, deleted after): `tests/test_embed_server_*.py tests/test_candidates.py tests/test_candidates_config.py tests/test_candidates_properties.py tests/test_intake.py tests/test_intake_config.py tests/test_intake_properties.py tests/test_field_contracts.py tests/test_real_contracts.py tests/test_property_settings.py tests/test_storage_anchored_writes.py` → **`2 failed, 1576 passed, 39 skipped, 1 warning in 1451.22s (0:24:11)`** (`.tmp/T-018/cpu3.log`). Failures: `test_embed_server_http.py::test_the_server_exits_when_idle_and_not_while_a_request_runs` (`assert 'reason' not in {'reason': 'idle'}`, the race noted in the CPU step) and `test_embed_server_lifecycle.py::test_a_stop_summary_that_cannot_be_written_does_not_hold_the_stop` (summary `[]` instead of `connection_refused:overloaded: 3`). Neither is in this round's lines nor in the merge: `git diff --stat` of `server.py`, `models.py` and both test files is empty. The pair alone three times: `2 passed in 8.65s`, `1 failed, 1 passed in 18.34s`, `2 passed in 8.02s`: timing-dependent P1 tests under machine load. Classified as pre-existing flakiness, not fixed here (outside Scope); PM decision pending user review.
+8. **EG2 run 2** (10:00-10:19, gate free physical 15.68 GB, commit free 16.54 GB, GPU 0 MiB, no compute app): healthy after 51.0 s; `dev-compare` exit 0 in 962.8 s; server exit 0 by its own idle stop. Run 1 evidence kept under `runs/T-018-p3/eg2/run1-*`.
+9. **Qwen 2B** (10:20-10:34, gate free physical 14.60 GB, commit free 14.85 GB ≥ 7.19, GPU 0 MiB, no compute app): healthy after 41.5 s; `dev-compare` exit 0 in 601.2 s; server exit 0 by its own idle stop.
+10. **F3 run 1** (10:35, gate commit free 14.41 GB ≥ 7.62): `reference` exit 0 in 84.9 s, `{"min_cosine": 0.9998, "raw_min_cosine": 0.9998735781429398, "max_norm_deviation": 0.0016, "raw_max_norm_deviation": 0.0015440438051930183}` (= P2's fit). **Not reproduced.** Samples (`runs/T-018-p3/f3/run-1/mon/monitor.json`, 0.25 s): during the float32 pass (t = 69.9-76.8 s) VRAM 48 → 5186 MiB while **commit free fell 5.86 → 1.145 GB** and free physical stayed 10.29-10.33 GB; the interpreter's peak working set was 5.72 GB. From the start, commit fell 14.41 → 1.145 GB, i.e. this job holds ≈ 13.3 GB of system commit at its peak, about the working set plus the device allocations (on WDDM, device memory counted against system commit: experiment here, the mechanism itself is an assumption, not read in a primary source). **H1 is a supported hypothesis, not an established cause** (corrected in fix round 1, F5): P2's failure (`cudaMalloc` refused with 4.02 GiB device-free, in `Module.to`) would fit a commit limit hit while the device still had room. The ≈ 5.9 GB commit-free figure is the P3 Step 0 machine reading, not a measurement taken at P2's launch, so P2's commit headroom at the failure is unknown. H2 (a GPU peer) is not seen here (no foreign compute app in 38 samples). **Runs 2 and 3 not run (`not_run`):** each takes the shared machine to ≈ 1 GB commit free, which can fail other sessions' allocations, and the 7.62 GB gate is shown too low for this job (needs ≈ 13.3 GB + margin); the brief's "at most three" allows stopping. PM decision pending user review. No code change: the failure was not reproduced in one P3 run, commit pressure is the supported hypothesis, and the historical cause remains unproven; the conservative gate recommendation stands.
+11. Teardown after every job: children alive after `[]`, VRAM after 0 MiB (= baseline 0), no foreign compute app, no listener on 18441/18442 (`netstat`), last check `0 MiB`, no compute app.
+
+### Dev comparison (smoke-only, this machine, no quality claim, no sentinel written, R-020)
+
+Both models: 42 folders, 906 images (2 decode-failed in each run; whether the same 2 was not checked), 904 embedded, 46 declared names embedded, 0 failed; `--top-k 5`; reports `runs/T-018-p3/{eg2,qwen}/compare/compare.json` (sha256 `bd470d7de314dd57…`, `ca3308cdd9836092…`); profiles `eg2.yaml` `75d15a9cf5bd315b…`, `qwen.yaml` `92dc793587daec85…`.
+
+| Metric (k = 5) | EmbeddingGemma 2 (`f9972ac2`, 768 d) | Qwen3-VL-Embedding-2B (`9f2f7e71`, 2048 d) |
+|---|---|---|
+| Image → image leave-one-out top-1 same folder (904 queries) | 0.931 | 0.898 |
+| hit@5 | 0.986 | 0.976 |
+| recall@5 (`/ min(k, same-folder others)`) | 0.882 | 0.870 |
+| Name → image top-1 (46 names) | 0.630 | 0.587 |
+| hit@5 | 0.783 | 0.761 |
+| recall@5 | 0.539 | 0.543 |
+| K1 seconds per embedded image / name | 1.017 / 0.434 | 0.570 / 0.283 |
+| K0 scan s (store state differs: EG2 run 2 reused its run 1 cache) | 20.6 | 69.2 |
+| Server ready after (s) | 51.0 | 41.5 |
+| Peak VRAM above baseline 0 (MiB, whole device, our PID alone) | 2568 | 4788 |
+| Peak working set, server (GB) | 2.71 | 5.19 |
+| Min commit free during the job (GB) | 7.02 | 4.49 |
+
+Caveats: metric 2 uses the declared names through K1's document template, not EG2's query prompt (PM answer 1); timings are one run on a shared laptop GPU (forward_batch 1, `max_concurrency` 1), not a benchmark; the folder labels are the dataset's own. **Sampled per-name verdicts** (first own-folder rank EG2 / Qwen): `Bánh chưng` 1 / 1, `Hoa mai` 1 / 1: meets target; `Áo Nhật Bình` 87 / 4, `Sen` 24 / 5, `Áo bà ba` 19 / 1, `Nón quai thao` 7 / 3: partial (EG2 misses, Qwen within or near k); `Áo giao lĩnh` (4 images) 444 / 205, `Khăn vành dây` 113 / 55: misses for both. These are rankings only; no image was judged by eye here.
+
+### Completion report (P3)
+
+- **Behaviour:** CPU step (RT1-N1, RT1-E2, overflow-safe `vector_norm`, `_write` tests, DEV-ONLY `embed_server/dev_compare.py` with `embed dev-compare`) as in Steps (P3 CPU); GPU step: both dev embedders served by the production `embed serve` and measured by `dev-compare` over the dev knowledge base (904 of 906 images, 46 names each), table above; F3 not reproduced in one P3 run; commit pressure (H1) is a supported hypothesis measured in that run, and the historical cause remains unproven (wording corrected in fix round 1, F5). Labels: GPU live, smoke-only; no threshold, sentinel or profile value written (R-020).
+- **Commands** (environment as in Exact commands; `<py>` = `.venv` python, `<gpu-py>` = `.venv-gpu` python; each GPU job through the scratch monitor `<py> -B -I .tmp/T-018/monitor.py .tmp/T-018/specs/<job>.json`, which ran): `<gpu-py> -B -X faulthandler -m prompt_enhancer.embed_server serve --config runs/T-018-p3/profiles/<m>.yaml --project-root <project>`; `<py> -B -X faulthandler -m prompt_enhancer.embed_server dev-compare --config runs/T-018-p3/profiles/<m>.yaml --project-root <project> --out runs/T-018-p3/<m>/compare --top-k 5`; F3: `<gpu-py> … reference-check reference --config …/eg2.yaml --project-root <project> --image database/Ao_nhat_binh_5day/ao_nhat_binh_000430.jpg --image database/Ao_nhat_binh_5day/ao_nhat_binh_000916.jpg --texts …/texts.json --out runs/T-018-p3/f3/run-1/reference --batch-size 1 --batch-size 2 --batch-size 4`. Outputs and exits: Steps (P3 GPU) 2, 8-10.
+- **Tests:** after the PM's T-013 P2 merge, `2 failed, 1576 passed, 39 skipped, 1 warning in 1451.22s` (step 7; both failures timing-dependent P1 tests in unchanged files, pass alone 2 of 3). CPU step: reference file `140 passed`, dev_compare `49 passed`, focused set `1 failed, 1914 passed, 39 skipped` (same idle race), mutants 10/10 killed. `ruff check` / `ruff format --check`: **not_run** (`No module named ruff` in `.venv`). `git diff --check`: exit 0.
+- **not_run:** F3 runs 2 and 3 (commit risk to the shared machine, step 10); ruff; the full suite (the PM's).
+- **Configuration:** audit (P3) above; the GPU step added no setting; run-profile `idle_exit_s` 60 → 180 (scratch, Git-ignored); the T-013 P2 keys reach the run profiles through `extends` (step 6).
+- **VRAM:** baseline 0 MiB before every job, 0 MiB after every job; peaks EG2 2568, Qwen 4788, F3 5186 MiB; no foreign compute app; no process of this session left; ports 18441/18442 free. `models/` and `database/` only read.
+- **Changed files (this round):** `src/prompt_enhancer/embed_server/{reference.py,__main__.py,dev_compare.py}`, `src/prompt_enhancer/config.py` (my `embed dev-compare` lines; the T-013 P2 hunks are the PM's and untouched), `docs/stages/K1-embed.md`, `tests/test_embed_server_reference.py`, `tests/test_embed_server_dev_compare.py`, this task file. Evidence (Git-ignored): `runs/T-018-p3/` (≈ 32 MB, mostly the two run stores; delete when no longer needed).
+- **Cleanup:** scratch scripts, specs, probes and `.tmp/T-018/tmp` deleted; basetemp deleted after each run; kept the cited logs `.tmp/T-018/{cpu3,focused2,mutants}.log`.
+- **Open issues:** F3 gate: the reference step needs ≈ 13.3 GB commit free on this machine, not 7.62 (a run-gate value for the PM's GPU rules, not a profile key); two timing-flaky P1 tests; K1 drops the `EmbeddingError` detail and the server logs no 4xx/`EngineError` reply (Noticed); the metrics are one smoke run and say nothing about quality.
+
+#### Noticed, not done (P3)
+
+- F3's float32 reference step holds ≈ 13.3 GB of system commit at its peak on this WDDM machine; the RAM gate of PM answer 5 (P2 peak RSS + 2 GB = 7.62 GB) under-counts device-backed commit.
+
+- K1 records only the code of an `EmbeddingError` (`k1_embed.py:430-431,493-494`), and the server writes no line for a 4xx or `EngineError` reply (`server.py:322-323,384-385`), so a failed run's status and reply code are lost; this run needed a CPU probe to tell a closed port from an engine failure.
+- A server's `idle_exit_s` must exceed the client's longest pre-request phase (K0's scan here); nothing ties them, and a too-short value looks like `HTTP_ERROR` everywhere.
+
+- `test_the_server_exits_when_idle_and_not_while_a_request_runs` races wall-clock time (1 s idle window against a thread start); it failed once under load.
+- `kb sync` reads the whole `embedding` block, so `embedding.query_text_limit` (read by no code) is refused while a sentinel; `embed dev-compare` lists K1's keys only.
+
+#### Configuration audit (P3: rows new or changed)
+
+| Setting / literal | Consumer | Validation | Example profile | Override test | Refusal test / class |
+|---|---|---|---|---|---|
+| loader command `embed dev-compare` (new) | `dev_compare.run_dev_compare` via `__main__._dev_compare` | `COMMAND_READS` entry; reads sentinel-checked and schema-validated with exact integers (as `kb sync`); `_validate_store_reads`, `validate_embedder_reads`, `_validate_k0_reads` | the dev examples (no new key) | below | `test_every_key_dev_compare_reads_is_refused_missing_or_unresolved` (15 cases); `test_keys_outside_the_read_set_are_not_read` (data root, a role, an `observe` key, `runtime.gpus`, `embedding.query_text_limit`); protocol-bound name |
+| `knowledge.root`, `.info_file.names`, `.info_file.encoding`, `.image_extensions`, `.concept_separator` | K0 `sync` | existing K0 checks (inside the root, never `models/` or `.secrets/`, codec, extension form) | dev example (`database`) | `test_the_profile_separator_decides_the_names` (`;` vs `|` on the same file) | refusal cases above; configurable |
+| `runtime.cpu_workers`, `sync.mass_deletion_guard.max_removed_fraction` | K0 `sync` | existing | base `auto`; guard `design_required` in the base, 1.0 in the run profiles (a fresh store) | — (K0's own tests) | refusal cases; configurable |
+| `sync.resume` | store `done` rule | existing store `_settings` | base `true` | `test_with_resume_off_a_rerun_embeds_again`; `test_a_rerun_embeds_nothing_and_reports_the_same_metrics` (true) | refusal case; configurable |
+| `storage.kb_store`, `storage.lock`, `storage.table_format` | `open_knowledge_store`, K1 table build | existing; kb_store must not overlap `knowledge.root` | run profiles under `runs/T-018-p3/<m>/data/kb` | the driver tests (own store per test) | overlap, lock sentinel, `csv` format; configurable |
+| `embedding.candidates/chosen/revision/backend/request/dimension/dimension_mode/batch_size`, `vision.*` (K1's five), embedder backend | K1 `embedder_settings` | existing (`validate_embedder_reads`, `_validate_embedding`) | dev examples | `test_the_profile_batch_size_shapes_the_requests` (2 and 3) | batch size, `vision.quality`, `base_urls` cases; configurable |
+| `--top-k` (new CLI value) | `dev_compare.check_top_k`, metrics | positive `int`, checked before the profile is read | — | `test_the_command_line_k_is_the_k_of_the_report` (1, 3) | `test_top_k_must_be_a_positive_integer` (5), `test_the_command_refuses_before_touching_the_store[--top-k]`; configurable (CLI, recorded in compare.json) |
+| `--out` | `reference._inside`, `reference._write` | inside the root; anchored write | — | driver tests | `…refuses_before_touching_the_store[--out]`; `_write` tests |
+| `FORMAT = 'embed_dev_compare.v0'`, `LABEL` | compare.json | — | — | driver test | artifact-bound |
+| `NAME_KIND = 'name'`, `COMMAND` | K1 concept text kind; loader command | — | — | driver test | protocol-bound |
+| tie order by `image_id` | `dev_compare.ranked` | — | — | oracle properties, by-hand fixture | artifact-bound (the metric definition) |
+| `reference.vector_norm`, `usable` (finite, > 0) | `cosine`, `judge`, `_check_runs`, `norm_deviation`, `dev_compare.unit_rows` | — | — | `test_a_finite_vector_with_huge_values_has_a_length_and_a_cosine`, property `test_property_the_verdict_never_raises_for_finite_vectors` | `test_a_reference_vector_without_a_usable_length_is_refused_before_any_request` (3); protocol-bound (a cosine needs a length) |
+| run-profile values (ports 18441/18442, `forward_batch 1`, `idle_exit_s 180` (60 in EG2 run 1, which lost the server during K0's scan), `vision.quality 90`, lock 30/0.2, guard 1.0, engine label, `http`, `image.max_decode_pixels 40000000`) | this run only | the loader (preflight below) | `runs/T-018-p3/profiles/` (Git-ignored) | — | scratch, not tracked |
+
+### Configuration impact (P3, before any runtime edit)
+
+| Setting | Schema / profile | Validation and tests |
+|---|---|---|
+| loader command `embed dev-compare` (new) | `config.COMMAND_READS` | every read key refused missing or a sentinel (refusal tests); a non-default `batch_size`, `knowledge.concept_separator` and `vision.max_image_side` change the run (override tests with the mock transport) |
+| `--top-k` (new CLI value) | `dev_compare` | positive integer, required; refusal tests (0, −1, missing); recorded in `compare.json` |
+| `--out`, `--project-root` | existing `_inside` / `_write` | outside the root refused (tests) |
+| `reference_check.min_cosine`, `.max_norm_deviation` | unchanged | RT1-N1: zero norm fails against any bound (test) |
+| Scratch run values (ports, `forward_batch 1`, `idle_exit_s 60`, `vision.quality 90`, storage, `engine.version`) | `$R/profiles/` only | the loader; not tracked |
+| Retained literals | `FORMAT = 'embed_dev_compare.v0'` artifact-bound; tie order by `image_id` artifact-bound; `1.0` unit length protocol-bound (existing) | classified in the audit |
+
+### Plan (checkable finish)
+
+1. CPU (worktree, no GPU): RT1-N1, RT1-E2 and class tests first (fail now), fixes; `_write` tests; `dev_compare.py` + oracle property tests + driver test + CLI + loader command + override/refusal tests. Done: the test sets green through `test_slot.py`; 3-10 mutants on the changed lines (zero-norm gate dropped, `_check_runs` length check dropped, `hypot` → `sqrt(fsum)`, self not excluded, tie order flipped, `min(k, …)` → `k`, `_write` bypassing `atomic_write_bytes`) killed; `READY FOR GPU`.
+2. GPU after `GPU GO`: EG2, Qwen 2B, F3 ×3, each with gates and teardown. Done: one table (both models × the three metric groups) in this file, VRAM at baseline, no process, ports free; `GPU DONE`.
+3. Configuration audit, Completion report, cleanup of `.tmp/T-018/`; nothing under `models/` touched.
+
+## P3 fix round 1
+
+Input: `.tmp/T-018/review-p3.md` (F1-F7; C3, C4 under "P1 timing tests"). R-014, R-015, R-016, R-020. All line numbers below are the staged P3 tree, read 2026-11-17 (source-verified unless labelled).
+
+### Step 0
+
+**Unknowns:** how far the F7 fix may reach (the helper is shared with `kb sync`, K1 standalone and S1's dense gate); the protected-area set for `--out`; whether `StorageError` text (configured store paths) counts as a leak.
+
+#### (a) Allocations that grow with the catalogue (N images, d dims, C names) or the query count
+
+| Site | Now | After the fix |
+|---|---|---|
+| `dev_compare.py:174-175` `to_pylist()` vectors into `{id: list}` | N·d Python floats (≈ 32 B each: about 1.2 GB at N = 50,000, d = 768; estimate) | the Arrow `vector` column to one NumPy array (`flatten().to_numpy()`, float32 4 B), ids from the id column: N·d·4 B |
+| `:54, :59` `unit_rows`: norms list, `np.asarray` float64 | N + N·d·8 B | N·d·8 B, scaled in place (one copy) |
+| `:122` image matrix | N·d·8 B | same (inherent) |
+| `:123` `images @ images.T` (F1) | **N²·8 B** (20 GB at 50,000) | one row `images @ images[q]` per query: N·8 B |
+| `:64` `ranked` per query: Python `sorted` list | N ints (and O(N log N) Python time per query) | `np.lexsort((id_rank, -row))`: N·8 B; `id_rank` (rank of each id, computed once): N·8 B |
+| `:89` same-folder set per query | O(N) and O(N) Python time per query (O(N²) total) | union of the members of the query's folders from a folder → indices map built once (O(memberships)); a boolean mask N B per query |
+| `:87, :101` `results` list of dicts | N dicts | running sums (O(1)); `per_name` rows stay (C rows, the report itself) |
+| `:117, :118, :124` `position`, `folders`, `folders_of` | O(N), O(memberships) | same |
+| `:129-130` `relevant` list of C sets (F1) | Σ sizes, up to **C·N** | built per name from the folder → indices map: N per name |
+| `:131` names × images matrix (F1) | **C·N·8 B** | one row per name: N·8 B |
+| `reference.py:116-126` `fit_min_cosine` | inputs × runs² cosines | unchanged: grows with the command-line inputs, not the catalogue |
+| `reference.py:136-146` `judge`, `run_compare` vectors | O(inputs·d) | unchanged (same reason) |
+
+Peak after the fix: O(N·d) for the vectors plus O(N + C·d) working memory per query.
+
+#### (b) Output paths of every `embed` subcommand
+
+| Subcommand / file | Checked now | After the fix |
+|---|---|---|
+| `dev-compare --out`/`compare.json` (`__main__.py:162`, `dev_compare.py:196`) | `_inside` (resolved, inside the project root) + anchored write | also refused before any store or HTTP activity when the resolved directory is, or lies inside, the resolved `knowledge.root` (F2) or `storage.kb_store`, or its first segment below the root is protected (`.secrets`, `.git`, `models`, and `.venv*` by prefix: Q3) |
+| `reference-check reference --out`/`reference.json`, `fit.json` (`__main__.py:128`, `reference.py:262-263`) | `_inside` + anchored write | the same protected-area rule (shared helper); no knowledge root is read by this command (`embed serve` read set), so no KB rule |
+| `reference-check compare --out`/`check.json` (`reference.py:386`) | `_inside` + anchored write | as `reference` (`embed reference-check` reads no `knowledge.root`) |
+| `serve` | writes no file (stdout/stderr only) | — |
+| K0/K1 store writes inside `dev-compare` | `storage.kb_store`, checked apart from `knowledge.root` by `_validate_k0_reads` (`config.py:1748-1756`) and the store's `_FORBIDDEN` (`storage/store.py:88`) | unchanged |
+
+`database/` is the dev profile's `knowledge.root` (`configs/enhancer.example.yaml:18`, decision 61), so the knowledge-root rule covers it whenever the profile points there; Q3.
+
+#### (c) Vector normalisations in `embed_server/` and `k1_embed.py`
+
+| Site | Method | Subnormal | Huge |
+|---|---|---|---|
+| `pooling.py:26-36` `l2_normalize` | divide by max \|x\|, then `hypot` | exact enough (scaled into [-1, 1]) | safe |
+| `k1_embed.py:179-192` `_reduce` | divide by max \|x\|, then `hypot` | safe | safe |
+| `reference.py:64-71` `cosine` (F3) | divide by `hypot(a)` directly | **wrong**: `hypot([5e-324]*2)` rounds to 5e-324, so units are not unit (cosine 1.0 vs 0.7071, self 2.0) | safe (`hypot`) |
+| `dev_compare.py:48-59` `unit_rows` (same class) | divide by `vector_norm` | **wrong** (same rounding) | safe |
+| `reference.py:52-56, 84-86` `vector_norm`, `norm_deviation` (reported lengths, no division) | `hypot` | the reported length of a subnormal vector loses relative precision, but its deviation from 1 is ≈ 1 either way (a fail) | finite unless the true length overflows |
+
+Fix: one `reference.unit_vector` (max-abs scaling, then `hypot`, as `_reduce`), used by `cosine`; `unit_rows` does the same row-wise in NumPy (divide each row by its max \|x\|, then by its norm, which lies in [1, √d]).
+
+#### (d) Exceptions that can leave `embed dev-compare` (`__main__.py:159-169`)
+
+| Exception | Origin | Text can carry a path? | After the fix |
+|---|---|---|---|
+| `ConfigurationError` | `load_config` | the `--config` spelling the user gave plus key names; no resolved machine path | unchanged |
+| `DevCompareError` | `check_top_k`, `unit_rows`, driver | no (fixed texts) | unchanged; the new output-path refusal is fixed text |
+| `ReferenceCheckError` | `_inside`; `_write` | no: `_inside` fixed text, `_write` basename + type | `_write` also maps `OSError` (F4) |
+| `OSError` (raw) | `_write` today (F4); K0/K1 file reads | **yes**: `str(error)` holds the filename | printed as `refused: <type>` only |
+| `StorageError` | store open, K0, K1 tables (`storage/_fs.py:37,76,106-134`, `_anchored.py:88-338`) | yes: configured store paths and relative names below the project root | unchanged (Q4: the main CLI prints them the same way, `prompt_enhancer/__main__.py:44-45`) |
+| `EmbeddingError` and anything else | K1 (raised, not recorded) | — | `failed: <type>` only (existing `:167-169`) |
+
+#### (e) Keys `embed dev-compare` validates
+
+Loader read set (`config.py` COMMAND_READS `embed dev-compare`): every key below is read by K0, the store or K1 unless marked.
+
+| Key (container: children) | Read |
+|---|---|
+| `knowledge.root`, `.info_file.names`, `.info_file.encoding`, `.image_extensions`, `.concept_separator` | read (K0 `sync`, `dev_compare.py:157-159`) |
+| `runtime.cpu_workers`, `sync.mass_deletion_guard.max_removed_fraction` | read (`:159-160`) |
+| `sync.resume` | read (store `done` rule) |
+| `storage.kb_store`, `storage.lock` (`timeout_s`, `poll_s`), `storage.table_format` | read (store) |
+| `embedding.chosen`, `.revision`, `.backend`, `.dimension`, `.dimension_mode`, `.batch_size` | read (K1 `embedder_settings`, `k1_embed.py:118-135`) |
+| `embedding.request` (`shape`, `image_instruction`, `extra_body`, `text_template`) | all four read (`k1_embed.py:130-132`) |
+| `embedding.candidates` (items `id`, `note`) | `id` read (chosen ∈ candidates); **`note` not read** but sentinel-checked recursively (K1_READS since T-008 F2; Q2) |
+| `vision.max_image_side`, `.format`, `.quality`, `.alpha_policy`, `.transport` | read (`k1_embed.py:134`) |
+
+Embedder backend (`validate_embedder_reads`, `config.py:941-954`, keys from `embedder_reads` `:861-870`):
+
+| Key below `vlm.backends.<embedder>` | Read |
+|---|---|
+| `provider`, `engine` (`name`, `version`), `base_urls`, `model.id`, `model.revision`, `endpoints.embeddings`, `http` (all 8 leaves), `max_concurrency`, `image.max_decode_pixels` | read (K1 transport and identity) |
+| `server.family`, `.dtype`, `.attn_implementation`, `.max_length`, `.image` (3 leaves), `.default_instruction` | read (`families.output_fingerprint`, `families.py:77-81`) |
+| `server` container, recursively (`:850`, `_sentinel` `:634-642`) (F7) | **not read**: `forward_batch`, `idle_exit_s`, `max_request_bytes`, `max_image_bytes`, `max_pending_requests`, `max_connections`, `max_discard_bytes`, `read_timeout_s`, `reference_check.min_cosine`, `reference_check.max_norm_deviation` |
+
+Loader-wide checks that run for every command, not reads of this one (`config.py:1655-1690`): whole-profile schema, model bindings, `_validate_embedding` cross-field rules, every backend's `http`/`probe` finiteness, configured paths, role schema ids. Unchanged.
+
+#### Fix per finding (each test fails before the fix, passes after)
+
+| Finding | Fix | Test (new unless named) |
+|---|---|---|
+| F1 | `leave_one_out`/`name_to_image` take score rows by index (a list of lists in the oracle tests, a lazy `images @ images[q]` row provider in `measure`); relevance built per query from a folder → indices map; ranking by `np.lexsort` with a precomputed id rank (ties by id, unchanged definition); running sums; vectors read from Arrow as one array | `test_measure_never_allocates_a_pairwise_matrix`: N = 600, d = 3, `tracemalloc` peak inside `measure` below N²·8/4 B (a full matrix is N²·8 = 2.88 MB; NumPy reports its buffers to tracemalloc: to be cited from the installed source before use); the two 400-example oracle properties and the by-hand fixtures unchanged |
+| F2 | `dev_compare.check_out_dir(config, project_root, out_dir)` first in `run_dev_compare` (before the store and K1), with a shared `reference.check_output_dir` for the protected areas | `test_an_out_dir_inside_the_knowledge_root_is_refused_before_any_activity` (parametrised: the root itself, `kb/A`, `kb/../kb/A`, a different case on Windows, a directory link/junction to `kb`; `kb_store`; `models`, `.secrets`, `.venv-gpu`): exit 2, no new file in `kb/`, no store directory, zero requests |
+| F3 | `reference.unit_vector`; `cosine` = fsum of unit products; `unit_rows` row-wise | `test_cosine_of_subnormal_vectors` (0.7071067812, self 1.0); property `test_property_cosine_is_accurate_and_scale_invariant`: Hypothesis vectors scaled by 2^e, e in [-1074, 1023] per vector, against an exact oracle (`Fraction` dot product, `Decimal` square roots at 50 digits), \|error\| ≤ 1e-12 and \|cosine\| ≤ 1 + 1e-15; the same for `unit_rows` |
+| F4 | `_write` catches `OSError` too (basename + type); `_dev_compare` prints `OSError` as its type only | `test_a_report_io_error_is_refused_without_its_path` (labelled I/O fault double: `atomic_write_bytes` raising `PermissionError(13, …, <abs path>)`): exit 2, stderr `cannot write compare.json (PermissionError)`, neither the path nor `repr(path)` in stderr; the same for `reference-check compare` |
+| F5 | step 10 and the Completion report: "not reproduced in one P3 run; commit pressure is a supported hypothesis; the historical cause is unproven"; the P2 starting figure marked as the P3 Step 0 reading, not a P2 measurement; the gate recommendation kept | text review (no test) |
+| F6 | `counts.folders_unnamed`: K0 folders with no `folder_concepts` row | the existing driver test asserts 1 (folder C) |
+| F7 | `validate_embedder_reads` checks the `server` container for a sentinel and the schema shape only (not recursively), its read leaves as now | `test_unused_server_fields_are_outside_the_read_set` (each of the 10 unread leaves above as a sentinel: `load_config(…, 'embed dev-compare')` and `embedder_settings` both pass); the existing missing/sentinel refusals of the 6 read server leaves stay green; the P3 audit's exact-read-set row corrected |
+
+#### C3 and C4 redesign (test files only; `server.py` unchanged)
+
+- **C3** (`test_embed_server_http.py:292-305`): `running_server` gains optional `clock`, `stop` and `announce` arguments (default behaviour unchanged). (1) Poll rule on an injected clock: a lock-held fake clock and a `stop` event that counts `wait` calls; after the `ready` announcement, advance to `idle_exit_s - 0.001`, observe two more polls and assert no exit; advance past `idle_exit_s` and assert the exit (`reason == 'idle'`) comes within at most one further poll (counted, not timed). (2) A bounded integration check on the real clock, timed from the observed `ready` announcement (not fixture start): exit by itself, `waited ≥ idle_exit_s - 0.1`, and within the fixture's 10 s bound.
+- **C4** (`:420-444`): an admission barrier and a controlled expiry. Labelled seams: `_State.admit` wrapped to set an event on the first admitted request; `server._DeadlineReader` replaced by a subclass that starts with an infinite deadline and records itself, so production `readinto` runs unchanged. Order: send the stalled head, wait for the admission event, one overload probe must be 503 `overloaded` (the slot cannot expire meanwhile); then set the recorded reader's deadline to now: 408 `request_timeout` within 3.5 s, then a request gets 200 (the slot came back). The real deadline keeps its own test without a race: a stalled upload alone gets 408 within `read_timeout_s + 2.5` s.
+
+#### Mutants (scratch copies of the changed files only)
+
+M1 tie rank reversed; M2 self not excluded; M3 the full `images @ images.T` restored; M4 `folders_unnamed` counts every folder; M5 `unit_vector` without the max-abs scaling; M6 `OSError` dropped from `_write`'s except; M7 the knowledge-root rule removed; M8 `server` sentinel-checked recursively again; M9 `server.dtype` dropped from the identity reads; M10 C4's barrier removed (shows the test then depends on timing: expected to survive under no load, reported as such).
+
+#### Questions (ranked, each with my proposed answer)
+
+1. F7 changes the shared helper, so `kb sync`, K1's standalone entries and S1's dense gate also stop refusing sentinels in the 10 unread `server` leaves. *Proposed:* yes; it is the class fix, and serving still checks them (`validate_embed_server_reads`).
+2. `embedding.candidates[].note` is unread but sentinel-checked (since T-008 F2). *Proposed:* carry it under Noticed, unchanged (K1's contract for every command; not this finding).
+3. Protected output areas: *proposed* the existing project set (`.secrets`, `.git`, `models`) plus `.venv*` by prefix (safety-bound literal), plus the resolved `knowledge.root` and `storage.kb_store`; no `database` literal (it is a deployment path, covered by `knowledge.root`). PM decision pending user review.
+4. `StorageError` text names configured store paths. *Proposed:* keep (same as `python -m prompt_enhancer`); only raw `OSError` is reduced to its type.
+5. `compare.json` gains `counts.folders_unnamed` under the same `embed_dev_compare.v0`. *Proposed:* yes (additive; no reader of this dev-only file exists).
+
+#### PM answers (2026-11-17; each a PM decision pending user review)
+
+1. Accepted: F7 narrows `validate_embedder_reads` for every caller. Proof per caller (`embed dev-compare`, `kb sync`, K1 standalone `embedder_settings`, S1 `validate_candidates_reads` with dense on): each of the ten unread `server` leaves as a sentinel no longer refuses; each still-read leaf still refuses.
+2. Accepted: `embedding.candidates[].note` unchanged, under Noticed, not done.
+3. Accepted: protected set for `--out` = `.secrets`, `.git`, `models`, any `.venv*`, `knowledge.root`, `storage.kb_store`, resolved after links; a link alias into each tested.
+4. Accepted: store errors keep their configured store paths; raw `OSError` prints only its type and the fixed report basename.
+5. Accepted: `counts.folders_unnamed` under `embed_dev_compare.v0`, documented here.
+- F1 instrument: `tracemalloc` only after a measured probe (or the installed source) shows NumPy buffers are traced.
+
+#### Configuration impact (P3 fix round 1, before any runtime edit)
+
+| Setting / literal | Change | Validation and tests |
+|---|---|---|
+| `vlm.backends.<embedder>.server.*` unread leaves (10) | leave the `embed dev-compare`, `kb sync` and K1 read sets (F7) | outside-read-set tests; refusal tests of the 6 read leaves kept |
+| `--out` of `dev-compare` and `reference-check` | new refusal: protected areas; for `dev-compare` also inside `knowledge.root` or `storage.kb_store` | refusal tests (F2 list); override: an out dir under `runs/` writes (existing driver tests) |
+| `counts.folders_unnamed` | new report field | artifact-bound; driver test |
+| protected names `.secrets`, `.git`, `models`, `.venv` prefix | retained literals | safety-bound (the project's existing protected roots, `storage/store.py:88`) |
+| no new profile key, default or threshold | — | — |
+
+#### Plan (checkable finish)
+
+1. Tests first (all listed above fail on the staged tree), then F7, F2, F4, F3, F1, F6; F5 text; C3, C4.
+2. Done: the brief's test sets green through `test_slot.py` (one process, fixed `--basetemp`, deleted after); M1-M9 killed, M10 reported; Configuration audit rows updated; Completion report; scratch removed.
+
+#### Configuration audit (P3 fix round 1: rows new or changed)
+
+| Setting / literal | Consumer | Validation | Example profile | Override test | Refusal test / class |
+|---|---|---|---|---|---|
+| `vlm.backends.<embedder>.server` container (embed_server engine) | K1 `embedder_settings` → `families.output_fingerprint` | `validate_embedder_reads`: the container refused as a sentinel or off its schema; not sentinel- or finite-checked recursively (`_PARTLY_READ_CONTAINERS`) | dev examples (unchanged) | `test_a_sentinel_in_an_unread_server_leaf_does_not_refuse` (10 leaves × 4 callers) | `test_a_sentinel_in_a_read_server_leaf_still_refuses` (8 leaves + the container × 4 callers); configurable |
+| `server.family/.dtype/.attn_implementation/.max_length/.image.*/.default_instruction` | K1 identity | sentinel, schema, finite (unchanged) | dev examples | the resolved-profile case per caller | as above; configurable |
+| `server.forward_batch/.idle_exit_s/.max_*_bytes/.max_pending_requests/.max_connections/.read_timeout_s/.reference_check.*` | `embed serve`, `embed reference-check` only | their own commands (unchanged: `validate_embed_server_reads`, `validate_reference_check_reads`) | dev examples | — | not read by `embed dev-compare`, `kb sync`, K1, S1 (tests above); the P3 audit's "exact read set" row was wrong for these and is corrected here |
+| `--out` (`dev-compare`) | `dev_compare.check_out_dir` → `reference.check_output_dir` | resolved after links: inside the root; not in `knowledge.root`, `storage.kb_store`, `.secrets`, `.git`, `models`, `.venv*`; before the store or any request | — | `test_an_out_dir_beside_the_source_is_written` (`runs/compare`) | `test_an_out_dir_in_the_source_the_store_or_a_protected_directory_is_refused_before_any_activity` (16 cases, 17 on Windows: spelling, dot-dot, case, link alias into each area); configurable (CLI) |
+| `--out` (`reference-check reference/compare`) | `reference.check_output_dir` | protected directories (this command reads no knowledge root) | — | the allowed `runs/out` case | `test_reference_check_refuses_an_out_dir_in_a_protected_directory` (5 names, plain and link); configurable (CLI) |
+| `PROTECTED_DIRS = ('.secrets', '.git', 'models')`, `PROTECTED_PREFIX = '.venv'` | `check_output_dir` | — | — | — | safety-bound (the project's protected roots, `storage/store.py:88`; `.venv*` by prefix, PM answer 3) |
+| `counts.folders_unnamed` | `compare.json` | — | — | driver test (= 1) | artifact-bound, under `embed_dev_compare.v0` (PM answer 5) |
+| report I/O refusal text `cannot write <basename> (<type>)`; `refused: <OSError type>` | `reference._write`, both CLI commands | — | — | — | `test_a_report_io_error_is_refused_without_its_path`, `test_compare_prints_a_report_io_error_without_the_path`, `test_a_report_io_error_is_refused_with_the_file_name_and_type_only`; protocol-bound (diagnostic shape) |
+| `unit_vector` / `unit_rows` max-abs scaling | `cosine`, `measure` | — | — | — | subnormal tests and two properties; protocol-bound (representation) |
+| test-only seams: `FakeClock`, `CountingStop`, `HeldDeadline`, wrapped `_State.admit`, `running_server(stop=, clock=, announce=)` | C3, C4 tests | — | — | — | test-only, labelled |
+| no new profile key, default or threshold | — | — | — | — | — |
+
+### Completion report (P3 fix round 1)
+
+- **Behaviour (per finding):**
+  - **F1:** `dev_compare.measure` scores one query at a time. `_Rows` is a lazy `images @ q` row, `_Relevant` builds the relevant images per name from a folder → indices map, and `_Ranker` uses `np.lexsort` with an ID rank, which keeps the tie definition. Running totals replace the result rows (recall terms kept for an exact `fsum`). K1 vectors are read from Arrow as one float32 array (`_vectors`).
+  - **F2:** `dev_compare.check_out_dir` runs before the store is opened or any request is sent. The shared `reference.check_output_dir` (also used by `reference-check`) refuses `knowledge.root`, `storage.kb_store`, `.secrets`, `.git`, `models` and `.venv*`, resolved after links.
+  - **F3:** `reference.unit_vector` and `unit_rows` scale by the largest magnitude before taking the length.
+  - **F4:** `_write` maps `OSError` to `cannot write <basename> (<type>)`, and both commands print a raw `OSError` as its type only. Store errors are unchanged (PM answer 4).
+  - **F5:** step 10 and the P3 Completion report were reworded.
+  - **F6:** `counts.folders_unnamed` added.
+  - **F7:** `validate_embedder_reads` checks the `server` container only in place (sentinel and schema shape), so the ten unread leaves are outside every caller's read set.
+  - **C3, C4:** redesigned as planned; `server.py` is unchanged.
+- **Research evidence:**
+  - **Experiment:** NumPy buffers are traced by `tracemalloc`, from a probe with NumPy 2.5.5: `matmul 600x600 traced current 2880160 peak 2880720 buffer 2880000`; `row traced peak 5408 buffer 4800`. I chose the probe over reading the installed source because the main tree is frozen.
+  - **Source-verified:** K1 consumes the six `server` identity settings (`families.py:77-81`). `serve` reads `clock` only for `_State.last_activity` / `idle_for` (`server.py:215-265, 726`). `Handler.setup` looks up `_DeadlineReader` as a module global at call time (`server.py:306`).
+- **Class-sweep tables (a) to (e):** in `#### (a)` to `#### (e)` of the Step 0 above, unchanged by implementation, with two deviations:
+  - (a) the recall terms are one float per query (O(N)), not O(1);
+  - (d) the `reference-check` command also prints a raw `OSError` as its type only (same class).
+- **Commands and results.** Environment: `.venv` python, `PYTHONNOUSERSITE=1`, `PYTHONDONTWRITEBYTECODE=1`, `PYTHONPATH=<worktree>/src`, through `tools/agent-workflow/test_slot.py`, one process, `--basetemp=.tmp/T-018/bt` deleted after each run.
+  - **Focused set:** `pytest -q tests/test_embed_server_*.py tests/test_k1_*.py tests/test_k0_config.py tests/test_candidates_config.py tests/test_field_contracts.py tests/test_real_contracts.py tests/test_storage_anchored_writes.py tests/test_property_settings.py` → **`1 failed, 2213 passed, 40 skipped, 1 warning in 1938.96s (0:32:18)`** (`.tmp/T-018/fr1-focused.log`).
+    - The failure is `test_embed_server_http.py::test_the_server_exits_when_idle_and_not_while_a_request_runs` (`assert 'reason' not in {'reason': 'idle'}`). That is the review's C1, the pre-existing idle-admission race, which is not in this brief (C3 and C4 only); the warning is its late client thread.
+    - All new and redesigned tests passed in this run, C3 and C4 included.
+  - **After the memory-test warm-up edit (see mutants):** `tests/test_embed_server_dev_compare.py` → `71 passed in 105.81s`.
+  - **Earlier iterations:**
+    - `test_embed_server_dev_compare.py` + `test_embed_server_reference.py` on the runtime change → `189 passed`.
+    - The four C3/C4 tests → `5 passed, 35 deselected`.
+    - The cosine property first found a defect in my test, not in the code: a component that underflowed to zero was counted as exact. Fixed with a round-trip check.
+  - `ruff check` and `ruff format --check` on the 9 changed Python files: each printed `D:\Project_github\prompt-enhancer-pipeline\.venv\Scripts\python.exe: No module named ruff` (rc=1), so **not_run**.
+  - `git diff --check`: rc=0, with LF/CRLF notices only.
+- **Mutants** (scratch copy of the one changed file, loaded through an import-hook plugin; `.tmp/T-018/fr1-mutants.log`, `fr1-test-mutants.log`):
+  - Killed: M1 tie rank reversed; M2 self not excluded; M3 full pairwise matrix restored; M4 `folders_unnamed` counts every folder; M5 `unit_vector` unscaled; M5b `unit_rows` unscaled; M6 `OSError` dropped from `_write`; M7 knowledge-root rule removed; M8 `server` sentinel-checked recursively again; M9 `server.dtype` dropped from the identity reads; M10b C4 expiry control removed (`TimeoutError: timed out`); M11 `.venv` prefix rule removed.
+  - **M10 (C4 admission barrier removed) survived**, as predicted in Step 0. Without load, the probe still arrives after admission; the barrier only matters under load.
+  - Method notes:
+    - The first M10/M10b runs reported "1 error": pytest refuses a test module loaded from another path. I discarded them and re-ran from a scratch path with `tests/conftest.py` loaded as a plugin; the control passed there.
+    - Control M3 first failed: run alone, NumPy's first import fell inside the traced window. I fixed the test with a warm-up `measure` call; after that, control M3 passed and M3 was killed.
+- **Fail-before evidence:** the new tests were written after the runtime edits. The kills of M3, M4, M5, M5b, M6, M7, M8 and M11 show each test fails when its fix is reverted. The F4 CLI line and the F2 store and link cases were not mutated separately.
+- **not_run:** the full suite (the PM's); ruff (not installed); a separate mutant for the CLI `OSError` type-only branch; Linux symlink variants (this machine runs the Windows junction path; the symlink branch skips when unavailable).
+- **Configuration:** Configuration impact and Configuration audit (P3 fix round 1) above; no profile key, default or threshold added.
+- **Changed files (this round, unstaged on top of the staged P3):**
+  - `src/prompt_enhancer/config.py`: `_PARTLY_READ_CONTAINERS` and `validate_embedder_reads` only; the T-013 P2 hunks are not touched.
+  - `src/prompt_enhancer/embed_server/{dev_compare.py,reference.py,__main__.py}`.
+  - `docs/stages/K1-embed.md`.
+  - `tests/{test_embed_server_dev_compare.py,test_embed_server_reference.py,test_embed_server_http.py,embed_server_fixtures.py}` and the new `tests/test_embed_server_read_set.py`.
+  - This task file.
+- **Cleanup:** scratch `mut/` and the probe deleted; basetemps deleted; kept the cited logs `.tmp/T-018/fr1-{focused,mutants,test-mutants}.log`. No process left running. No Git write.
+- **Environment note:** the only use of the main tree was the shared `.venv` interpreter the footer requires (the worktree has no `.venv`), run with its site-packages; no main-tree file was read or written otherwise.
+
+#### Noticed, not done (P3 fix round 1)
+
+- `embedding.candidates[].note` is not read by K1 but is sentinel-checked through the `embedding.candidates` container (since T-008 F2); PM answer 2: unchanged.
+- C1 (`test_the_server_exits_when_idle_and_not_while_a_request_runs`) and C2 (the stop-summary test) are still timing-dependent; C1 failed again in this run.
+- `k5_index.py:202` and `k2_observe.py:57` take a length as `sqrt(sum of squares)` without max-abs scaling (outside `embed_server/` and `k1_embed.py`, so outside sweep (c)); not checked for subnormal or huge stored vectors.
+- `store._FORBIDDEN` and `config._configured_path` protect `.venv` by exact name, not `.venv*` by prefix as the new `--out` rule does.
+
+## P3 fix round 2
+
+Source: `.tmp/T-018/review-p3-retest1.md` (RT1-F1, carried C1). R-015, R-017, R-018. Small: yes (test-only; the server is not changed).
+
+### Step 0
+
+- **Unknowns:** none blocking. Read: `server.py` (`_State.admit/release/idle_for`, the idle loop in `serve`, `_DeadlineReader`), `tests/test_embed_server_http.py`, `tests/embed_server_fixtures.py::running_server`, the retest report. `release()` sets `last_activity = clock()` and `idle_for()` is 0 while `in_flight` (source-verified, `server.py:230-265`).
+- **Questions (proposed answers):** (1) Admission and release seams: wrap `_State.admit` and `release` (the labelled seam C4 already uses). (2) The header-deadline lower bound (`0.5 <= elapsed`, measured after `sendall`, later than the connection's deadline origin: the RT1-F1 pattern) moves to C4's held-deadline seam. (3) Other `tests/test_embed_server_*.py` files are swept and listed; only a margin fix is made where a bound measures from a later observation.
+- **Plan:** replace the real-clock C1 test by an injected-clock plus held-gate test; make `idle_exit_s: 0` clock-based; drop C3's lower bound; rebuild the header-deadline test on the held-deadline seam; sweep; 4-6 mutants on a scratch copy; run the HTTP file 5 times. **Done check:** every changed test fails on its mutant; HTTP file 5 of 5 green.
+
+### Changes (test-only; `server.py` untouched)
+
+- C1: `test_the_server_exits_when_idle_and_not_while_a_request_runs` (real clock, sleep 1.6 s, thread start assumed admitted) replaced by `test_idle_exit_waits_for_admitted_work_and_counts_from_its_release_on_an_injected_clock` (`tests/test_embed_server_http.py:322`): labelled wrappers of `_State.admit` and `_State.release` report the real admission and release, the `Gate` engine holds the request inside the engine, the fake clock advances 5 s (5 x `idle_exit_s`) with 3 whole polls and no exit; after release the clock is not moved (3 polls, no exit: idle counts from the release), +0.5 (no exit), +0.5 (exit `idle`). Errors of the client thread are captured; gate release and join are in `finally`.
+- C2 sibling `test_idle_exit_zero_never_exits` (`:380`): 1.5 s sleep replaced by a fake clock advanced 10^6 s with 3 polls.
+- C3 integration (`:392`, renamed `test_idle_exit_comes_by_itself`): no lower bound and no ready observation; only eventual exit (up to 30 s), engine closed, port free. The exact rules stay in the injected-clock tests (`:303`, `:322`).
+- Same pattern found by the sweep: `test_a_connection_that_never_finishes_its_headers_is_closed_when_its_deadline_passes` (was `0.5 <= elapsed`, measured from after `sendall`, later than the connection's deadline origin). Now built on the C4 seam, extracted as `hold_deadlines(monkeypatch)` (`:523`, also used by C4 unchanged in behaviour): still open after 0.5 s with no deadline, closed without a reply once the test sets `_deadline`.
+- `test_many_slow_connections_never_exceed_the_cap` (lifecycle): `read_timeout_s` 2 to 4 (and wait 10 to 15), so the 0.5 s look at four held connections has 3.5 s of margin instead of 1.5 s.
+
+### Class sweep (real-clock bounds, sleep ordering, thread started = admitted)
+
+| Where | What | Disposition |
+|---|---|---|
+| http `:240,247,430`, `_until`, `:655` | poll loops with a 10 s eventual deadline (readiness, loading, ready line, parse count) | left: eventual, no exact bound |
+| http `test_requests_serialise_on_one_gpu_lock` | `delay=0.2` engine, asserts peak 1 and 4 x 200 | left: no timing assertion |
+| http `test_the_admission_bound_is_what_the_profile_says`, `..._refused_before_they_are_decoded` | admission shown by `gate.entered` / parse counter, not thread start | left: already an admission observation |
+| http `:511,566,583,609` | upper bounds (3.5 s, 1 + 2.5 s) of a 1 s deadline | left: upper bounds with 2.5 s of slack; a late reply fails only after a 2.5 s stall |
+| http C4 `test_a_stalled_upload_holds_its_slot...` | admission barrier + held deadline | left: retest verified, only refactored onto `hold_deadlines` |
+| lifecycle `wait_for` helpers, `:33-37`, `:670-677`, `:870-878` | eventual polls | left |
+| lifecycle `:148,:226,:262,:879` sleeps | sleeps before a negative assertion or an ordering that either outcome satisfies (0.3 s queue wait: both a lock refusal and an admission refusal give 503 `stopping`; 0.1 s: the held connection) | left: a delay weakens the check, never fails a correct server |
+| lifecycle `:148-150` held connections vs 2 s deadline | margin 1.5 s | widened (above) |
+| lifecycle `stop_bound` assertions (`:194-197,292-295,705-708,734-737,794-797,820-822,962-964`, subprocess `stop_to_return`, `failure_to_return`) | the documented upper bound `5 W + 1 s` of the stop is the property tested | left: upper bound on the real clock by design; only a 1 s stall beyond the 5-window worst case fails (no stop here reaches it) |
+| lifecycle `:760,985,995` | `< 1.0`, `< 0.4`, `< 0.2 + 1` for calls that must not wait for a console | left: the contrast is a blocked call (unbounded) against a few ms; `:985` margin 0.4 s is the tightest, no failure seen |
+| lifecycle `:106-123` cap tests | 25 refusals inside the 3 s deadline of the held connections | left: milliseconds of work against 3 s |
+| other `tests/test_embed_server_*.py` | `grep time.sleep/monotonic/perf_counter` finds no other file | none |
+
+### Mutants (scratch copy of `src/prompt_enhancer`, `.tmp/T-018/fr2/mutants.py`, log `fr2/mutants.log`; tracked files untouched)
+
+Control `5 passed, 34 deselected`. All 6 killed: M1 `idle_for` ignores admitted work (C1 test); M2 `release` does not restart the idle clock (C1 test); M3 `idle_exit_s: 0` treated as a limit (zero test); M4 idle exit never fires (`test_idle_exit_comes_by_itself` alone); M5 a quiet connection closed at the first receive slice (header test); M6 read deadline never fires (header test). A first M6 (the `remaining <= 0` raise removed) survived and was shown equivalent (a negative socket timeout also closes the connection); replaced by the one above.
+
+### Stability and commands
+
+`tests/test_embed_server_http.py` alone through `test_slot.py`, one process, `-X faulthandler`, `--basetemp=.tmp/T-018/fr2-bt` deleted after each run:
+- first 5 in a row (`fr2/http5.log`): `39 passed` four times; **run 5: `1 failed, 38 passed in 105.54s`, `test_oversized_and_unframed_bodies`** (a test I did not change; my `tail -3` cut the assertion text, so the cause is not known).
+- reproduction attempts: that test alone 12 of 12 passed; a second pass of 5 full-file runs (`fr2/http5b.log`) 39 passed 5 of 5, no failure.
+- Total 9 of 10 full runs green. The one failure is unexplained; I suspect the Windows reply-after-unread-body family (R4) on its 413/411 raw exchanges, an assumption, not evidence. Not fixed (out of this brief's scope: a possible server or test defect, reported).
+- Lifecycle edit checked alone: `test_many_slow_connections_never_exceed_the_cap` `1 passed in 6.57s`. Not run: the rest of the lifecycle file and the other `tests/test_embed_server_*.py` files, ruff (not installed).
+
+### Configuration audit (round 2)
+
+Test-only change: no runtime value, profile key, schema or default changed. Rows: `idle_exit_s` and admission limits keep their override and refusal tests unchanged (`tests/test_embed_server_config.py` not touched). Test seams (`FakeClock`, `CountingStop`, wrapped `_State.admit/release`, `hold_deadlines`, `Gate`, `_until`): test-only, labelled. Literals: fake-clock steps 0.5/5.0/10^6 s and the 0.5 s open-check are test-only. Property tests: not applicable beyond keeping the existing ones green.
+
+### PM decision pending user review
+
+- C3's rule "no exit before `idle_exit_s`" is covered only by the injected-clock tests; the real-clock test checks eventual exit alone.
+
+### Completion report (P3 fix round 2)
+
+- Behaviour: timing rules proven on an injected clock with a held gate; the real-clock integration checks are broad. No runtime change.
+- Commands: see Stability; mutants 6/6 killed.
+- not_run: lifecycle file rerun, other embed-server files, ruff, Linux/CI.
+- Changed files: `tests/test_embed_server_http.py`, `tests/test_embed_server_lifecycle.py`, this task file.
+- Open issues: the unexplained single failure of `test_oversized_and_unframed_bodies` (run 5 of the first loop).
+- Cleanup: deleted `c4_control.py`, `c4_mutant.py`, `test_retest1_probes.py` and my scratch; kept `.tmp/T-018/fr2/{mutants.py,mutants.log,http5.log,http5b.log}`. `.tmp/T-018/retest1-bt` could not be removed (Permission denied): PM cleanup.

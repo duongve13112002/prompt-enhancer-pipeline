@@ -14,8 +14,9 @@ import yaml
 
 from prompt_enhancer import load_config
 from prompt_enhancer.embed_server.models import EmbedResult, ServerStartError
+from prompt_enhancer.embed_server import server as server_module
 from prompt_enhancer.embed_server.protocol import EngineError
-from prompt_enhancer.embed_server.server import IDLE_POLL_S, serve
+from prompt_enhancer.embed_server.server import serve
 from prompt_enhancer.embed_server.settings import server_settings
 from prompt_enhancer.k1_embed import Embedder, EmbeddingError, embedder_settings
 from embed_server_fixtures import DIMENSION, EngineDouble, free_port, running_server, server_profile
@@ -265,44 +266,137 @@ def test_stop_closes_the_port_and_the_engine(project_root, model_test_profile):
     assert result['reason'] == 'stop' and engine.closed and port_is_free(settings)
 
 
-def test_the_server_exits_when_idle_and_not_while_a_request_runs(project_root, model_test_profile):
+class FakeClock:
+    """Labelled test double of `serve`'s activity clock: time moves only when the test advances it."""
+
+    def __init__(self):
+        self._now, self._lock = 1000.0, threading.Lock()
+
+    def __call__(self):
+        with self._lock:
+            return self._now
+
+    def advance(self, seconds):
+        with self._lock:
+            self._now += seconds
+
+
+class CountingStop(threading.Event):
+    """Labelled test double of the stop event: counts the idle loop's polls (`wait` calls)."""
+
+    def __init__(self):
+        super().__init__()
+        self.polls = 0
+
+    def wait(self, timeout=None):
+        self.polls += 1
+        return super().wait(timeout)
+
+
+def _until(condition, seconds=10):
+    deadline = time.monotonic() + seconds
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return condition()
+
+
+def test_idle_exit_comes_at_the_first_poll_after_idle_exit_s_on_an_injected_clock(project_root, model_test_profile):
+    """docs/stages/K1-embed.md: the idle exit comes at most IDLE_POLL_S after idle_exit_s. Checked in polls on a fake
+    clock (C3, P3 fix round 1): no exit while the idle time is below the limit, exit at the next poll once it is
+    reached; no wall-clock bound, so machine load cannot fail it."""
     settings, _ = make_settings(project_root, model_test_profile, idle_exit_s=1)
-    started = time.monotonic()
-    with running_server(settings, EngineDouble(delay=2.0)) as (base, engine, stop, result):
-        busy = threading.Thread(target=lambda: result.update(status=post(base, settings, request(['a'])).status_code))
-        busy.start()
-        time.sleep(1.6)  # longer than idle_exit_s, shorter than the request
+    clock, stop, ready = FakeClock(), CountingStop(), threading.Event()
+    with running_server(settings, stop=stop, clock=clock, announce=lambda _: ready.set()) as (base, _, _, result):
+        assert ready.wait(10)
+        clock.advance(0.5)  # binary-exact steps: 0.5 + 0.5 is exactly idle_exit_s
+        seen = stop.polls
+        assert _until(lambda: stop.polls >= seen + 2)  # two full polls below the limit
         assert 'reason' not in result
-        busy.join(10)
-        assert result['status'] == 200
-        deadline = time.monotonic() + 10
-        while 'reason' not in result and time.monotonic() < deadline:
-            time.sleep(0.1)
-    assert result['reason'] == 'idle' and engine.closed and port_is_free(settings)
-    assert time.monotonic() - started >= 2.9  # the idle clock restarts when the request ends
+        clock.advance(0.5)
+        reached = stop.polls
+        assert _until(lambda: 'reason' in result)
+        assert result['reason'] == 'idle'
+        assert stop.polls <= reached + 1  # the poll in progress, or at most the one that had just begun
+
+
+def test_idle_exit_waits_for_admitted_work_and_counts_from_its_release_on_an_injected_clock(
+        project_root, model_test_profile, monkeypatch):
+    """C1 (P3 fix round 2), proved without a wall-clock bound. A held engine gate keeps one request admitted; the fake
+    clock then runs far past `idle_exit_s`: no exit while the work is held. After the release the idle time counts from
+    the release (the held seconds are not counted): no exit below `idle_exit_s`, exit once it is reached. Labelled
+    seams: `_State.admit` and `_State.release` are wrapped to report the real admission and release (a started client
+    thread is not an admitted request), the clock, the stop event and the engine gate are doubles; the server logic
+    is the production code."""
+    admitted, released = threading.Event(), threading.Event()
+    real_admit, real_release = server_module._State.admit, server_module._State.release
+
+    def admit(state):
+        taken = real_admit(state)
+        if taken:
+            admitted.set()
+        return taken
+
+    def release(state):
+        real_release(state)
+        released.set()
+
+    monkeypatch.setattr(server_module._State, 'admit', admit)
+    monkeypatch.setattr(server_module._State, 'release', release)
+    settings, _ = make_settings(project_root, model_test_profile, idle_exit_s=1)
+    clock, stop, ready, gate, outcome = FakeClock(), CountingStop(), threading.Event(), Gate(), {}
+
+    def ask(base):
+        try:
+            outcome['status'] = post(base, settings, request(['a'])).status_code
+        except Exception as error:  # reported by the assertions below, never lost in the thread
+            outcome['error'] = repr(error)
+
+    def polls_without_exit(result, count=3):
+        seen = stop.polls
+        assert _until(lambda: stop.polls >= seen + count)  # whole polls happened, and none ended the server
+        assert 'reason' not in result
+
+    with running_server(settings, gate, stop=stop, clock=clock, announce=lambda _: ready.set()) as (base, _, _, result):
+        assert ready.wait(10)
+        client = threading.Thread(target=ask, args=(base,))
+        client.start()
+        try:
+            assert admitted.wait(10) and gate.entered.wait(10)  # admitted, and inside the engine
+            clock.advance(5.0)  # five times idle_exit_s while the request is held
+            polls_without_exit(result)
+        finally:
+            gate.release.set()
+            client.join(15)
+        assert outcome == {'status': 200}, outcome
+        assert released.wait(10)
+        polls_without_exit(result)  # the clock has not moved since the release: idle time is zero, not five seconds
+        clock.advance(0.5)
+        polls_without_exit(result)  # half of idle_exit_s
+        clock.advance(0.5)  # binary-exact: idle_exit_s reached
+        assert _until(lambda: 'reason' in result)
+        assert result['reason'] == 'idle'
 
 
 def test_idle_exit_zero_never_exits(project_root, model_test_profile):
+    """`idle_exit_s: 0` means never: a clock a million seconds on, many polls, the server still answers."""
     settings, _ = make_settings(project_root, model_test_profile, idle_exit_s=0)
-    with running_server(settings) as (base, engine, stop, result):
-        time.sleep(1.5)
+    clock, stop, ready = FakeClock(), CountingStop(), threading.Event()
+    with running_server(settings, stop=stop, clock=clock, announce=lambda _: ready.set()) as (base, engine, _, result):
+        assert ready.wait(10)
+        clock.advance(1e6)
+        seen = stop.polls
+        assert _until(lambda: stop.polls >= seen + 3)
         assert 'reason' not in result and httpx.get(base + settings.health_path).status_code == 200
 
 
-def test_idle_exit_comes_within_the_documented_poll_period(project_root, model_test_profile):
-    # docs/stages/K1-embed.md: the idle exit comes at most IDLE_POLL_S after idle_exit_s (plus scheduling slack).
+def test_idle_exit_comes_by_itself(project_root, model_test_profile):
+    """Real-clock integration check, deliberately broad: the idle exit happens eventually and releases the engine and
+    the port. The exact rules (no early exit, exit at the next poll, held work) are the injected-clock tests above;
+    no lower bound is measured here because no observation of the test is the server's activity-clock origin (RT1-F1)."""
     settings, _ = make_settings(project_root, model_test_profile, idle_exit_s=1)
-    # The idle clock starts when the load returns, before the readiness probe of `running_server` ends; measuring
-    # from here keeps the lower bound true. (Measured after the probe, it held only while the stop itself was slow:
-    # the stdlib accept loop polled every 0.5 s until fix round 4.)
-    began = time.monotonic()
-    with running_server(settings) as (base, engine, stop, result):
-        deadline = began + 10
-        while 'reason' not in result and time.monotonic() < deadline:
-            time.sleep(0.02)
-        waited = time.monotonic() - began
-    assert result['reason'] == 'idle'
-    assert 1 - 0.1 <= waited <= 1 + IDLE_POLL_S + 0.5
+    with running_server(settings) as (base, engine, _, result):
+        assert _until(lambda: 'reason' in result, seconds=30)
+    assert result['reason'] == 'idle' and engine.closed and port_is_free(settings)
 
 
 def test_a_failed_load_propagates_and_frees_the_port(project_root, model_test_profile):
@@ -417,31 +511,79 @@ def test_a_reply_does_not_wait_for_a_body_that_never_comes(project_root, model_t
         assert time.monotonic() - started < 3.5
 
 
-def test_a_stalled_upload_gets_408_and_frees_its_slot(project_root, model_test_profile):
+def _reply(sock):
+    reply = b''
+    while True:
+        block = sock.recv(4096)
+        if not block:
+            return reply
+        reply += block
+
+
+def hold_deadlines(monkeypatch):
+    """Labelled seam: every connection's `server._DeadlineReader` starts with no deadline and is recorded (the returned
+    list); its production `readinto` runs unchanged, and a test lets a deadline pass by setting `_deadline` itself."""
+    readers = []
+
+    class HeldDeadline(server_module._DeadlineReader):
+        def __init__(self, sock, deadline, cut):
+            super().__init__(sock, float('inf'), cut)
+            readers.append(self)
+
+    monkeypatch.setattr(server_module, '_DeadlineReader', HeldDeadline)
+    return readers
+
+
+def test_a_stalled_upload_holds_its_slot_until_its_deadline_then_gets_408(project_root, model_test_profile,
+                                                                          monkeypatch):
+    """C4 (P3 fix round 1): an admission barrier and a test-controlled expiry, so the overload probe cannot race the
+    read deadline. Labelled seams: `_State.admit` is wrapped to report the first admission, and the server's
+    `_DeadlineReader` starts with no deadline and records itself; its production `readinto` runs unchanged."""
+    admitted = threading.Event()
+    real_admit = server_module._State.admit
+
+    def admit(state):
+        taken = real_admit(state)
+        if taken:
+            admitted.set()
+        return taken
+
+    monkeypatch.setattr(server_module._State, 'admit', admit)
+    readers = hold_deadlines(monkeypatch)
     settings, _ = make_settings(project_root, model_test_profile, read_timeout_s=1, max_pending_requests=1)
     with running_server(settings) as (base, engine, _, _):
+        readers.clear()  # the readiness probes' readers; the next connection is the stalled upload
         stalled = socket.create_connection((settings.host, settings.port), timeout=10)
         try:
             stalled.sendall(post_head(settings, 1000) + b'0123456789')  # 10 of 1000 bytes, then silence
-            seen = None
-            for _ in range(40):  # the slot is taken as soon as the headers are read
-                seen = post(base, settings, request(['a']))
-                if seen.status_code == 503:
-                    break
-                time.sleep(0.05)
+            assert admitted.wait(10)  # the slot is taken, and with no deadline it cannot expire meanwhile
+            seen = post(base, settings, request(['a']))
             assert seen.status_code == 503 and seen.json()['error']['code'] == 'overloaded'
+            readers[0]._deadline = time.monotonic()  # the stalled upload's deadline passes now
             started = time.monotonic()
-            reply = b''
-            while True:
-                block = stalled.recv(4096)
-                if not block:
-                    break
-                reply += block
+            reply = _reply(stalled)
             assert b' 408 ' in reply.split(b'\r\n')[0] and b'request_timeout' in reply
             assert time.monotonic() - started < 3.5
         finally:
             stalled.close()
         assert post(base, settings, request(['a'])).status_code == 200  # the slot came back
+
+
+def test_a_stalled_upload_gets_408_at_the_real_read_deadline(project_root, model_test_profile):
+    """The production deadline itself, with no overload probe to race: a stalled upload alone gets 408 within
+    `read_timeout_s` plus slack."""
+    settings, _ = make_settings(project_root, model_test_profile, read_timeout_s=1, max_pending_requests=1)
+    with running_server(settings) as (base, engine, _, _):
+        stalled = socket.create_connection((settings.host, settings.port), timeout=10)
+        try:
+            started = time.monotonic()
+            stalled.sendall(post_head(settings, 1000) + b'0123456789')
+            reply = _reply(stalled)
+            assert b' 408 ' in reply.split(b'\r\n')[0] and b'request_timeout' in reply
+            assert time.monotonic() - started < 1 + 2.5
+        finally:
+            stalled.close()
+        assert post(base, settings, request(['a'])).status_code == 200
         assert len(engine.calls) == 1
 
 
@@ -468,21 +610,28 @@ def test_a_trickling_upload_cannot_outlast_the_total_deadline(project_root, mode
         assert engine.calls == []
 
 
-def test_a_connection_that_never_finishes_its_headers_is_closed_at_the_deadline(project_root, model_test_profile):
+def test_a_connection_that_never_finishes_its_headers_is_closed_when_its_deadline_passes(
+        project_root, model_test_profile, monkeypatch):
+    """Not closed before its deadline, closed without a reply once it passes. The deadline is the held-deadline seam's,
+    so no wall-clock lower bound is measured from an observation later than the connection's own deadline origin."""
+    readers = hold_deadlines(monkeypatch)
     settings, _ = make_settings(project_root, model_test_profile, read_timeout_s=1)
     with running_server(settings) as (base, engine, _, _):
+        readers.clear()  # the readiness probes' readers
         with socket.create_connection((settings.host, settings.port), timeout=10) as raw:
             raw.sendall(b'POST /v1/emb')
-            started = time.monotonic()
+            assert _until(lambda: readers)  # the connection's handler is reading, with no deadline
+            raw.settimeout(0.5)
+            with pytest.raises(TimeoutError):
+                raw.recv(4096)  # still open: its deadline has not passed
+            readers[0]._deadline = time.monotonic()  # it passes now
+            raw.settimeout(10)
             assert raw.recv(4096) == b''  # closed without a reply: there was no complete request
-            assert 0.5 <= time.monotonic() - started < 3.5
         assert httpx.get(base + settings.health_path).status_code == 200
 
 
 def test_requests_beyond_the_admission_bound_are_refused_before_they_are_decoded(project_root, model_test_profile,
                                                                                 monkeypatch):
-    from prompt_enhancer.embed_server import server as server_module
-
     settings, _ = make_settings(project_root, model_test_profile, max_pending_requests=2)
     parsed, original = [], server_module.parse_request
 

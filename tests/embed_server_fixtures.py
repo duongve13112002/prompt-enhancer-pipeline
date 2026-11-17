@@ -76,14 +76,18 @@ class EngineFault(EngineError):
 
 
 @contextmanager
-def running_server(settings, engine=None, load=None):
-    """Run `serve` in a thread against the engine double; yield (base_url, engine, stop, result)."""
+def running_server(settings, engine=None, load=None, *, stop=None, clock=None, announce=None):
+    """Run `serve` in a thread against the engine double; yield (base_url, engine, stop, result). `stop`, `clock`
+    and `announce` reach `serve` unchanged when given (labelled test seams: a counting stop event, a fake clock, a
+    recorder of the ready line)."""
     engine = engine or EngineDouble()
-    stop, result = threading.Event(), {}
+    stop, result = stop or threading.Event(), {}
+    options = {} if clock is None else {'clock': clock}
 
     def run():
         try:
-            result['reason'] = serve(settings, load or (lambda _: engine), stop=stop, announce=lambda _: None)
+            result['reason'] = serve(settings, load or (lambda _: engine), stop=stop,
+                                     announce=announce or (lambda _: None), **options)
         except BaseException as error:  # reported to the test, never swallowed
             result['error'] = error
 

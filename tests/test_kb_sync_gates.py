@@ -137,6 +137,13 @@ def test_each_sync_read_leaf_refused_before_k0(k2_env, monkeypatch, failure):
             original = original[part]
         invalid_type = [] if isinstance(original, dict) else {'invalid': True}
         set_leaf(changed, key, invalid_type if failure == 'wrong_type' else 'deploy_required', remove=failure == 'missing')
+        if key == 'embedding.query_text_template' and failure == 'sentinel':
+            # S1 owns the query template (T-013 P2): kb sync never reads it, so its sentinel is accepted,
+            # while a missing or mistyped value still fails the whole-file schema check.
+            validate_sync_config(changed, project_root=k2_env.root)
+            path.write_text(yaml.safe_dump(changed), encoding='utf-8')
+            load_config(path, 'kb sync', project_root=k2_env.root)
+            continue
         with pytest.raises(ConfigurationError, match='.'):
             try:
                 sync_config(changed, project_root=k2_env.root)

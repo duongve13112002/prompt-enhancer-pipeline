@@ -8,6 +8,7 @@ import json
 import math
 from copy import deepcopy
 from functools import partial
+from pathlib import Path
 
 import httpx
 from hypothesis import HealthCheck, given, settings, strategies as st
@@ -114,7 +115,8 @@ def test_the_norm_fit_is_the_largest_deviation_of_any_run_rounded_up():
     fit = ref.fit_max_norm_deviation(runs)
     assert fit['raw_max_norm_deviation'] == pytest.approx(0.00154404) and fit['max_norm_deviation'] == 0.0016
     assert ref.fit_max_norm_deviation({'a': [[1.0, 0.0]]})['max_norm_deviation'] == 0.0
-    for bad in ({}, {'a': []}, {'a': [[1e200, 1e200]]}):
+    # a true length overflow (P3: 1e200 values now have a finite length, measured without squaring)
+    for bad in ({}, {'a': []}, {'a': [[1.5e308, 1.5e308]]}):
         with pytest.raises(ref.ReferenceCheckError):
             ref.fit_max_norm_deviation(bad)
 
@@ -461,16 +463,18 @@ def test_compare_refuses_an_unresolved_tolerance_before_contacting_the_server(pr
         assert done == cli.REFUSED and captured.err.startswith('refused: ') and 'fit_from_bench' in captured.err
 
 
-def _compare_with(project_root, profile, monkeypatch, handler=None, engine=None, port=None):
+def _compare_with(project_root, profile, monkeypatch, handler=None, engine=None, port=None, baseline=None):
     """`compare` against a real loopback server holding `engine`, through a labelled httpx.MockTransport double
-    `handler` (K1's own transport hook), or against `port` where nothing listens; returns the exit status."""
+    `handler` (K1's own transport hook), or against `port` where nothing listens; returns the exit status. The
+    reference holds `baseline[0]` for every input (default a unit vector)."""
     changed = with_check(profile, CHECK)
     if port is not None:
         changed['vlm']['backends']['embedder']['base_urls'] = [f'http://127.0.0.1:{port}']
     path, config, settings, k1_settings = _loaded(project_root, changed, 'rc-e1.yaml')
     images, texts, inputs = _inputs(project_root, k1_settings)
+    vector = [0.5, 0.5, 0.5, 0.5] if baseline is None else baseline[0]
     reference_path = project_root / 'rc-ref-e1.json'
-    reference_path.write_text(json.dumps(_reference(settings, inputs, [[0.5, 0.5, 0.5, 0.5] for _ in inputs])),
+    reference_path.write_text(json.dumps(_reference(settings, inputs, [list(vector) for _ in inputs])),
                               encoding='utf-8')
     args = _compare_args(path, project_root, reference_path, project_root / 'runs' / 'rc-e1', images, texts)
     if handler is not None:
@@ -604,6 +608,271 @@ def test_the_recipe_records_image_limits_held_in_a_non_dict_size_type():
     recipe = ref._recipe(model)
     assert recipe['image_limits'] == {'size': {'longest_edge': 1310720, 'shortest_edge': 4096}}
     json.dumps(recipe)  # the P2 run failed here before the fix: SizeDict is not JSON serialisable
+
+
+# --- P3: zero and huge vectors (RT1-N1, RT1-E2, overflow class) -----------------------------------------------------
+
+def test_a_finite_vector_with_huge_values_has_a_length_and_a_cosine():
+    """`math.fsum` of the squares overflows for values near 1e154; the length is measured without squaring
+    (`math.hypot`), so a finite vector never raises `OverflowError` (P3 class fix)."""
+    huge = [1e154] * 4
+    assert ref.vector_norm(huge) == pytest.approx(2e154)
+    assert ref.cosine(huge, [1.0, 1.0, 1.0, 1.0]) == pytest.approx(1.0)
+    assert ref.cosine(huge, huge) == pytest.approx(1.0)  # the raw dot product (4e308) would overflow
+    assert ref.norm_deviation(huge) == pytest.approx(2e154)
+    assert ref.vector_norm([1.5e308, 1.5e308]) == math.inf  # the true length (2.1e308) overflows: never a pass
+    assert ref.vector_norm([3.0, 4.0]) == 5.0 and ref.vector_norm([0.0, 0.0]) == 0.0
+
+
+def test_the_cosine_of_subnormal_vectors_is_accurate():
+    """F3 (P3 fix round 1): `hypot([5e-324] * 2)` rounds to 5e-324, so dividing by it gave cosine 1.0 against an axis
+    and 2.0 with itself; scaling by the largest magnitude first gives the true values."""
+    tiny = [5e-324, 5e-324]
+    assert ref.cosine(tiny, [1.0, 0.0]) == pytest.approx(0.7071067811865476, abs=1e-15)
+    assert ref.cosine(tiny, tiny) == pytest.approx(1.0, abs=1e-15)
+    assert ref.unit_vector(tiny) == pytest.approx([0.7071067811865476] * 2, abs=1e-15)
+
+
+def _exact_cosine(a, b):
+    """Oracle: the exact dot product (`Fraction`) over the square root of the exact squared lengths (50 digits)."""
+    from decimal import Decimal, localcontext
+    from fractions import Fraction
+
+    dot = sum(Fraction(x) * Fraction(y) for x, y in zip(a, b))
+    squares = sum(Fraction(x) ** 2 for x in a) * sum(Fraction(y) ** 2 for y in b)
+    with localcontext() as context:
+        context.prec = 50
+        return float(Decimal(dot.numerator) / Decimal(dot.denominator)
+                     / (Decimal(squares.numerator) / Decimal(squares.denominator)).sqrt())
+
+
+_unit_floats = st.lists(st.floats(-1, 1, allow_nan=False), min_size=1, max_size=6)
+_NORMAL = 2.2250738585072014e-308  # test-only: the smallest positive normal float64
+
+
+@settings(max_examples=400, deadline=None)
+@given(_unit_floats, _unit_floats, st.integers(-1074, 1023), st.integers(-1074, 1023))
+def test_property_the_cosine_is_accurate_and_scale_invariant(a, b, e, f):
+    """F3 class: any finite vectors, scaled by powers of two down to the subnormal range and up to the largest
+    exponent, give the exact cosine within 1e-12 and never leave [-1, 1] by more than rounding; a scaling that keeps
+    every component normal changes the cosine not at all."""
+    b = (b * 6)[:len(a)]
+    scaled_a, scaled_b = [math.ldexp(x, e) for x in a], [math.ldexp(y, f) for y in b]
+    if not (ref.usable(ref.vector_norm(scaled_a)) and ref.usable(ref.vector_norm(scaled_b))):
+        with pytest.raises(ref.ReferenceCheckError):
+            ref.cosine(scaled_a, scaled_b)
+        return
+    value = ref.cosine(scaled_a, scaled_b)
+    assert abs(value - _exact_cosine(scaled_a, scaled_b)) <= 1e-12 and abs(value) <= 1 + 1e-15
+    exact = all(math.ldexp(x, -e) == y for x, y in zip(scaled_a, a)) and \
+        all(math.ldexp(x, -f) == y for x, y in zip(scaled_b, b))  # no component rounded or flushed to zero
+    normal = all(x == 0 or abs(x) >= _NORMAL for x in scaled_a + scaled_b + a + b)
+    if exact and normal and ref.usable(ref.vector_norm(a)) and ref.usable(ref.vector_norm(b)):
+        assert value == ref.cosine(a, b)  # power-of-two scaling is exact, and so is the unit vector
+
+
+@pytest.mark.parametrize('served', [[0.0, 0.0], [0.0, -0.0]])
+def test_a_zero_served_vector_is_a_failed_item_not_an_error(served):
+    """RT1-N1: the norm is classified before any cosine; a zero vector fails its item (cosine null, norm 0)."""
+    inputs = [ref.Input('text', 'text-0', 'x', None, 't'), ref.Input('text', 'text-1', 'y', None, 'u')]
+    verdict = ref.judge(inputs, [[0.6, 0.8], [0.6, 0.8]], [served, [0.6, 0.8]], 0.5, 0.5, 2)
+    assert [item['verdict'] for item in verdict['items']] == ['fail', 'pass'] and not verdict['passed']
+    assert verdict['items'][0]['cosine'] is None and verdict['items'][0]['norm'] == 0.0
+
+
+def _zero_vectors(request):
+    """Labelled test double of the server: native-dimension zero vectors for every input of the request."""
+    count = len(json.loads(request.content)['input'])
+    return httpx.Response(200, json={'data': [{'index': index, 'embedding': [0.0] * 4} for index in range(count)]})
+
+
+def test_a_zero_served_vector_is_a_mismatch_with_a_written_check(project_root, profile, monkeypatch, capsys):
+    """RT1-N1 end to end: the review's reproduction (unit reference, zero response through K1) exits MISMATCH and
+    writes check.json; before the fix it was `refused: a zero or non-finite vector`, exit 2."""
+    reference = [[1.0, 0.0, 0.0, 0.0]]
+    done = _compare_with(project_root, profile, monkeypatch, handler=_zero_vectors, baseline=reference)
+    captured = capsys.readouterr()
+    assert done == cli.MISMATCH, captured
+    check = json.loads((project_root / 'runs' / 'rc-e1' / 'check.json').read_text(encoding='utf-8'))
+    assert all(item['cosine'] is None and item['norm'] == 0.0 and item['verdict'] == 'fail'
+               for item in check['verdict']['items'])
+    assert json.loads(captured.out)['cosines'] == [None] * 4
+
+
+@pytest.mark.parametrize('vector, message', [([0.0, 0.0, 0.0, 0.0], 'zero or non-finite length'),
+                                             ([-0.0, 0.0, 0.0, 0.0], 'zero or non-finite length'),
+                                             ([1.5e308, 1.5e308, 0.0, 0.0], 'zero or non-finite length')])
+def test_a_reference_vector_without_a_usable_length_is_refused_before_any_request(project_root, profile, monkeypatch,
+                                                                                  capsys, vector, message):
+    """RT1-E2: the artifact check admits only vectors that admit a cosine; the counting transport sees no call."""
+    calls = []
+
+    def counting(request):
+        calls.append(request)
+        return _zero_vectors(request)
+
+    done = _compare_with(project_root, profile, monkeypatch, handler=counting, baseline=[vector])
+    captured = capsys.readouterr()
+    assert done == cli.REFUSED and message in captured.err, captured
+    assert calls == []
+
+
+def test_a_reference_vector_with_huge_finite_values_is_admitted(project_root, reference_case):
+    settings, inputs, reference = reference_case
+    reference['runs'][reference['baseline']] = [[1e154, 0.0, 0.0, 1e154] for _ in inputs]
+    path = project_root / 'rc-huge.json'
+    path.write_text(json.dumps(reference), encoding='utf-8')
+    assert ref.load_reference(path, settings, inputs)['baseline'] == reference['baseline']
+
+
+@settings(max_examples=200, deadline=None)
+@given(st.lists(st.floats(allow_nan=False, allow_infinity=False), min_size=1, max_size=6),
+       st.lists(st.floats(allow_nan=False, allow_infinity=False), min_size=1, max_size=6))
+def test_property_the_verdict_never_raises_for_finite_vectors(expected, got):
+    """Any finite reference and served vector gives a verdict (pass or fail), never an exception; a pass needs a
+    finite, non-zero served length within the bound."""
+    inputs = [ref.Input('text', 'text-0', 'x', None, 't')]
+    try:
+        ref._check_runs({'r': [expected]}, 1)
+    except ref.ReferenceCheckError:
+        assert ref.vector_norm(expected) in (0.0, math.inf)
+        return
+    verdict = ref.judge(inputs, [expected], [got], 0.5, 0.5, len(expected))
+    item = verdict['items'][0]
+    if item['verdict'] == 'pass':
+        assert 0.5 <= item['norm'] <= 1.5 and item['cosine'] >= 0.5
+    if item['norm'] in (0.0, math.inf):
+        assert item['cosine'] is None and item['verdict'] == 'fail'
+
+
+# --- P3: reports are written through the anchored storage layer (PM integration fix of `_write`) -------------------
+
+def _writer_settings(project_root):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(project_root=project_root)
+
+
+def test_a_report_is_written_below_the_root_through_the_anchored_layer(project_root, monkeypatch):
+    from prompt_enhancer.storage import _anchored
+
+    calls = []
+    real = _anchored.atomic_write_bytes
+
+    def spy(root, relative, data, check=None):
+        calls.append((root, relative))
+        return real(root, relative, data, check)
+
+    monkeypatch.setattr(_anchored, 'atomic_write_bytes', spy)
+    out = project_root.resolve() / 'runs' / 'p3-write' / 'check.json'
+    ref._write(_writer_settings(project_root), out, {'b': 1, 'a': [1.5]})
+    assert calls == [(project_root.resolve(), 'runs/p3-write/check.json')]
+    assert json.loads(out.read_text(encoding='utf-8')) == {'a': [1.5], 'b': 1}
+    assert sorted(path.name for path in out.parent.iterdir()) == ['check.json']  # no temporary left
+
+
+def test_a_report_outside_the_root_is_refused_with_a_structural_message(tmp_path_factory):
+    root = tmp_path_factory.mktemp('p3-root').resolve()  # a root of its own, so the sibling lies outside it
+    outside = tmp_path_factory.mktemp('p3-outside').resolve()
+    with pytest.raises(ref.ReferenceCheckError) as raised:
+        ref._write(_writer_settings(root), outside / 'check.json', {'a': 1})
+    assert str(raised.value) == 'cannot write check.json (ValueError)'  # the file name only, never a path
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize('segment', ['nul', 'a.', 'a?b'])
+def test_a_report_path_with_a_segment_the_storage_rule_refuses_is_refused(project_root, segment):
+    with pytest.raises(ref.ReferenceCheckError, match=r'^cannot write check\.json \(StorageError\)$'):
+        ref._write(_writer_settings(project_root), project_root.resolve() / 'runs' / segment / 'check.json', {})
+
+
+def test_a_link_below_the_root_is_refused_and_nothing_is_written_through_it(project_root, tmp_path_factory):
+    import os
+
+    target = tmp_path_factory.mktemp('p3-link-target').resolve()
+    link = project_root.resolve() / 'runs' / 'p3-link'
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == 'nt':
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except OSError as error:
+            pytest.skip(f'synthetic symlink creation unavailable: {error}')
+    try:
+        with pytest.raises(ref.ReferenceCheckError, match=r'^cannot write check\.json \(StorageError\)$'):
+            ref._write(_writer_settings(project_root), link / 'check.json', {'a': 1})
+        assert list(target.iterdir()) == []
+    finally:
+        os.rmdir(link) if os.name == 'nt' else link.unlink()
+
+
+def _failing_write(root, relative, data, check=None):
+    """Labelled I/O fault double of `atomic_write_bytes`: the OS refuses the write, naming the absolute path."""
+    raise PermissionError(13, 'synthetic report I/O error', str(Path(root) / relative))
+
+
+def test_a_report_io_error_is_refused_with_the_file_name_and_type_only(project_root, monkeypatch):
+    """F4 (P3 fix round 1): an `OSError` at the writer is a structural refusal, never its path-bearing text."""
+    from prompt_enhancer.storage import _anchored
+
+    monkeypatch.setattr(_anchored, 'atomic_write_bytes', _failing_write)
+    with pytest.raises(ref.ReferenceCheckError) as raised:
+        ref._write(_writer_settings(project_root), project_root.resolve() / 'runs' / 'p3-io' / 'check.json', {})
+    assert str(raised.value) == 'cannot write check.json (PermissionError)'
+
+
+def _unit_vectors(request):
+    """Labelled test double of the server: unit vectors of the native dimension for every input."""
+    count = len(json.loads(request.content)['input'])
+    return httpx.Response(200, json={'data': [{'index': i, 'embedding': [0.5] * 4} for i in range(count)]})
+
+
+def test_compare_prints_a_report_io_error_without_the_path(project_root, profile, monkeypatch, capsys):
+    from prompt_enhancer.storage import _anchored
+
+    monkeypatch.setattr(_anchored, 'atomic_write_bytes', _failing_write)
+    done = _compare_with(project_root, profile, monkeypatch, handler=_unit_vectors)
+    captured = capsys.readouterr()
+    assert done == cli.REFUSED and captured.err == 'refused: cannot write check.json (PermissionError)\n', captured
+    written = project_root.resolve() / 'runs' / 'rc-e1' / 'check.json'
+    assert str(written) not in captured.err and repr(str(written)) not in captured.err
+
+
+@pytest.mark.parametrize('protected', ['models', '.secrets', '.git', '.venv', '.venv-gpu'])
+def test_reference_check_refuses_an_out_dir_in_a_protected_directory(tmp_path_factory, protected):
+    """F2 class: the report directory, after resolving links, is never below a protected project directory."""
+    import os
+
+    root = tmp_path_factory.mktemp('p3-protected').resolve()  # a synthetic root of its own
+    (root / protected).mkdir()
+    with pytest.raises(ref.ReferenceCheckError, match='protected project directory'):
+        ref.check_output_dir(root, root / protected / 'out')
+    link = root / 'runs' / 'alias'
+    link.parent.mkdir()
+    _directory_link(root / protected, link)
+    try:
+        with pytest.raises(ref.ReferenceCheckError, match='protected project directory'):
+            ref.check_output_dir(root, link / 'out')
+        assert ref.check_output_dir(root, root / 'runs' / 'out') == root / 'runs' / 'out'  # override: allowed
+    finally:
+        os.rmdir(link) if os.name == 'nt' else link.unlink()
+    assert list((root / protected).iterdir()) == []
+
+
+def _directory_link(target, link):
+    """A junction on Windows (no privilege needed), a symlink elsewhere."""
+    import os
+
+    if os.name == 'nt':
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except OSError as error:
+            pytest.skip(f'synthetic symlink creation unavailable: {error}')
 
 
 @pytest.mark.parametrize('family, dtype, expected', [

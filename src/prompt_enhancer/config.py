@@ -46,6 +46,14 @@ REQUEST_COMMANDS = ('enhance once', 'enhance serve', 'eval run')  # protocol-bou
 COMMAND_READS = {
     'embed serve': ('runtime.gpus', 'runtime.vram_budget_gb', 'embedding.backend'),
     'embed reference-check': ('runtime.gpus', 'runtime.vram_budget_gb', 'embedding.backend'),  # + the backend's server.reference_check
+    # DEV-ONLY (T-018 P3, embed_server/dev_compare.py): K0's scan and K1's two parts, exactly what they read; the
+    # embedder backend is checked by validate_embedder_reads. Smoke-only outputs, never thresholds (R-020).
+    'embed dev-compare': ('knowledge.root', 'knowledge.info_file.names', 'knowledge.info_file.encoding',
+                          'knowledge.image_extensions', 'knowledge.concept_separator', 'runtime.cpu_workers',
+                          'sync.mass_deletion_guard.max_removed_fraction', 'sync.resume', 'storage.kb_store', 'storage.lock',
+                          'storage.table_format', 'embedding.candidates', 'embedding.chosen', 'embedding.revision', 'embedding.backend',
+                          'embedding.request', 'embedding.dimension', 'embedding.dimension_mode',
+                          'embedding.batch_size', 'vision'),
     'kb status': ('storage.kb_store', 'storage.lock'),
     'kb sync': ('rag.enabled', 'knowledge', 'sync', 'embedding', 'observe', 'cards', 'aliases', 'index', 'storage.kb_store', 'storage.data_root',
                 'storage.lock', 'storage.table_format', 'runtime.cpu_workers',
@@ -841,6 +849,10 @@ EMBEDDER_BACKEND_READS = ('provider', 'engine', 'engine.name', 'engine.version',
 # embedding-space identity (T-018 fix round 1, R2).
 EMBED_SERVER_IDENTITY_READS = ('server', 'server.family', 'server.dtype', 'server.attn_implementation',
                                'server.max_length', 'server.image', 'server.default_instruction')
+# Containers K1 reads only some children of: checked for a sentinel in place of the container and for the schema's
+# shape, while only the listed leaves are sentinel-checked (the serving limits and `reference_check` are read by
+# `embed serve` / `embed reference-check`, not by K1; T-018 P3 fix round 1, F7).
+_PARTLY_READ_CONTAINERS = ('server',)
 # protocol-bound: request layout -> the engine whose documentation defines it (T-008 Step 0, A1 and A2).
 EMBEDDING_SHAPE_ENGINE = {'openai_input_content': ('llama_cpp', 'embed_server'), 'vllm_chat_messages': ('vllm',)}
 TEXT_PLACEHOLDER = '{text}'  # protocol-bound: the one placeholder of embedding.request.text_template
@@ -942,15 +954,18 @@ def validate_embedder_reads(config, path, sources, project_root=None):
     registers an image/ media type, the type the data URI states.
     """
     keys = embedder_reads(config, path)
+    partial = {f'vlm.backends.{_get(config, "embedding.backend", path)}.{field}' for field in _PARTLY_READ_CONTAINERS}
     for key in keys:
-        _sentinel(_get(config, key, path), path, key, sources)
+        value = _get(config, key, path)
+        _sentinel(None if key in partial and isinstance(value, dict) else value, path, key, sources)
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
     schema = _schema(root, 'enhancer_config.v0')
     for key in keys:
         value = _get(config, key, path)
         node = _schema_at(schema, key)
         _validate(value, node, path, key, sources, _EXACT_INTEGERS)
-        _require_finite(value, path, key, sources)
+        if key not in partial:  # the container's read leaves are keys of their own
+            _require_finite(value, path, key, sources)
         if 'number' in _schema_types(node):
             _require_float_seconds(value, path, key, sources)
     fmt = config['vision']['format']
@@ -1684,7 +1699,7 @@ def _validate_loaded_config(config, command, root, path, sources):
     for key in reads:
         value = _get(config, key, path)
         _sentinel(value, path, key, sources)
-        if command == 'kb sync' or command in REQUEST_COMMANDS:
+        if command in ('kb sync', 'embed dev-compare') or command in REQUEST_COMMANDS:
             _validate(value, _schema_at(config_schema, key), path, key, sources, _EXACT_INTEGERS)
             _require_finite(value, path, key, sources)
         if key.startswith('vlm.roles.'):
@@ -1710,41 +1725,55 @@ def _validate_loaded_config(config, command, root, path, sources):
             validate_index_reads(config, path, sources, root)
             validate_candidates_reads(config, path, sources, root)
     if command == 'kb sync':
-        for key in ('storage.lock.timeout_s', 'storage.lock.poll_s'):
-            _require_float_seconds(_get(config, key, path), path, key, sources)
-        # Validate store policy interactions without constructing a store or starting K0.
-        from .storage.store import _settings
-        from .storage import StorageError
-        try:
-            _settings(config, command, root)
-        except StorageError as error:
-            raise ConfigurationError(f'{path}: {error}') from None
+        _validate_store_reads(config, command, root, path, sources)
         validate_index_reads(config, path, sources, root)
         validate_embedder_reads(config, path, sources, root)  # K1 is part of kb sync; the same check K1 runs
         validate_naming_reads(config, path, sources, root)
         validate_observation_reads(config, path, sources, root)
         validate_card_reads(config, path, sources, root)
         validate_alias_reads(config, path, sources, root)
-        source = _resolve_within(_lexical_path(config['knowledge']['root'], root, path, 'knowledge.root'), root,
-                                 {os.path.normcase('.secrets'), os.path.normcase('models')}, path, 'knowledge.root')
-        for key in ('storage.kb_store', 'storage.data_root'):
-            target = _resolve_within(_lexical_path(_get(config, key, path), root, path, key), root,
-                                     {os.path.normcase('.secrets'), os.path.normcase('models')}, path, key)
-            if source == target or source in target.parents or target in source.parents:
-                raise ConfigurationError(f'{path}: {key} overlaps knowledge.root')
-        key = 'knowledge.info_file.encoding'
-        try:
-            codecs.lookup(config['knowledge']['info_file']['encoding'])
-        except LookupError as error:
-            raise ConfigurationError(f'{_source(sources, key, path)}: {key}: unknown codec') from error
-        workers = config['runtime']['cpu_workers']
-        if workers != 'auto' and (type(workers) is not int or workers <= 0):
-            raise ConfigurationError(f'{path}: runtime.cpu_workers: expected auto or a positive integer')
-        for extension in config['knowledge']['image_extensions']:
-            if not isinstance(extension, str) or not extension.startswith('.') or len(extension) < 2:
-                raise ConfigurationError(f'{path}: knowledge.image_extensions: invalid extension {extension!r}')
-            _filename(extension, path, 'knowledge.image_extensions')
+        _validate_k0_reads(config, root, path, sources, ('storage.kb_store', 'storage.data_root'))
+    if command == 'embed dev-compare':  # DEV-ONLY (T-018 P3): K0's and K1's own checks, nothing of K2 to K5
+        _validate_store_reads(config, command, root, path, sources)
+        validate_embedder_reads(config, path, sources, root)
+        _validate_k0_reads(config, root, path, sources, ('storage.kb_store',))
     return config
+
+
+def _validate_store_reads(config, command, root, path, sources):
+    """Store lock timers and store policy of a command that opens the knowledge store, without constructing it."""
+    for key in ('storage.lock.timeout_s', 'storage.lock.poll_s'):
+        _require_float_seconds(_get(config, key, path), path, key, sources)
+    from .storage.store import _settings
+    from .storage import StorageError
+    try:
+        _settings(config, command, root)
+    except StorageError as error:
+        raise ConfigurationError(f'{path}: {error}') from None
+
+
+def _validate_k0_reads(config, root, path, sources, stores):
+    """K0's scan settings (`kb sync`, `embed dev-compare`): the knowledge root inside the project (never `models/`
+    or `.secrets/`) and apart from every key in `stores`, the info-file codec, the worker count, the extensions."""
+    source = _resolve_within(_lexical_path(config['knowledge']['root'], root, path, 'knowledge.root'), root,
+                             {os.path.normcase('.secrets'), os.path.normcase('models')}, path, 'knowledge.root')
+    for key in stores:
+        target = _resolve_within(_lexical_path(_get(config, key, path), root, path, key), root,
+                                 {os.path.normcase('.secrets'), os.path.normcase('models')}, path, key)
+        if source == target or source in target.parents or target in source.parents:
+            raise ConfigurationError(f'{path}: {key} overlaps knowledge.root')
+    key = 'knowledge.info_file.encoding'
+    try:
+        codecs.lookup(config['knowledge']['info_file']['encoding'])
+    except LookupError as error:
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: unknown codec') from error
+    workers = config['runtime']['cpu_workers']
+    if workers != 'auto' and (type(workers) is not int or workers <= 0):
+        raise ConfigurationError(f'{path}: runtime.cpu_workers: expected auto or a positive integer')
+    for extension in config['knowledge']['image_extensions']:
+        if not isinstance(extension, str) or not extension.startswith('.') or len(extension) < 2:
+            raise ConfigurationError(f'{path}: knowledge.image_extensions: invalid extension {extension!r}')
+        _filename(extension, path, 'knowledge.image_extensions')
 
 
 def load_profile(path, *, project_root=None):

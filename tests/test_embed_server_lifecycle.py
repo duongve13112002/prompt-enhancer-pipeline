@@ -126,7 +126,7 @@ def test_connections_over_the_cap_get_a_503_and_no_thread(project_root, model_te
 
 def test_many_slow_connections_never_exceed_the_cap(project_root, model_test_profile):
     settings, _ = make_settings(project_root, model_test_profile, max_connections=4, max_pending_requests=1,
-                                read_timeout_s=2)
+                                read_timeout_s=4)  # held connections must outlive the 0.5 s look below with margin
     peak = [0]
     sampling = threading.Event()
 
@@ -147,7 +147,7 @@ def test_many_slow_connections_never_exceed_the_cap(project_root, model_test_pro
             assert wait_for(lambda: len(handler_threads()) == 4)
             time.sleep(0.5)
             assert len(handler_threads()) == 4
-            assert wait_for(lambda: not handler_threads(), timeout=10)  # the deadline ends every held connection
+            assert wait_for(lambda: not handler_threads(), timeout=15)  # the deadline ends every held connection
         finally:
             sampling.set()
             sampler.join()

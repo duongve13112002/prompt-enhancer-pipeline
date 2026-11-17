@@ -28,6 +28,7 @@ import hashlib
 import io
 import json
 import math
+import os
 from pathlib import Path
 
 FIT_DECIMALS = 4  # artifact-bound: the fit floors the lowest observed cosine to this many decimals (recorded in fit.json)
@@ -49,14 +50,35 @@ class Input:
     text: str | None
 
 
+def vector_norm(vector):
+    """Euclidean length without squaring (`math.hypot`): finite values near 1e154 would overflow a sum of squares
+    (`math.fsum` raises), so this is the one length of the module (P3 class fix); infinite only when the true
+    length overflows."""
+    return math.hypot(*vector)
+
+
+def usable(norm):
+    """A length that admits a cosine: finite and non-zero."""
+    return math.isfinite(norm) and norm > 0.0
+
+
+def unit_vector(vector):
+    """`vector` at unit length. Scaled by its largest magnitude first, as K1's `_reduce` and the server's
+    `l2_normalize` do: the scaled length lies in [1, sqrt(len)], so a subnormal vector, whose `hypot` rounds to a
+    neighbouring subnormal, is still divided by an accurate length (P3 fix round 1, F3)."""
+    largest = max(abs(value) for value in vector)
+    scaled = [value / largest for value in vector]
+    length = math.hypot(*scaled)
+    return [value / length for value in scaled]
+
+
 def cosine(a, b):
     if len(a) != len(b) or not a:
         raise ReferenceCheckError('vectors of different or zero length')
-    dot = math.fsum(x * y for x, y in zip(a, b))
-    norm = math.sqrt(math.fsum(x * x for x in a)) * math.sqrt(math.fsum(y * y for y in b))
-    if not math.isfinite(dot) or not norm or not math.isfinite(norm):
+    if not (usable(vector_norm(a)) and usable(vector_norm(b))):
         raise ReferenceCheckError('a zero or non-finite vector')
-    return dot / norm
+    # Unit vectors first, so every product lies in [-1, 1] and the sum cannot overflow.
+    return math.fsum(x * y for x, y in zip(unit_vector(a), unit_vector(b)))
 
 
 def floor_to(value, decimals=FIT_DECIMALS):
@@ -70,8 +92,8 @@ def ceil_to(value, decimals=FIT_DECIMALS):
 
 
 def norm_deviation(vector):
-    """|‖vector‖ - 1|; infinite when a square overflows (never a pass)."""
-    return abs(math.sqrt(math.fsum(x * x for x in vector)) - 1.0)
+    """|‖vector‖ - 1|; infinite when the length overflows (never a pass)."""
+    return abs(vector_norm(vector) - 1.0)
 
 
 def fit_max_norm_deviation(runs):
@@ -116,13 +138,16 @@ def fit_min_cosine(runs):
 
 def judge(inputs, reference, served, min_cosine, max_norm_deviation, native_dimension):
     """Per-item verdicts of the served vectors against the reference vectors (same input order). Every measured
-    quantity decides: cosine, length and norm (the served vector as received, never normalised here)."""
+    quantity decides: cosine, length and norm (the served vector as received, never normalised here). The norm is
+    classified first: a served vector with no usable length (zero) fails its item with `cosine: null` instead of
+    stopping the check (P3, RT1-N1); the reference vectors were admitted with a usable length (`_check_runs`)."""
     if not len(inputs) == len(reference) == len(served):
         raise ReferenceCheckError('the reference and the served vectors do not cover the same inputs')
     items = []
     for item, expected, got in zip(inputs, reference, served):
-        norm = math.sqrt(math.fsum(x * x for x in got))
-        value = cosine(expected, got) if len(got) == len(expected) else None
+        norm = vector_norm(got)
+        comparable = len(got) == len(expected) and usable(norm) and usable(vector_norm(expected))
+        value = cosine(expected, got) if comparable else None
         unit = math.isfinite(norm) and abs(norm - 1.0) <= max_norm_deviation
         passed = value is not None and value >= min_cosine and len(got) == native_dimension and unit
         items.append({'kind': item.kind, 'label': item.label, 'sha256': item.sha256, 'cosine': value,
@@ -135,6 +160,27 @@ def _inside(root, path, what):
     resolved = Path(path).resolve()
     if not resolved.is_relative_to(Path(root).resolve()):
         raise ReferenceCheckError(f'{what} must lie inside the project root (after resolving links)')
+    return resolved
+
+
+PROTECTED_DIRS = ('.secrets', '.git', 'models')  # safety-bound: the project's protected roots (storage/store.py)
+PROTECTED_PREFIX = '.venv'  # safety-bound: every environment directory (`.venv`, `.venv-gpu`, ...)
+
+
+def check_output_dir(root, path, apart=()):
+    """The resolved report directory (links followed): inside the project root, outside its protected directories
+    and outside every `(name, directory)` of `apart` (the read-only knowledge root, the store), so a report never
+    creates or replaces a file there (R-014; P3 fix round 1, F2). Windows paths compare case-insensitively."""
+    root = Path(root).resolve()
+    resolved = _inside(root, path, '--out')
+    parts = resolved.relative_to(root).parts
+    first = os.path.normcase(parts[0]) if parts else ''
+    if first in {os.path.normcase(name) for name in PROTECTED_DIRS} or first.startswith(PROTECTED_PREFIX):
+        raise ReferenceCheckError('--out lies in a protected project directory (after resolving links)')
+    for name, directory in apart:
+        directory = Path(directory).resolve()
+        if resolved == directory or directory in resolved.parents:
+            raise ReferenceCheckError(f'--out lies inside {name} (after resolving links)')
     return resolved
 
 
@@ -195,7 +241,7 @@ def _write(settings, path, payload):
         for part in parts:
             check_segment(part)
         atomic_write_bytes(root, '/'.join(parts), (json.dumps(payload, indent=1, sort_keys=True) + '\n').encode())
-    except (ValueError, StorageError) as error:
+    except (ValueError, StorageError, OSError) as error:  # OSError text holds the path: the type only (F4)
         raise ReferenceCheckError(f'cannot write {path.name} ({type(error).__name__})') from None
 
 
@@ -301,7 +347,8 @@ def _encode(model, images, texts, batch_size, order, family, image_module):
 
 def _check_runs(runs, count):
     """Structure of `runs`: a non-empty map of run label to one vector per input, every vector a non-empty list of
-    finite floats (the reference step writes floats only) and all of one length."""
+    finite floats (the reference step writes floats only) with a usable length (finite, non-zero: every baseline
+    must admit a cosine, so an unusable one is refused before any request, P3 RT1-E2) and all of one size."""
     if not isinstance(runs, dict) or not runs:
         raise ReferenceCheckError('the reference file holds no runs')
     lengths = set()
@@ -312,6 +359,8 @@ def _check_runs(runs, count):
             if (not isinstance(vector, list) or not vector
                     or not all(type(value) is float and math.isfinite(value) for value in vector)):
                 raise ReferenceCheckError('a reference vector is not a non-empty list of finite numbers')
+            if not usable(vector_norm(vector)):
+                raise ReferenceCheckError('a reference vector has a zero or non-finite length')
             lengths.add(len(vector))
     if len(lengths) != 1:
         raise ReferenceCheckError('the reference vectors differ in length')
