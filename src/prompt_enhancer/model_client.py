@@ -136,8 +136,9 @@ class ModelClientRun:
                 _sentinel(vision['max_image_side'], self.project_root, 'vision.max_image_side', {})
             if image['format'] == 'from_vision':
                 _sentinel(vision['format'], self.project_root, 'vision.format', {})
-            if image['source'] not in IMAGE_SOURCE_ROLES:
-                raise ConfigurationError(f'vlm.roles.{role_name}.image.source: unknown image source')
+            # A missing source is refused like an unknown one (vlm_role.v0 requires it), before any probe is spent.
+            if image.get('source') not in IMAGE_SOURCE_ROLES:
+                raise ConfigurationError(f'vlm.roles.{role_name}.image.source: missing or unknown image source')
         default =self.config['vlm']['default_backend']
         _sentinel(default, self.project_root, 'vlm.default_backend', {})
         for name in {role['backend'], default}:

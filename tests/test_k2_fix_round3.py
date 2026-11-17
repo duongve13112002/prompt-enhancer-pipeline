@@ -174,12 +174,14 @@ def test_missing_source_does_not_spend_explicit_probe_allowance(k2_env, monkeypa
 
     async def execute():
         try:
-            await run.for_role('folder_namer', require=('multiple_images',))
+            # vlm_role.v0 requires image.source: a missing one is refused before any probe (R-015).
+            with pytest.raises(ConfigurationError, match=r'vlm\.roles\.folder_namer\.image\.source'):
+                await run.for_role('folder_namer', require=('multiple_images',))
         finally:
             await run.close()
 
     asyncio.run(execute())
-    assert not [item for item in seen if item[0] == 'multiple']
+    assert not seen
 
 
 def test_explicit_demand_never_attaches_pair_to_fallback(k2_env, monkeypatch):
