@@ -8,6 +8,7 @@ import pytest
 from k3_fixtures import CardServer, inputs, invoke_cards, reply_for
 from prompt_enhancer.k2_naming import _digest
 from prompt_enhancer.k3_cards import build_cards
+from prompt_enhancer.model_resources import BackendConcurrency
 from prompt_enhancer.storage import StorageError, concept_id
 from prompt_enhancer.storage.identity import canonical_json, normalise_name
 
@@ -139,17 +140,23 @@ def test_card_stage_concurrency_obeys_selected_backend_limit(k2_env):
     data['observations'].extend(dict(row, concept_id=cid) for row in list(data['observations']))
     class CapacityDouble:
         """Labelled async call double; scheduler overlap is observed without sockets or inference."""
+        # Injected client contract: async for_role plus run-owned BackendConcurrency; overlap is counted below.
+        concurrency = BackendConcurrency({})
         def __init__(self):
+            from concurrency_fixtures import ArrivalGate
             self.active = self.peak = 0
+            self.gate = ArrivalGate(limit)
         async def for_role(self, name):
             assert name == 'card_builder'
             return self
         async def call(self, prompt, text):
             self.active += 1
             self.peak = max(self.peak, self.active)
-            await asyncio.sleep(0)
-            self.active -= 1
-            return reply_for(json.loads(text)), {'model_revision': 'capacity-double', 'status': 'OK'}
+            try:
+                await self.gate.arrive()
+                return reply_for(json.loads(text)), {'model_revision': 'capacity-double', 'status': 'OK'}
+            finally:
+                self.active -= 1
     for limit in (1, 2):
         k2_env.config['vlm']['backends']['main']['max_concurrency'] = limit
         # Capacity alone reuses replies; submit fresh semantic work for each scheduler measurement.

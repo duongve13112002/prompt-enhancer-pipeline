@@ -12,6 +12,7 @@ import unicodedata
 from .config import ConfigurationError, TEXT_PLACEHOLDER, _EXACT_INTEGERS, _schema, validate_candidates_reads
 from .k1_embed import embedder_settings
 from .k5_index import ServingIndex, VECTOR_TABLES
+from .model_resources import flow
 from .storage import StorageError, normalise_name
 
 
@@ -180,9 +181,15 @@ def _check_space(reader, config, embedder):
 
 async def _dense(reader, embedder, settings, queries, hits, depth, image_concepts):
     image_folders, memberships = image_concepts
-    for start in range(0, len(queries), settings.batch_size):
-        batch = queries[start:start + settings.batch_size]
-        vectors = await embedder.embed_texts([unit[2] for unit in batch])
+    batches = [queries[start:start + settings.batch_size] for start in range(0, len(queries), settings.batch_size)]
+
+    async def embed(batch):
+        return await embedder.embed_texts([unit[2] for unit in batch])
+
+    # The batches go out together, up to the embedder's configured concurrency (decision 149); hits are merged in
+    # batch order afterwards, so the result is the serial one.
+    results = await flow(batches, embed, settings.backend['max_concurrency'])
+    for batch, vectors in zip(batches, results):
         if not isinstance(vectors, (list, tuple)) or len(vectors) != len(batch):
             raise StorageError('S1: query vector count differs')
         for unit, vector in zip(batch, vectors):

@@ -35,6 +35,10 @@ class UndecodableImage(OSError):
     """The file's bytes cannot be decoded; the decoder's own exception is the `__cause__`."""
 
 
+class DecodeStopped(RuntimeError):
+    """Cooperative preparation stop; no result or image refusal is produced."""
+
+
 @contextmanager
 def _decoding_file_bytes():
     """The one decode boundary: whatever the decoder raises on the file's bytes means the file is undecodable.
@@ -47,7 +51,7 @@ def _decoding_file_bytes():
     """
     try:
         yield
-    except (Image.DecompressionBombError, MemoryError):
+    except (Image.DecompressionBombError, MemoryError, DecodeStopped):
         raise
     except Exception as error:
         raise UndecodableImage(f'the image file cannot be decoded ({type(error).__name__})') from error
@@ -76,10 +80,10 @@ def check_vision_settings(vision, max_decode_pixels):
     _check_settings(max_side, max_decode_pixels, kwargs['alpha_policy'], kwargs['output_format'])
 
 
-def prepare_vision_image_with_info(data, vision, max_decode_pixels):
+def prepare_vision_image_with_info(data, vision, max_decode_pixels, *, check_stop=None):
     """Shared vision settings, one decode: the prepared bytes and the stored file's metadata."""
     max_side, kwargs = _vision_args(vision)
-    return prepare_image_with_info(data, max_side, max_decode_pixels, **kwargs)
+    return prepare_image_with_info(data, max_side, max_decode_pixels, check_stop=check_stop, **kwargs)
 
 
 def prepare_image(data, max_side, max_decode_pixels, *, alpha_policy, output_format=None, quality=None):
@@ -111,14 +115,18 @@ def _check_settings(max_side, max_decode_pixels, alpha_policy, output_format=Non
         raise ValueError('alpha_policy refuse accepts only mode')
 
 
-def prepare_image_with_info(data, max_side, max_decode_pixels, *, alpha_policy, output_format=None, quality=None):
+def prepare_image_with_info(data, max_side, max_decode_pixels, *, alpha_policy, output_format=None, quality=None,
+                            check_stop=None):
     """`prepare_image` from a single decode, also returning the stored file's format and pixel size.
 
     The size is the file's own, before any orientation (T-008 Q4). A policy refusal raises ImageRejected; a file
     whose bytes cannot be decoded raises UndecodableImage (an OSError); Pillow's decompression-bomb refusal raises
     Image.DecompressionBombError. Settings and encoding errors propagate unchanged.
+    An optional check_stop callback raises DecodeStopped at boundaries; no callback preserves preparation behavior.
     """
     _check_settings(max_side, max_decode_pixels, alpha_policy, output_format)
+    if check_stop is not None:
+        check_stop()
     stream = BytesIO(data)
     # Each `with _decoding_file_bytes()` block holds only calls that read the file's bytes (T-008 fix round 3).
     with _decoding_file_bytes():
@@ -130,8 +138,14 @@ def prepare_image_with_info(data, max_side, max_decode_pixels, *, alpha_policy, 
         info = {'format': original_format, 'width': width, 'height': height}
         if width * height > max_decode_pixels:
             raise ImageRejected('image exceeds max_decode_pixels', 'exceeds_max_decode_pixels', info)
+        # PNG getexif may load pixels too. Callback failures are lifecycle errors, outside the file-byte boundary.
+        if check_stop is not None:
+            check_stop()
         with _decoding_file_bytes():
             orientation = source.getexif().get(274, 1)
+        if check_stop is not None:
+            check_stop()
+        with _decoding_file_bytes():
             source.load()
             image = ImageOps.exif_transpose(source)  # a new image, so closing the file below keeps it
             transparent = image.getbands()[-1] in ('A', 'a') or 'transparency' in image.info
@@ -158,6 +172,8 @@ def prepare_image_with_info(data, max_side, max_decode_pixels, *, alpha_policy, 
         raise ImageRejected('image format is unavailable', 'encode_failed', info)
     kwargs = {} if quality is None else {'quality': quality}
     result = BytesIO()
+    if check_stop is not None:
+        check_stop()
     try:
         image.save(result, format=fmt, **kwargs)
     except OSError as error:

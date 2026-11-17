@@ -8,6 +8,7 @@ publishes a snapshot (the caller does, as with K0).
 
 import asyncio
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass
 import hashlib
@@ -15,6 +16,7 @@ import json
 import math
 from pathlib import Path
 import struct
+from threading import Event, local
 
 import httpx
 import PIL
@@ -22,14 +24,17 @@ from PIL import Image
 
 from .config import (ConfigurationError, NO_MEDIA_TYPE, TEXT_PLACEHOLDER, _validate_embedding, image_media_type,
                      resolve_backend_engine, validate_embedder_reads)
+from .k0 import resolve_workers
 from .k0_scan import read_source_file
-from .model_image import (ImageRejected, UndecodableImage, check_vision_settings, configure_decode_backstop,
+from .model_image import (DecodeStopped, ImageRejected, UndecodableImage, check_vision_settings, configure_decode_backstop,
                           prepare_vision_image_with_info)
-from .model_resources import BackendConcurrency
+from .model_resources import BackendConcurrency, CapacityLog, await_owned, flow
 from .model_transport import ModelTransport, endpoint_url
 from .storage import StorageError
 from .storage.identity import artifact_key, canonical_json, is_concept_id, is_image_id
 from .storage.tables import TEXT_KIND, check_embedding_space
+
+_DECODE_STOP = local()  # safety-bound: cancellation context belongs to one decode worker
 
 LAYOUT_VERSION = 1  # artifact-bound: JSON layout of one K1 checkpoint artifact
 # artifact-bound: the rule that derives the stored image metadata; it keys image artifacts only, so a rule change
@@ -237,12 +242,17 @@ class Embedder:
         if self._media_type is None:
             raise ConfigurationError(f'vision.format: {NO_MEDIA_TYPE.format(fmt)}')
         name = settings.backend_name
-        self._transport = ModelTransport(name, settings.backend,
-                                         BackendConcurrency({name: settings.backend['max_concurrency']}),
-                                         transport=transport)
+        self._concurrency = BackendConcurrency({name: settings.backend['max_concurrency']})
+        self._transport = ModelTransport(name, settings.backend, self._concurrency, transport=transport)
 
     async def close(self):
         await self._transport.close()
+
+    def capacity_window(self):
+        """Start recording this embedder's requests in flight; `close()` gives `report['capacity']`."""
+        log = CapacityLog()
+        log.watch(self._concurrency)
+        return log
 
     def _base(self):
         body = {'model': self.settings.backend['model']['id'], 'encoding_format': ENCODING_FORMAT}
@@ -295,7 +305,7 @@ class Embedder:
 
     async def _embed(self, bodies, count):
         per_body = count // len(bodies)
-        results = await asyncio.gather(*(self._post(body, per_body) for body in bodies))
+        results = await flow(bodies, lambda body: self._post(body, per_body), len(bodies))
         return [vector for vectors in results for vector in vectors]
 
     async def embed_images(self, images):
@@ -305,19 +315,26 @@ class Embedder:
         return await self._embed(self.text_bodies(texts), len(texts))
 
 
-async def _in_batches(items, batch_size, embed):
-    """Embed batches concurrently; return (batch, vectors or EmbeddingError) pairs, re-raising anything else."""
-    batches = [items[start:start + batch_size] for start in range(0, len(items), batch_size)]
-    results = await asyncio.gather(*(embed(batch) for batch in batches), return_exceptions=True)
-    for result in results:
-        if isinstance(result, BaseException) and not isinstance(result, EmbeddingError):
-            raise result
-    return list(zip(batches, results))
+def _chunks(items, settings):
+    """Consecutive `batch_size` chunks of ALL inputs, before checkpoint filtering (RES-1 / R-017).
+
+    An input refused before embedding is left out of its chunk's request, so a request's batch depends only on the
+    inputs and `embedding.batch_size`, never on timing: batch size can change bf16 vectors (T-018).
+    """
+    return [items[start:start + settings.batch_size] for start in range(0, len(items), settings.batch_size)]
 
 
-def _window(settings):
-    """Inputs prepared at once: enough to keep every allowed request busy, bounded in memory."""
-    return settings.batch_size * settings.backend['max_concurrency']
+def _flow_limit(settings):
+    """Chunks admitted at once: one per allowed request plus one being read and decoded ahead, so the server is not
+    idle while the next chunk is prepared; prepared images held stay below `batch_size * (max_concurrency + 1)`."""
+    return settings.backend['max_concurrency'] + 1  # safety-bound: one bounded chunk of decode ahead
+
+
+def _cpu_workers(config):
+    try:
+        return resolve_workers(config['runtime']['cpu_workers'])
+    except ValueError as error:
+        raise ConfigurationError(f'configuration: runtime.cpu_workers: {error}') from None
 
 
 def _load_record(checkpoints, key, expected, settings):
@@ -348,8 +365,10 @@ def _commit_record(checkpoints, key, kind, record, revisions):
     checkpoints.commit(key, kind, canonical_json(record).encode('utf-8'), revisions=revisions)
 
 
-def _read_verified(root, locations, image_id):
+def _read_verified(root, locations, image_id, stop=None):
     for folder_id, relative_path in locations:
+        if stop is not None and stop.is_set():
+            return None
         try:
             data = read_source_file(root, folder_id.split('/') + relative_path.split('/'))
         except OSError:
@@ -359,11 +378,18 @@ def _read_verified(root, locations, image_id):
     return None
 
 
+def _check_decode_stop():
+    stop = getattr(_DECODE_STOP, 'event', None)
+    if stop is not None and stop.is_set():
+        raise DecodeStopped
+
+
 def _decode(data, settings):
     """One decode: (metadata, prepared bytes), with bytes None when the image is refused deterministically."""
     empty = {'format': None, 'width': None, 'height': None}
     try:
-        prepared, info = prepare_vision_image_with_info(data, settings.vision, settings.max_decode_pixels)
+        prepared, info = prepare_vision_image_with_info(
+            data, settings.vision, settings.max_decode_pixels, check_stop=_check_decode_stop)
     except ImageRejected as error:
         return dict(error.info, decode_status=error.status), None
     except Image.DecompressionBombError:
@@ -382,6 +408,7 @@ async def embed_images(store, config, handoff, *, knowledge_root, transport=None
     Returns the `images` rows with K1 metadata, the `image_embeddings` table and a report.
     """
     settings = embedder_settings(config)
+    workers = _cpu_workers(config)  # before any read or call, like every other read of this stage
     root = Path(knowledge_root)
     locations = {}
     for row in sorted(handoff['folder_images'], key=lambda row: (row['folder_id'], row['relative_path'])):
@@ -390,30 +417,61 @@ async def embed_images(store, config, handoff, *, knowledge_root, transport=None
     revisions = image_revisions(settings)
     records = {}
     embedder = Embedder(settings, transport=transport)
+    capacity = embedder.capacity_window()
+    loop = asyncio.get_running_loop()
+    pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix='k1-decode')
+    stop = Event()
+
+    def prepare(image_id):
+        """Worker thread: read, verify and decode one image; checkpoint writes stay on the event loop."""
+        _DECODE_STOP.event = stop
+        try:
+            if stop.is_set():
+                return None
+            data = _read_verified(root, locations.get(image_id, ()), image_id, stop)
+            return None if data is None or stop.is_set() else _decode(data, settings)
+        except DecodeStopped:
+            return None
+        finally:
+            del _DECODE_STOP.event
+
     try:
         with nullcontext(writer) if writer is not None else store.writer() as writer:
             checkpoints = writer.checkpoints(IMAGE_STAGE)
-            pending = []
+            inputs = []
             for row in sorted(handoff['images'], key=lambda row: row['image_id']):
                 image_id = row['image_id']
                 if not is_image_id(image_id):
                     raise ValueError(f'invalid image_id {image_id!r}')
                 key = image_key(settings, image_id)
+                inputs.append((image_id, key))
                 record = _skip_or_reuse(checkpoints, key, {'image_id': image_id}, settings, report, image_id)
-                if record is None:
-                    pending.append((image_id, key))
-                else:
+                if record is not None:
                     records[image_id] = record
-            window = _window(settings)
-            for start in range(0, len(pending), window):
+                    if record['vector'] is None:
+                        report['decode_failed'][image_id] = record['decode_status']
+
+            async def embed_chunk(chunk):
+                if all(image_id in records for image_id, _ in chunk):
+                    return
+                # Cached refusals remain positional facts. Cached successful members must participate in a
+                # partially committed request too: changing its batch changes bf16 vectors (T-018).
+                decodable = [(image_id, key) for image_id, key in chunk
+                             if image_id not in records or records[image_id]['vector'] is not None]
+                decoded = await asyncio.gather(*(loop.run_in_executor(pool, prepare, image_id)
+                                                 for image_id, _ in decodable))
+                if stop.is_set():
+                    return  # stopped workers have no result, never a source failure or decode refusal
                 prepared = []
-                for image_id, key in pending[start:start + window]:
-                    data = _read_verified(root, locations.get(image_id, ()), image_id)
-                    if data is None:
+                for (image_id, key), outcome in zip(decodable, decoded):
+                    # Replay companions supply batch context only; failed preparation cannot alter their record.
+                    if image_id in records and (outcome is None or outcome[1] is None):
+                        continue
+                    if outcome is None:
                         checkpoints.fail(key, SOURCE_CHANGED, revisions=revisions)
                         report['failed'][image_id] = SOURCE_CHANGED
                         continue
-                    metadata, image = _decode(data, settings)
+                    metadata, image = outcome
                     if image is None:
                         record = dict(metadata, version=LAYOUT_VERSION, image_id=image_id,
                                       embedder_revision=settings.revision, dim=settings.dimension, vector=None)
@@ -422,23 +480,42 @@ async def embed_images(store, config, handoff, *, knowledge_root, transport=None
                         report['decode_failed'][image_id] = metadata['decode_status']
                         continue
                     prepared.append((image_id, key, metadata, image))
-                results = await _in_batches(prepared, settings.batch_size,
-                                            lambda batch: embedder.embed_images([item[3] for item in batch]))
-                for batch, result in results:
-                    if isinstance(result, EmbeddingError):
-                        for image_id, key, _, _ in batch:
-                            checkpoints.fail(key, result.code, revisions=revisions)
-                            report['failed'][image_id] = result.code
+                if not any(image_id not in records for image_id, _, _, _ in prepared):
+                    return
+                try:
+                    vectors = await embedder.embed_images([item[3] for item in prepared])
+                except EmbeddingError as error:
+                    for image_id, key, _, _ in prepared:
+                        if image_id in records:
+                            continue
+                        checkpoints.fail(key, error.code, revisions=revisions)
+                        report['failed'][image_id] = error.code
+                    return
+                for (image_id, key, metadata, _), vector in zip(prepared, vectors):
+                    if image_id in records:
                         continue
-                    for (image_id, key, metadata, _), vector in zip(batch, result):
-                        record = dict(metadata, version=LAYOUT_VERSION, image_id=image_id,
-                                      embedder_revision=settings.revision, dim=settings.dimension,
-                                      vector=base64.b64encode(pack_vector(vector)).decode('ascii'))
-                        _commit_record(checkpoints, key, IMAGE_STAGE, record, revisions)
-                        records[image_id] = record
-                        report['embedded'] += 1
+                    record = dict(metadata, version=LAYOUT_VERSION, image_id=image_id,
+                                  embedder_revision=settings.revision, dim=settings.dimension,
+                                  vector=base64.b64encode(pack_vector(vector)).decode('ascii'))
+                    _commit_record(checkpoints, key, IMAGE_STAGE, record, revisions)
+                    records[image_id] = record
+                    report['embedded'] += 1
+
+            # Per-chunk flow: a fatal error drains the chunks in flight, so every reply received is checkpointed.
+            await flow(_chunks(inputs, settings), embed_chunk, _flow_limit(settings))
     finally:
-        await embedder.close()
+        stop.set()
+
+        async def cleanup():
+            try:
+                await asyncio.to_thread(pool.shutdown, wait=True, cancel_futures=True)
+            finally:
+                report['capacity'] = capacity.close()
+                await embedder.close()
+
+        await await_owned(cleanup())
+    report['failed'] = dict(sorted(report['failed'].items()))
+    report['decode_failed'] = dict(sorted(report['decode_failed'].items()))
     images = []
     for row in handoff['images']:
         row = dict(row)
@@ -471,37 +548,46 @@ async def embed_concept_texts(store, config, items, *, transport=None, writer=No
     texts = sorted({item.text for item in items})
     records = {}
     embedder = Embedder(settings, transport=transport)
+    capacity = embedder.capacity_window()
     try:
         with nullcontext(writer) if writer is not None else store.writer() as writer:
             checkpoints = writer.checkpoints(TEXT_STAGE)
-            pending = []
+            inputs = []
             for text in texts:
                 key = text_key(settings, text)
+                inputs.append((text, key))
                 record = _skip_or_reuse(checkpoints, key, {'text_hash': text_hash(text)}, settings, report,
                                         text_hash(text))
-                if record is None:
-                    pending.append((text, key))
-                else:
+                if record is not None:
                     records[text] = record
-            window = _window(settings)
-            for start in range(0, len(pending), window):
-                results = await _in_batches(pending[start:start + window], settings.batch_size,
-                                            lambda batch: embedder.embed_texts([text for text, _ in batch]))
-                for batch, result in results:
-                    if isinstance(result, EmbeddingError):
-                        for text, key in batch:
-                            checkpoints.fail(key, result.code, revisions=revisions)
-                            report['failed'][text_hash(text)] = result.code
+
+            async def embed_chunk(chunk):
+                if all(text in records for text, _ in chunk):
+                    return
+                try:
+                    vectors = await embedder.embed_texts([text for text, _ in chunk])
+                except EmbeddingError as error:
+                    for text, key in chunk:
+                        if text in records:
+                            continue
+                        checkpoints.fail(key, error.code, revisions=revisions)
+                        report['failed'][text_hash(text)] = error.code
+                    return
+                for (text, key), vector in zip(chunk, vectors):
+                    if text in records:
                         continue
-                    for (text, key), vector in zip(batch, result):
-                        record = {'version': LAYOUT_VERSION, 'text_hash': text_hash(text),
-                                  'embedder_revision': settings.revision, 'dim': settings.dimension,
-                                  'vector': base64.b64encode(pack_vector(vector)).decode('ascii')}
-                        _commit_record(checkpoints, key, TEXT_STAGE, record, revisions)
-                        records[text] = record
-                        report['embedded'] += 1
+                    record = {'version': LAYOUT_VERSION, 'text_hash': text_hash(text),
+                              'embedder_revision': settings.revision, 'dim': settings.dimension,
+                              'vector': base64.b64encode(pack_vector(vector)).decode('ascii')}
+                    _commit_record(checkpoints, key, TEXT_STAGE, record, revisions)
+                    records[text] = record
+                    report['embedded'] += 1
+
+            await flow(_chunks(inputs, settings), embed_chunk, settings.backend['max_concurrency'])
     finally:
-        await embedder.close()
+        report['capacity'] = capacity.close()
+        await await_owned(embedder.close())
+    report['failed'] = dict(sorted(report['failed'].items()))
     rows = {}
     for item in items:
         record = records.get(item.text)

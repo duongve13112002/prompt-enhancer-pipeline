@@ -21,7 +21,7 @@ from .model_probe import (ProbeResult, probe_backend, probe_local_image_pair, pr
                          load_probe_bundle, production_probe_cases, prepare_probe_image, BUNDLE_ID,
                          ProbeLimitExhausted)
 from .model_resources import BackendConcurrency, BudgetExhausted, SingleRunBudgetLedger
-from .model_schemas import SchemaRegistry
+from .model_schemas import cached_registry
 from .model_transport import ModelTransport
 from pathlib import Path
 
@@ -170,7 +170,7 @@ class ModelClientRun:
                                             if isinstance(backend, dict) and type(backend.get('call_budget')) is int})
         self.transports = {}
         self.probes = {}
-        self.schemas = SchemaRegistry(self.project_root / 'contracts' / 'schemas')
+        self.schemas = cached_registry(self.project_root / 'contracts' / 'schemas')  # checked once per unchanged set
         self.client = RoleClient(self.config, self.transports, self.probes, self.schemas,
                                  project_root=self.project_root, probe_cases=probe_cases,
                                  local_probe_plans=local_probe_plans)
@@ -238,6 +238,11 @@ class BoundModelClient:
 
     async def close(self):
         await self.run.close()
+
+
+def run_concurrency(client):
+    """The run-owned `BackendConcurrency` of a supplied run or bound client (stage capacity records, decision 149)."""
+    return (client.run if isinstance(client, BoundModelClient) else client).concurrency
 
 
 async def compose_model_client(config, role_name, *, project_root, probe_cases=None, local_probe_plans=None):

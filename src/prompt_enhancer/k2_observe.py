@@ -1,7 +1,6 @@
 """Unpublished, single-image K2 observations over named folders and current K1 vectors (R-010/R-017)."""
 
 from copy import deepcopy
-import asyncio
 from contextlib import nullcontext
 import hashlib
 import json
@@ -15,7 +14,8 @@ import pyarrow as pa
 from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_observation_reads
 from .k1_embed import MODEL_TOOL_MODULES, _read_verified, tool_revision
 from .k2_naming import _digest, _validate_reply, failure_code, record_probe_failure
-from .model_client import ModelCallError, ModelClientRun, semantic_role_settings
+from .model_client import ModelCallError, ModelClientRun, run_concurrency, semantic_role_settings
+from .model_resources import CapacityLog, await_owned, flow
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id
 from .storage.identity import canonical_json, check_artifact_key, is_image_id
@@ -160,6 +160,7 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
 
     An injected BoundModelClient is caller-owned. A lazy run created here is always closed. A completed
     image-call bundle, including an empty reply, is the one checkpoint for its exact concept-name set.
+    Injected run doubles expose `.concurrency: BackendConcurrency` and async `for_role`; bound doubles expose `.run`.
     """
     root = store.catalog.root
     validate_observation_reads(config, project_root=root)
@@ -225,6 +226,9 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
             task['selected'] |= identity in selected
             task['locations'].extend(locations[folder_id][identity])
     observations, artifacts, owned_run = [], [], None
+    capacity = CapacityLog()
+    if client is not None:
+        capacity.watch(run_concurrency(client))
     try:
         with nullcontext(writer) if writer is not None else store.writer() as writer:
             checkpoints = writer.checkpoints(STAGE)
@@ -268,6 +272,7 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
                         if owned_run is None:
                             owned_run = ModelClientRun(config, root, probe_cases=probe_cases,
                                                        local_probe_plans=local_probe_plans)
+                            capacity.watch(owned_run.concurrency)
                         bound = await owned_run.for_role('observer')
                     else:
                         bound = await client.for_role('observer')
@@ -297,25 +302,20 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
                 artifacts.append(artifact)
                 observations.extend(rows)
                 report['observed'] += 1
-            # Configured backend concurrency bounds both queued coroutine work and prepared image bodies.
+            # Per-item flow (decision 149): the configured backend concurrency bounds both requests in flight and
+            # prepared image bodies; a fatal error drains the items in flight so every reply received is checkpointed.
             workers = config['vlm']['backends'][role['backend']]['max_concurrency']
-            ordered = sorted(tasks.items())
-            for start in range(0, len(ordered), workers):
-                batch = ordered[start:start + workers]
-                if workers == 1:
-                    await evaluate(*batch[0])
-                    continue
-                pending = [asyncio.create_task(evaluate(key, task)) for key, task in batch]
-                try:
-                    await asyncio.gather(*pending)
-                except BaseException:
-                    for task in pending:
-                        task.cancel()
-                    await asyncio.gather(*pending, return_exceptions=True)
-                    raise
+            await flow(sorted(tasks.items()), lambda item: evaluate(*item), workers)
     finally:
-        if owned_run is not None:
-            await owned_run.close()
+        try:
+            report['capacity'] = capacity.close()
+        finally:
+            if owned_run is not None:
+                await await_owned(owned_run.close())
+    report['failed'] = dict(sorted(report['failed'].items()))
+    # Completion order varies with timing; the serial order is the sorted key order.
+    report['queued'].sort()
+    report['reused_referenced'].sort()
     observations.sort(key=lambda row: (row['context_key'], row['concept_id'], row['facet']))
     store.catalog.build('observations', observations)
     return {'rows': {'images': updated_images, 'observations': observations}, 'report': report,

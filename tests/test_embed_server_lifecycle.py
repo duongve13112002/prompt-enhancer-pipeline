@@ -148,10 +148,13 @@ def test_many_slow_connections_never_exceed_the_cap(project_root, model_test_pro
                                 read_timeout_s=4)  # held connections must outlive the 0.5 s look below with margin
     peak = [0]
     sampling = threading.Event()
+    at_capacity = threading.Event()
 
     def sample():
         while not sampling.is_set():
             peak[0] = max(peak[0], len(handler_threads()))
+            if peak[0] == settings.max_connections:
+                at_capacity.set()
             time.sleep(0.005)
 
     sampler = threading.Thread(target=sample, name='sampler')
@@ -166,7 +169,7 @@ def test_many_slow_connections_never_exceed_the_cap(project_root, model_test_pro
                 client.sendall(b'POST /v1/emb')
                 clients.append(client)
             assert wait_for(lambda: len(readers) == 4)  # the four holders' own handlers
-            time.sleep(0.5)
+            assert at_capacity.wait(5), 'sampler did not observe the held connection capacity'
             assert len(handler_threads()) == 4
             expire(readers)  # the deadline ends every held connection
             assert wait_for(lambda: not handler_threads(), timeout=15)

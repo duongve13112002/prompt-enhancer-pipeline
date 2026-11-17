@@ -143,7 +143,7 @@ def test_loaded_profile_composes_role_client(tmp_path, project_root, monkeypatch
                     activity['peak'] = max(activity['peak'], activity['active'])
                     if activity['active'] == 3:
                         three_entered.set()
-                three_entered.wait(timeout=2)
+                assert three_entered.wait(timeout=5), 'configured capacity did not arrive at the HTTP double'
                 time.sleep(0.02)
             failures = sum(not item[1].get('probe') for item in seen)
             failure_limit = 2 if observation in ('retry_count', 'backoff_max') else 1

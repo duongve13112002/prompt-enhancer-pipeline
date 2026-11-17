@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from random import SystemRandom
+from random import Random, SystemRandom
 
 import PIL
 
@@ -15,7 +15,9 @@ from .config import (ConfigurationError, _EXACT_INTEGERS, _StrictSafeLoader, _le
 from .k0 import parse_info, trim_info_token
 from .k0_scan import decode_info, read_source_file
 from .k1_embed import MODEL_TOOL_MODULES, _read_verified, tool_revision
-from .model_client import ModelCallError, ModelClientRun, semantic_role_settings, safe_model_code, safe_probe_events
+from .model_client import (ModelCallError, ModelClientRun, run_concurrency, semantic_role_settings, safe_model_code,
+                           safe_probe_events)
+from .model_resources import CapacityLog, OrderedTurns, await_owned, flow
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id, normalise_name
 from .storage.identity import canonical_json, check_folder_id, is_image_id
@@ -428,7 +430,10 @@ def _draw(writer, folder_id, candidates, settings, rng, report, artifacts, recov
     # Recover even if interrupted after the draw commit but before its head was updated.
     draw = _load(draws, key)
     if draw is None:
-        draw = dict(population, sampled_image_ids=uniform_draw(candidates, settings['sample_size'], rng))
+        # A seeded run's draw depends on this population, never on which other folders were checkpointed.
+        # Sampling doubles keep their own contract; persisted draws remain authoritative even if the seed changes.
+        sampler = Random(_digest({'rng_state': rng.getstate(), 'population': population})) if type(rng) is Random else rng
+        draw = dict(population, sampled_image_ids=uniform_draw(candidates, settings['sample_size'], sampler))
         _save(draws, key, draw, DRAW_REVISION)
     # Only this private head is replaceable. Snapshots may reference content-addressed draws/results, never heads.
     causes = ['baseline_recovered', reason] if recovered else [reason]
@@ -463,6 +468,7 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
 
     Image tables come from K0 (null decode status) or K1. A supplied BoundModelClient belongs to the caller;
     otherwise this stage owns and closes its lazy ModelClientRun. Probe cases/plans use T-009's existing API.
+    Injected run doubles expose `.concurrency: BackendConcurrency` and async `for_role`; bound doubles expose `.run`.
     """
     root = store.catalog.root
     validate_naming_reads(config, project_root=root)
@@ -523,6 +529,9 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
               'override_renaming_supported': True, 'renamed_concepts': [], 'skipped_done': 0}
     artifacts = []
     owned_run = None
+    capacity = CapacityLog()
+    if client is not None:
+        capacity.watch(run_concurrency(client))
     random = rng if rng is not None else SystemRandom()
 
     async def call(name, text, attachments):
@@ -532,8 +541,9 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
             bound = await client.for_role(name, require=required)
         else:
             if owned_run is None:
-                 owned_run = ModelClientRun(config, root, probe_cases=probe_cases,
-                                            local_probe_plans=local_probe_plans)
+                owned_run = ModelClientRun(config, root, probe_cases=probe_cases,
+                                           local_probe_plans=local_probe_plans)
+                capacity.watch(owned_run.concurrency)
             bound = await owned_run.for_role(name, require=required)
         return await bound.call(prompts[name], canonical_json(_naming_payload(text)), images=attachments)
 
@@ -569,13 +579,31 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
             if _load(override_checkpoints, override_key) is None:
                 _save(override_checkpoints, override_key, overrides, DRAW_REVISION)
             artifacts.append(override_checkpoints.state(override_key)['output_key'])
-            for folder in sorted(rows['folders'], key=lambda row: row['folder_id']):
+            ordered = sorted(rows['folders'], key=lambda row: row['folder_id'])
+            turns = OrderedTurns(len(ordered))
+
+            async def name_folder(item):
+                """One folder's calls, concurrent with other folders' (decision 149).
+
+                Serial order is kept where it matters: draw/head updates run at
+                this folder's turn, and the report lists and first-writer-wins concept rows are returned as `effects`
+                that the caller applies in folder order. Per-folder state (its members and folder row) is updated here.
+                """
+                index, folder = item
+                effects = []
+                try:
+                    await _name_folder(index, folder, effects)
+                finally:
+                    turns.release(index)  # a folder that never draws, or fails, still lets later folders draw
+                return effects
+
+            async def _name_folder(index, folder, effects):
                 identity = folder['folder_id']
                 if folder['error'] not in ('', 'pending_naming'):
-                    report['refused_folders'].append(identity)
-                    continue
+                    effects.append(('refused_folders', identity))
+                    return
                 if identity in source_failures:
-                    continue
+                    return
                 text, parsed = inputs[identity]
                 folder_name = identity.rsplit('/', 1)[-1]
                 context = {'folder_id': identity, 'folder_name': folder_name, 'info_file_text': text,
@@ -590,31 +618,33 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
                         assessed = await evaluate(writer, stage, key, 'info_assessor', context, (),
                                                   lambda value: parse_assessment(value, parsed, project_root=root))
                         usable = assessed['reply']['usable']
-                        report['assessed_folders'].append(identity)
+                        effects.append(('assessed_folders', identity))
                         descriptions = parse_assessment(assessed['reply'], parsed, project_root=root)
                         if descriptions is not None:
                             for member in members.get(identity, []):
                                 member.update(description=descriptions[member['position']], description_origin='generated',
                                               description_revision=assessed['model_revision'])
-                            report['description_assignments'].append(identity)
+                            effects.append(('description_assignments', identity))
                         if not usable:
-                            report['unclear_folders'].append(identity)
+                            effects.append(('unclear_folders', identity))
                     if usable:
                         folder['name_source'], folder['error'] = 'info_file', ''
-                        continue
+                        return
                     candidates = sorted(image for image in locations.get(identity, {})
                                         if by_image[image]['decode_status'] in (None, 'ok'))
                     if not candidates:
-                        report['skipped_folders'].append(identity)
+                        effects.append(('skipped_folders', identity))
                         if parsed is not None and parsed['status'] in ('parsed', 'description_mismatch'):
                             folder['name_source'], folder['error'] = 'info_file', ''
-                            report['retained_declared_folders'].append(identity)
+                            effects.append(('retained_declared_folders', identity))
                         else:
                             members[identity] = []
                             folder['name_source'] = None
-                        continue
+                        return
+                    await turns.wait(index)
                     draw_key, draw = _draw(writer, identity, candidates, naming, random, report, artifacts, recovery)
                     artifacts.append(writer.checkpoints('k2_draw').state(draw_key)['output_key'])
+                    turns.release(index)
                     stage = 'k2_naming'
                     context['sampled_image_ids'] = draw['sampled_image_ids']
                     key = _naming_key(stage, context, revisions['folder_namer'])
@@ -633,17 +663,19 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
                     reply = named['reply']
                     name_source = parse_naming(reply, folder_name, parsed, project_root=root,
                                                separator=knowledge['concept_separator'])
-                    members[identity] = _replace_members(folder, members.get(identity, []), concepts,
+                    new_concepts = {}  # merged into `concepts` in folder order: the first folder's spelling wins
+                    members[identity] = _replace_members(folder, members.get(identity, []), new_concepts,
                                                           reply['concepts'], name_source, named['model_revision'])
+                    effects.append(('concepts', new_concepts))
                     if not reply['images_consistent']:
-                        report['inconsistent_folders'].append(identity)
+                        effects.append(('inconsistent_folders', identity))
                     if naming['report']:
-                        report['model_named_folders'].append({'folder_id': identity, 'name_source': name_source,
-                                                             'sampled_image_ids': draw['sampled_image_ids'],
-                                                             'origin': 'generated',
-                                                             'model_revision': named['model_revision'],
-                                                             'concepts': deepcopy(reply['concepts']),
-                                                             'reason': reply['reason']})
+                        effects.append(('model_named_folders', {'folder_id': identity, 'name_source': name_source,
+                                                                'sampled_image_ids': draw['sampled_image_ids'],
+                                                                'origin': 'generated',
+                                                                'model_revision': named['model_revision'],
+                                                                'concepts': deepcopy(reply['concepts']),
+                                                                'reason': reply['reason']}))
                 except (ModelCallError, ValueError, OSError) as error:
                     record_probe_failure(writer, key, error, revisions[
                         'info_assessor' if stage == 'k2_assessment' else 'folder_namer'])
@@ -651,6 +683,17 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
                     if key is not None:
                         writer.checkpoints(stage).fail(key, failure_code(error), revisions=revisions[
                             'info_assessor' if stage == 'k2_assessment' else 'folder_namer'])
+
+            limit = max(config['vlm']['backends'][config['vlm']['roles'][name]['backend']]['max_concurrency']
+                        for name in ROLE_SCHEMAS)
+            # A fatal error drains the folders in flight, so every reply received is checkpointed first.
+            for effects in await flow(list(enumerate(ordered)), name_folder, limit):
+                for target, value in effects:
+                    if target == 'concepts':
+                        for identity, row in value.items():
+                            concepts.setdefault(identity, row)
+                    else:
+                        report[target].append(value)
             rows['folder_concepts'] = sorted([row for values in members.values() for row in values],
                                              key=lambda row: (row['folder_id'], row['position']))
             wanted = {row['concept_id'] for row in rows['folder_concepts']}
@@ -684,7 +727,11 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
             for table in TABLES:
                 store.catalog.build(table, rows[table])
     finally:
-        if owned_run is not None:
-            await owned_run.close()
+        try:
+            report['capacity'] = capacity.close()
+        finally:
+            if owned_run is not None:
+                await await_owned(owned_run.close())
+    report['failed'] = dict(sorted(report['failed'].items()))
     return {'rows': rows, 'report': report, 'overrides': overrides, 'effective_overrides': effective_overrides,
             'artifacts': sorted(set(artifacts))}

@@ -6,6 +6,11 @@ import ipaddress
 
 import httpx
 
+# Protocol-bound (RES-1 Q4, decision 149: back off only on real overload): the failures where the request never reached
+# the server. A read or write timeout may leave the server still working on the request, so resending it would add load
+# and, on a cloud backend, spend again; such an item fails instead. Configured `retry_statuses` cover 429 and overload.
+RETRYABLE_TRANSPORT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
 
 def endpoint_url(base, endpoint):
     """Join an explicit relative route to a secure or loopback base URL."""
@@ -70,7 +75,7 @@ class ModelTransport:
                         # while an attempt might already be sent.
                         await asyncio.shield(self.ledger.commit(token))
                     response = await self.client.post(url, json=body, headers=headers)
-                except httpx.TransportError:
+                except RETRYABLE_TRANSPORT_ERRORS:
                     if attempt == http['max_retries']:
                         raise
                 else:

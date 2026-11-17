@@ -26,10 +26,12 @@ SERVER = 'vlm.backends.embedder.server'
 # Read by K1 (families.output_fingerprint): each with a sentinel its schema admits.
 READ = {'family': 'deploy_required', 'dtype': 'deploy_required', 'attn_implementation': 'deploy_required',
         'max_length': 'deploy_required', 'image.min_pixels': 'deploy_required', 'image.max_pixels': 'deploy_required',
-        'image.max_soft_tokens': 'deploy_required', 'default_instruction': 'design_required'}
+        'image.max_soft_tokens': 'deploy_required', 'default_instruction': 'design_required',
+        # Read, not hashed (RES-1 PM answer 4): the client's max_concurrency must fit the server's admission slots.
+        'max_pending_requests': 'deploy_required'}
 # Read by the server or the reference check only: outside K1's read set.
 UNREAD = {'forward_batch': 'deploy_required', 'idle_exit_s': 'deploy_required', 'max_request_bytes': 'deploy_required',
-          'max_image_bytes': 'deploy_required', 'max_pending_requests': 'deploy_required',
+          'max_image_bytes': 'deploy_required',
           'max_connections': 'deploy_required', 'max_discard_bytes': 'deploy_required',
           'read_timeout_s': 'deploy_required', 'reference_check.min_cosine': 'fit_from_bench',
           'reference_check.max_norm_deviation': 'fit_from_bench'}
@@ -94,3 +96,26 @@ def test_a_sentinel_in_a_read_server_leaf_still_refuses(callers, caller, leaf):
 def test_the_resolved_profile_passes_every_caller(callers, caller):
     profile, check = callers[caller]
     check(_with(profile, 'idle_exit_s', 0))
+
+
+def _capacity(profile, concurrency, pending):
+    profile = _with(profile, 'max_pending_requests', pending)
+    profile['vlm']['backends']['embedder']['max_concurrency'] = concurrency
+    return profile
+
+
+@pytest.mark.parametrize('caller', CALLERS)
+def test_client_concurrency_above_the_server_admission_slots_is_refused(callers, caller):
+    """RES-1 PM answer 4: requests past `server.max_pending_requests` are refused as overloaded by the server itself,
+    so a client allowed more in flight would only retry against refusals it caused; refused at load instead."""
+    profile, check = callers[caller]
+    with pytest.raises(ConfigurationError, match=re.escape('vlm.backends.embedder.max_concurrency: exceeds server.'
+                                                           'max_pending_requests')):
+        check(_capacity(profile, 3, 2))
+
+
+@pytest.mark.parametrize('caller', CALLERS)
+@pytest.mark.parametrize('concurrency, pending', [(3, 3), (2, 5)])
+def test_client_concurrency_within_the_server_admission_slots_is_accepted(callers, caller, concurrency, pending):
+    profile, check = callers[caller]
+    check(_capacity(profile, concurrency, pending))  # non-default override: equal is allowed

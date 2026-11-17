@@ -3,7 +3,6 @@
 from copy import deepcopy
 import codecs
 import errno
-from functools import lru_cache
 import ipaddress
 import json
 import math
@@ -16,6 +15,8 @@ from urllib.parse import urlsplit
 
 from jsonschema import Draft202012Validator, exceptions, validators
 import yaml
+
+from .model_schemas import SnapshotCache
 
 
 SENTINELS = frozenset(('fit_from_gt', 'fit_from_bench', 'fit_from_pilot', 'pin_required',
@@ -378,10 +379,12 @@ def _read_yaml(path):
     return result
 
 
-@lru_cache(maxsize=SCHEMA_CACHE_CAPACITY)
-def _cached_schema(path, mtime_ns, size):
-    del mtime_ns, size
-    result = json.loads(path.read_bytes())
+# Keyed by the digest of the bytes parsed, never by a separate stat (RES-1: one snapshot for key and value).
+_SCHEMA_CACHE = SnapshotCache(SCHEMA_CACHE_CAPACITY)
+
+
+def _parsed_schema(raw):
+    result = json.loads(raw)
     Draft202012Validator.check_schema(result)
     return result
 
@@ -403,8 +406,7 @@ def _schema_path(root, schema_id):
 def _schema(root, schema_id):
     path = _schema_path(root, schema_id)
     try:
-        stat = path.stat()
-        return _cached_schema(path, stat.st_mtime_ns, stat.st_size)
+        return _SCHEMA_CACHE.fetch(path.read_bytes, _parsed_schema)
     except OSError as error:
         raise ConfigurationError(f'cannot load schema {path}: {error.strerror or str(error)}') from error
     except (ValueError, exceptions.SchemaError) as error:
@@ -853,6 +855,8 @@ EMBED_SERVER_IDENTITY_READS = ('server', 'server.family', 'server.dtype', 'serve
 # shape, while only the listed leaves are sentinel-checked (the serving limits and `reference_check` are read by
 # `embed serve` / `embed reference-check`, not by K1; T-018 P3 fix round 1, F7).
 _PARTLY_READ_CONTAINERS = ('server',)
+# Read, not hashed: the client's request concurrency must fit the server's admission slots (RES-1 Q4).
+EMBED_SERVER_CLIENT_READS = ('server.max_pending_requests',)
 # protocol-bound: request layout -> the engine whose documentation defines it (T-008 Step 0, A1 and A2).
 EMBEDDING_SHAPE_ENGINE = {'openai_input_content': ('llama_cpp', 'embed_server'), 'vllm_chat_messages': ('vllm',)}
 TEXT_PLACEHOLDER = '{text}'  # protocol-bound: the one placeholder of embedding.request.text_template
@@ -871,6 +875,7 @@ def embedder_reads(config, path):
     fields = EMBEDDER_BACKEND_READS
     if isinstance(engine, dict) and engine.get('name') == 'embed_server':
         fields += EMBED_SERVER_IDENTITY_READS  # the server's output settings are part of the embedding space
+        fields += EMBED_SERVER_CLIENT_READS
     return K1_READS + tuple(f'vlm.backends.{name}.{field}' for field in fields)
 
 
@@ -983,6 +988,12 @@ def validate_embedder_reads(config, path, sources, project_root=None):
             key = 'vision.format'
             raise ConfigurationError(f'{_source(sources, key, path)}: {key}: the embedding server decodes only '
                                      f'{", ".join(ALLOWED_FORMATS)}, not {fmt!r}')
+        # RES-1 Q4: requests beyond the server's admission slots are refused as overloaded by design, so a client that
+        # sends more would only retry against a refusal it caused itself.
+        key = f'vlm.backends.{name}.max_concurrency'
+        if _get(config, key, path) > _get(config, f'vlm.backends.{name}.server.max_pending_requests', path):
+            raise ConfigurationError(f'{_source(sources, key, path)}: {key}: exceeds server.max_pending_requests; the '
+                                     'extra requests would be refused as overloaded')
     _check_backoff_order(config['vlm']['backends'][name]['http'], path, f'vlm.backends.{name}.http', sources)
     # Decision 144 applies to chat roles only so far: K1's embedding-space identity does not include a backend cap,
     # so a cap here would be silently ignored or would change stored vectors without changing their key (T-014 Q5).

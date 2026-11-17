@@ -12,18 +12,12 @@ import pytest
 
 from assembly_fixtures import (
     DONUT, IMG, KIMONO, SnapshotDouble, assembly_config, card, entity, facet, image_row, intake_view, ir, link,
-    observation, plan, rating, shared_registry, tables, variant_group,
+    observation, plan, rating, tables, variant_group,
 )
 import prompt_enhancer.assembly as module
 from prompt_enhancer.assembly import build_assembly
-from prompt_enhancer.model_schemas import SchemaRegistry
+from prompt_enhancer import model_schemas
 from prompt_enhancer.storage import StorageError
-
-
-@pytest.fixture(autouse=True)
-def registry_once(monkeypatch):
-    """Test-only: one shared registry keeps this CPU file bounded; the F1 tests below restore the real class."""
-    monkeypatch.setattr(module, 'SchemaRegistry', shared_registry)
 
 
 @pytest.fixture
@@ -464,31 +458,35 @@ def impossible(raw):
 
 
 def test_validation_uses_the_schema_bytes_of_that_call_only(config, tmp_path, monkeypatch):
-    """F1 (P2 review): no registry outlives the bytes it was read from. A writer changes the result schema while the
-    first call constructs its registry; the first call validates with what it read, and the next call, after the
-    file is restored, validates with the restored bytes."""
+    """F1 (P2 review), kept with the RES-1 registry cache: no registry outlives the bytes it was read from. A writer
+    changes the result schema just before the first call reads the directory and restores it right after; the first
+    call validates with what it read, that registry is never published (its bytes changed), and the next call
+    validates with the restored bytes."""
     root = schema_root(tmp_path)
     path = root / 'contracts' / 'schemas' / 'assembly_result.v0.schema.json'
-    original, built = path.read_bytes(), []
+    original, reads = path.read_bytes(), []
+    real = model_schemas._read_directory
 
     def racing(directory):
-        if not built:
-            path.write_bytes(impossible(original))  # the concurrent writer, before this construction reads
-        built.append(directory)
-        registry = SchemaRegistry(directory)
+        if not reads:
+            path.write_bytes(impossible(original))  # the concurrent writer, before this snapshot is read
+        snapshot = real(directory)
+        reads.append(snapshot)
         path.write_bytes(original)  # and restores the file right after
-        return registry
+        return snapshot
 
-    monkeypatch.setattr(module, 'SchemaRegistry', racing)
+    monkeypatch.setattr(model_schemas, '_read_directory', racing)
     snapshot = SnapshotDouble(tables([SUBJECT]))
     with pytest.raises(ValidationError):
         build_assembly(intake_view(config, snapshot), plan(subject_ir()), project_root=root)
     result = build_assembly(intake_view(config, snapshot), plan(subject_ir()), project_root=root)
-    assert result['retrieval_state'] == 'retrieved' and len(built) == 2
+    assert result['retrieval_state'] == 'retrieved'
+    raced = model_schemas._REGISTRIES.digest(reads[0])
+    assert raced != model_schemas._REGISTRIES.digest(reads[-1])
+    assert raced not in model_schemas._REGISTRIES._entries  # the registry of the raced bytes was never published
 
 
-def test_a_schema_edit_between_calls_is_seen_by_the_next_call(config, tmp_path, monkeypatch):
-    monkeypatch.setattr(module, 'SchemaRegistry', SchemaRegistry)  # the real constructor, not the shared double
+def test_a_schema_edit_between_calls_is_seen_by_the_next_call(config, tmp_path):
     root = schema_root(tmp_path)
     path = root / 'contracts' / 'schemas' / 'assembly_result.v0.schema.json'
     original = path.read_bytes()

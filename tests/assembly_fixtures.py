@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 from intake_fixtures import configuration
 from prompt_enhancer.intake import IntakeResult
-from prompt_enhancer.model_schemas import SchemaRegistry
 from prompt_enhancer.storage import concept_id, image_id
 
 KIMONO, DONUT = concept_id('Kimono'), concept_id('Donut')
@@ -120,18 +119,6 @@ def assembly_config(model_test_profile, tmp_path):
     config['assembly'].update(max_facts_per_concept=10, max_facts_per_request=20, max_images_per_concept=2)
     config['edit']['max_kb_reference_images'] = 3  # labelled test-only limits
     return config
-
-
-_SHARED_REGISTRIES = {}
-
-
-def shared_registry(directory):
-    """Test-only double of `SchemaRegistry(directory)` for tests that call `build_assembly` many times: one registry
-    per directory for the whole test session, built from the real constructor. Production builds one per call; the
-    tests that check that (F1 of the P2 review) restore the real class instead of using this double."""
-    if str(directory) not in _SHARED_REGISTRIES:
-        _SHARED_REGISTRIES[str(directory)] = SchemaRegistry(directory)
-    return _SHARED_REGISTRIES[str(directory)]
 
 
 def intake_view(config, snapshot, *, task='generate', outcome='ready'):

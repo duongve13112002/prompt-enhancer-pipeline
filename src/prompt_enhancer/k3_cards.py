@@ -1,6 +1,5 @@
 """Unpublished K3 cards: models supply meaning; code owns evidence, counts and labels (R-010)."""
 
-import asyncio
 from copy import deepcopy
 from contextlib import nullcontext
 import hashlib
@@ -10,7 +9,8 @@ from pathlib import Path
 from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_card_reads
 from .k2_naming import _digest, _validate_reply, failure_code, record_probe_failure
 from .k1_embed import MODEL_TOOL_MODULES, tool_revision
-from .model_client import ModelCallError, ModelClientRun, semantic_role_settings
+from .model_client import ModelCallError, ModelClientRun, run_concurrency, semantic_role_settings
+from .model_resources import CapacityLog, await_owned, flow
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id
 from .storage.identity import canonical_json
@@ -183,6 +183,7 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
 
     handoff must be the effective P1 naming rows, overrides its effective_overrides, and observations the
     current P2 output. The caller owns the target snapshot ID and any injected model client.
+    Injected run doubles expose `.concurrency: BackendConcurrency` and async `for_role`; bound doubles expose `.run`.
     """
     root = store.catalog.root
     validate_card_reads(config, project_root=root)
@@ -249,6 +250,12 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
     report = {'built': 0, 'reused_grouping': 0, 'failed': {}, 'lint_findings': [], 'unmatched_overrides': sorted(unknown)}
     artifacts, result = [], []
     owned_run = None
+    by_concept = {}  # grouped once, in `current` order, instead of a filter per concept
+    for row in current:
+        by_concept.setdefault(row['concept_id'], []).append(row)
+    capacity = CapacityLog()
+    if client is not None:
+        capacity.watch(run_concurrency(client))
     try:
         with nullcontext(writer) if writer is not None else store.writer() as writer:
             grouping = writer.checkpoints('k3_grouping')
@@ -259,8 +266,7 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
                 identity = concept['concept_id']
                 override = effective.get(identity, {})
                 curated = _curated(concept, handoff, override)
-                rows, payload = card_inputs([row for row in current if row['concept_id'] == identity],
-                                            curated, concept['display_name'])
+                rows, payload = card_inputs(by_concept.get(identity, []), curated, concept['display_name'])
                 payload['suppressed_facets'] = override.get('suppress', [])
                 key = artifact_key('k3_grouping', _digest({'identity': 'card_payload_v1', 'payload': payload}), revisions)
                 record = None
@@ -282,6 +288,7 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
                             if owned_run is None:
                                 owned_run = ModelClientRun(config, root, probe_cases=probe_cases,
                                                            local_probe_plans=local_probe_plans)
+                                capacity.watch(owned_run.concurrency)
                             bound = await owned_run.for_role('card_builder')
                         else:
                             bound = await client.for_role('card_builder')
@@ -329,19 +336,15 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
                     report['failed'][identity] = failure_code(error)
 
             ordered = [concepts[key] for key in sorted(concepts)]
-            workers = backends[role['backend']]['max_concurrency']
-            for start in range(0, len(ordered), workers):
-                pending = [asyncio.create_task(evaluate(concept)) for concept in ordered[start:start + workers]]
-                try:
-                    await asyncio.gather(*pending)
-                except BaseException:
-                    for task in pending:
-                        task.cancel()
-                    await asyncio.gather(*pending, return_exceptions=True)
-                    raise
+            # Per-item flow (decision 149); a fatal error drains the cards in flight before it is raised.
+            await flow(ordered, evaluate, backends[role['backend']]['max_concurrency'])
     finally:
-        if owned_run is not None:
-            await owned_run.close()
+        try:
+            report['capacity'] = capacity.close()
+        finally:
+            if owned_run is not None:
+                await await_owned(owned_run.close())
+    report['failed'] = dict(sorted(report['failed'].items()))
     report['lint_findings'].extend({'code': 'UNMATCHED_OVERRIDE', 'message': name, 'refs': []}
                                    for name in unknown if config['cards']['lint_report'])
     report['lint_findings'].extend({'code': 'UNMATCHED_FOLDER_OVERRIDE', 'message': path, 'refs': []}

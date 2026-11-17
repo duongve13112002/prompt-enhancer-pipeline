@@ -19,7 +19,8 @@ from jsonschema import ValidationError
 from .candidates import build_candidates, validate_shortlist
 from .config import _EXACT_INTEGERS, validate_planner_reads
 from .model_client import ModelCallError
-from .model_schemas import SchemaRegistry
+from .model_resources import flow
+from .model_schemas import cached_registry
 from .profile_prompt import load_prompt
 
 ROLE = 'planner'  # protocol-bound VLM role name (contracts/vlm-request.md)
@@ -293,7 +294,7 @@ async def plan(intake_result, shortlist, client, *, project_root, embedder=None)
                 entries, variants = [], {}
                 grounded = False
                 warnings.append('RETRIEVAL_FAILED')
-    registry = SchemaRegistry(project_root / 'contracts' / 'schemas')
+    registry = cached_registry(project_root / 'contracts' / 'schemas')  # checked once while the files are unchanged
     groups = _facet_groups(registry)
     role = config['vlm']['roles'][ROLE]
     system = load_prompt(project_root, role['prompt_id'])
@@ -345,10 +346,15 @@ async def plan(intake_result, shortlist, client, *, project_root, embedder=None)
         if not grounded or snapshot is None or not mentions:
             break
         known, added = {entry['concept_id'] for entry in entries}, []
-        for mention in mentions:
+
+        async def lookup(mention):
             # One extra S1 lookup per mention, over the same pin and sources (S2 second-chance lookup).
-            found = await build_candidates(replace(intake_result, payload=dict(payload, prompt=mention)),
-                                           embedder=embedder)
+            return await build_candidates(replace(intake_result, payload=dict(payload, prompt=mention)),
+                                          embedder=embedder)
+
+        # All lookups at once (decision 149): the shared embedder's transport bounds requests in flight to its
+        # max_concurrency; results are merged in mention order, as the serial loop did.
+        for found in await flow(mentions, lookup, len(mentions)):
             if found['state'] != 'ready':
                 _warn('RETRIEVAL_FAILED')
             for entry in found['candidates']:

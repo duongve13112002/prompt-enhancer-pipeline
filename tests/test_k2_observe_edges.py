@@ -8,12 +8,13 @@ from io import BytesIO
 from PIL import Image
 import pytest
 
+from concurrency_fixtures import ArrivalGate
 from k2_fixtures import folder, image_bytes
 from k2_observe_fixtures import ObserverServer, invoke_observer, k1_result, observation, states
 from prompt_enhancer.config import ConfigurationError
 from prompt_enhancer.k2_observe import observe_images
 from prompt_enhancer.model_client import BoundModelClient
-from prompt_enhancer.model_resources import BudgetExhausted
+from prompt_enhancer.model_resources import BackendConcurrency, BudgetExhausted
 from prompt_enhancer.storage import StorageError
 
 
@@ -65,15 +66,17 @@ def test_observe_bounded_concurrency_uses_configured_backend_limit(k2_env):
     env.config['vlm']['backends']['main']['max_concurrency'] = 2
     active = []
     peak = []
+    gate = ArrivalGate(2)
     class YieldingServer(ObserverServer):
         """Labelled yielding HTTP double; no latency/performance measurement."""
         async def handler(self, request):
             active.append(1)
             peak.append(len(active))
-            await asyncio.sleep(0)
-            response = super().handler(request)
-            active.pop()
-            return response
+            try:
+                await gate.arrive()
+                return super().handler(request)
+            finally:
+                active.pop()
     result = invoke_observer(env, YieldingServer())
     assert result['report']['observed'] == 4 and max(peak) == 2 and not active
 
@@ -121,19 +124,23 @@ def test_injected_client_remains_caller_owned(k2_env):
     asyncio.run(execute())
 
 
-def test_fatal_batch_error_awaits_cancelled_siblings_before_writer_exit(k2_env):
+def test_fatal_batch_error_drains_running_siblings_before_writer_exit(k2_env):
+    """RES-1 PM answer 3: a fatal error admits nothing new, drains the calls in flight (their answers are kept), then
+    raises; the writer exits only after every sibling finished."""
     env = k2_env
     folder(env, 'f', 'A', count=2)
     env.config['observe']['representatives_per_folder'] = 2
     env.config['vlm']['backends']['main']['max_concurrency'] = 2
     inputs = k1_result(env)
-    finished = []
+    finished, cancelled = [], []
     async def execute():
         started = asyncio.Event()
         blocked = asyncio.Event()
         calls = []
         class BlockingClient:
-            """Labelled fatal/cancellation double; no transport, model or sleep deadline inference."""
+            """Labelled fatal/drain double; no transport, model or sleep deadline inference."""
+            # Injected client contract: async for_role plus run-owned BackendConcurrency, even without HTTP.
+            concurrency = BackendConcurrency({})
             async def for_role(self, role):
                 return self
             async def call(self, *args, **kwargs):
@@ -143,18 +150,23 @@ def test_fatal_batch_error_awaits_cancelled_siblings_before_writer_exit(k2_env):
                     if index == 0:
                         started.set()
                         await blocked.wait()
-                    else:
-                        await started.wait()
-                        raise StorageError('labelled fatal storage/input boundary')
+                        return None, {'status': 'HTTP_ERROR'}  # the answer received after the fatal error
+                    await started.wait()
+                    asyncio.get_running_loop().call_later(0.05, blocked.set)
+                    raise StorageError('labelled fatal storage/input boundary')
+                except asyncio.CancelledError:
+                    cancelled.append(index)
+                    raise
                 finally:
                     finished.append(index)
         with pytest.raises(StorageError, match='labelled fatal'):
             await asyncio.wait_for(observe_images(env.store, env.config, knowledge_root=env.source,
-                client=BlockingClient(), **inputs), timeout=2)
-        assert sorted(finished) == [0, 1]
+                client=BlockingClient(), **inputs), timeout=5)
+        assert sorted(finished) == [0, 1] and cancelled == []
         with env.store.writer():
             pass
     asyncio.run(execute())
+    assert [row['state'] for row in states(env)] == ['failed']  # the drained answer is recorded
 
 
 def test_actual_fallback_records_actual_model_provenance(k2_env):

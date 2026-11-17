@@ -104,6 +104,42 @@ def test_transport_timeout_and_cancellation_release_concurrency():
     asyncio.run(run())
 
 
+RETRIED = [httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout]
+NOT_RETRIED = [httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError, httpx.RemoteProtocolError]
+
+
+@pytest.mark.parametrize('error', RETRIED + NOT_RETRIED)
+def test_only_errors_before_the_request_reached_the_server_are_retried(error):
+    """RES-1 PM answer 4: back-off only when the request never reached the server (connect or pool); a read or write
+    failure fails the item at once, because the server may already be working on it (no duplicated load)."""
+    async def run():
+        attempts = []
+
+        def handler(request):
+            attempts.append(request.url.path)
+            if len(attempts) == 1:
+                raise error('labelled transport failure', request=request)
+            return httpx.Response(200, json={'ok': True})
+
+        settings = {'provider': 'openai_compatible', 'base_urls': ['http://127.0.0.1'],
+                    'http': dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
+                                 max_retries=2, retry_statuses=[], backoff_initial_s=0, backoff_max_s=0)}
+        client = ModelTransport('main', settings, BackendConcurrency({'main': 1}),
+                                transport=httpx.MockTransport(handler))
+        try:
+            if error in RETRIED:
+                assert (await client.post('chat', {}, {})).status_code == 200
+                assert len(attempts) == 2
+            else:
+                with pytest.raises(error):
+                    await client.post('chat', {}, {})
+                assert len(attempts) == 1
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+
+
 # T-008 fix round 5 (N1): capped backoff without the unbounded product 2**attempt.
 FLOAT_MAX = sys.float_info.max  # test-only oracle: the largest finite binary64 value
 LARGEST_TIMER = 2 ** 1024 - 2 ** 970 - 1  # test-only oracle: the largest int float() converts (T-008 timer_probe)

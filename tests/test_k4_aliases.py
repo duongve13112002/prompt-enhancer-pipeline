@@ -360,6 +360,7 @@ def test_alias_store_reads_are_linear_cold_and_cached(k2_env, monkeypatch):
 
 @pytest.mark.parametrize('outcome', ['success', 'error', 'cancel'])
 def test_alias_concurrency_and_close(k2_env, monkeypatch, outcome):
+    from concurrency_fixtures import ArrivalGate
     import prompt_enhancer.k4_aliases as module
     k2_env.config['vlm']['backends']['main']['max_concurrency'] = 2
     counts = Counter()
@@ -367,6 +368,7 @@ def test_alias_concurrency_and_close(k2_env, monkeypatch, outcome):
 
     async def execute():
         entered = asyncio.Event()
+        gate = ArrivalGate(2)
 
         def factory(*args, **kwargs):
             run = server.run(k2_env)
@@ -381,18 +383,19 @@ def test_alias_concurrency_and_close(k2_env, monkeypatch, outcome):
                 async def call(*args, **kwargs):
                     counts['active'] += 1
                     counts['peak'] = max(counts['peak'], counts['active'])
-                    entered.set()
                     try:
+                        await gate.arrive()
+                        entered.set()
                         if outcome == 'cancel':
                             await asyncio.Event().wait()
-                        await asyncio.sleep(0)
                         if outcome == 'error':
                             raise ModelCallError('Labelled test failure')
                         return await bound.call(*args, **kwargs)
                     finally:
                         counts['active'] -= 1
                 return SimpleNamespace(call=call)
-            return SimpleNamespace(for_role=for_role, close=close)
+            # RES-1: the stage records the run's requests in flight, so the double exposes the run's concurrency.
+            return SimpleNamespace(for_role=for_role, close=close, concurrency=run.concurrency)
 
         monkeypatch.setattr(module, 'ModelClientRun', factory)
         task = asyncio.create_task(build_aliases(k2_env.store, k2_env.config, **inputs(('A', 'B', 'C'))))

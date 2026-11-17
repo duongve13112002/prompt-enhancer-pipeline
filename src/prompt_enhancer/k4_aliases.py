@@ -1,6 +1,5 @@
 """Unpublished K4 aliases: model text stays data; code owns identity and collision status (R-026)."""
 
-import asyncio
 from copy import deepcopy
 from contextlib import nullcontext
 import hashlib
@@ -10,7 +9,8 @@ from pathlib import Path
 from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_alias_reads
 from .k2_naming import _digest, _validate_reply, failure_code, record_probe_failure
 from .k1_embed import MODEL_TOOL_MODULES, tool_revision
-from .model_client import ModelCallError, ModelClientRun, semantic_role_settings
+from .model_client import ModelCallError, ModelClientRun, run_concurrency, semantic_role_settings
+from .model_resources import CapacityLog, await_owned, flow
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id, normalise_name
 from .storage.identity import canonical_json
@@ -130,6 +130,7 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
     """Return aliases, collision lint and artifact references; never scan the KB or publish.
 
     handoff is the effective naming output; cards are current K3 rows. An injected client is caller-owned.
+    Injected run doubles expose `.concurrency: BackendConcurrency` and async `for_role`; bound doubles expose `.run`.
     """
     root = store.catalog.root
     validate_alias_reads(config, project_root=root)
@@ -148,6 +149,9 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
                                    'tool': tool_revision('k4_aliases', 'k2_naming', *MODEL_TOOL_MODULES)})}
     candidates, artifacts = {}, []
     owned_run = None
+    capacity = CapacityLog()
+    if client is not None:
+        capacity.watch(run_concurrency(client))
     try:
         with nullcontext(writer) if writer is not None else store.writer() as writer:
             generated = writer.checkpoints('k4_generation')
@@ -183,6 +187,7 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
                             if owned_run is None:
                                 owned_run = ModelClientRun(config, root, probe_cases=probe_cases,
                                                            local_probe_plans=local_probe_plans)
+                                capacity.watch(owned_run.concurrency)
                             bound = await owned_run.for_role('alias_generator')
                         else:
                             bound = await client.for_role('alias_generator')
@@ -208,17 +213,8 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
                     report['failed'][identity] = failure_code(error)
 
             ordered = [concepts[key] for key in sorted(concepts)]
-            if generate:
-                workers = config['vlm']['backends'][role['backend']]['max_concurrency']
-                for start in range(0, len(ordered), workers):
-                    pending = [asyncio.create_task(evaluate(concept)) for concept in ordered[start:start + workers]]
-                    try:
-                        await asyncio.gather(*pending)
-                    except BaseException:
-                        for task in pending:
-                            task.cancel()
-                        await asyncio.gather(*pending, return_exceptions=True)
-                        raise
+            if generate:  # per-item flow (decision 149); a fatal error drains the calls in flight before it is raised
+                await flow(ordered, evaluate, config['vlm']['backends'][role['backend']]['max_concurrency'])
             rows = []
             for concept in ordered:
                 identity = concept['concept_id']
@@ -258,7 +254,11 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
                 artifacts.append(documents.commit(document_key, 'k4_aliases', canonical_json(rows).encode('utf-8'),
                                                   revisions=document_revisions))
     finally:
-        if owned_run is not None:
-            await owned_run.close()
+        try:
+            report['capacity'] = capacity.close()
+        finally:
+            if owned_run is not None:
+                await await_owned(owned_run.close())
+    report['failed'] = dict(sorted(report['failed'].items()))
     report['lint_findings'].sort(key=canonical_json)
     return {'rows': {'aliases': rows}, 'report': report, 'artifacts': sorted(set(artifacts))}

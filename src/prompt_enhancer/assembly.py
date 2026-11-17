@@ -14,7 +14,7 @@ from pathlib import Path
 import secrets
 
 from .config import validate_assembly_reads
-from .model_schemas import SchemaRegistry
+from .model_schemas import cached_registry
 from .planner import SEED_BITS, _seed, pick
 
 RESULT_SCHEMA = 'assembly_result.v0'  # artifact-bound
@@ -302,8 +302,8 @@ def build_assembly(intake_result, plan_result, *, project_root):
         raise ValueError('S3 requires the request task')
     root = Path(project_root).resolve()
     validate_assembly_reads(config, project_root=root)
-    # One registry per call, built from one read of the files; sharing it across calls is RES-1's cache (decision 149).
-    registry = SchemaRegistry(root / 'contracts' / 'schemas')
+    # Shared across calls while the schema files keep their bytes; key and registry come from one read (RES-1 row 10).
+    registry = cached_registry(root / 'contracts' / 'schemas')
     if not isinstance(plan_result, dict) or plan_result.get('intent_ir') is None:
         raise ValueError('S3 requires a plan with an Intent IR')
     registry.validate(PLAN_SCHEMA, plan_result)

@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from prompt_enhancer import ConfigurationError, load_config, load_profile, resolve_writer_format
-from prompt_enhancer.config import _cached_schema, _schema
+from prompt_enhancer.config import _SCHEMA_CACHE, _schema
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -275,10 +275,10 @@ def test_schema_cache_invalidates_on_file_change(tmp_path):
     path = tmp_path / 'contracts/schemas/sample.v0.schema.json'
     path.parent.mkdir(parents=True)
     path.write_text('{"type": "string"}', encoding='utf-8')
-    _cached_schema.cache_clear()
+    _SCHEMA_CACHE.clear()
     first = _schema(tmp_path, 'sample.v0')
     assert _schema(tmp_path, 'sample.v0') is first
-    assert _cached_schema.cache_info().hits >= 1
+    assert _SCHEMA_CACHE.hits >= 1
     path.write_text(json.dumps({'type': 'integer', 'description': 'updated'}), encoding='utf-8')
     assert _schema(tmp_path, 'sample.v0')['type'] == 'integer'
 

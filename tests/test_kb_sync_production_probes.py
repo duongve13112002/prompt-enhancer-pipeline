@@ -16,6 +16,7 @@ import yaml
 from k2_fixtures import folder, source_tree
 from kb_sync_fixtures import SyncServer
 from prompt_enhancer import __main__ as cli
+from prompt_enhancer import model_schemas
 from prompt_enhancer.model_client import ModelClientRun
 
 
@@ -112,6 +113,14 @@ def test_kb_sync_cli_probes_without_injection(k2_env, monkeypatch, capsys):
         await close(run)
 
     monkeypatch.setattr(ModelClientRun, 'close', record_close)
+    runs, start = [], ModelClientRun.__init__
+
+    def record_run(run, *args, **kwargs):  # labelled recording wrapper around the real constructor
+        start(run, *args, **kwargs)
+        runs.append(run)
+
+    monkeypatch.setattr(ModelClientRun, '__init__', record_run)
+    builds = model_schemas._REGISTRIES.builds
     env = k2_env
     folder(env, 'declared', 'Declared\nSynthetic description')
     folder(env, 'unnamed', count=2)
@@ -142,6 +151,8 @@ def test_kb_sync_cli_probes_without_injection(k2_env, monkeypatch, capsys):
         assert published['status'] == 'published'
         assert {'info_assessor', 'folder_namer', 'observer', 'card_builder', 'alias_generator'} <= set(double.roles)
         assert len(double.probe_requests) == 8  # One backend/run: text, schema, image, combined and ordered pair.
+        # RES-1 PM answer 5: one sync holds one run, so one probe per backend, one schema registry and one ledger.
+        assert len(runs) == 1 and model_schemas._REGISTRIES.builds - builds <= 1
         count = (len(double.probe_requests), len(double.requests), len(double.embedder.requests))
         assert cli.main(['kb', 'sync', '--config', str(profile)]) == 0
         repeated = json.loads(capsys.readouterr().out)

@@ -81,7 +81,9 @@ def test_rerun_makes_no_call_and_returns_the_same_table(kb, model_test_profile):
 def test_interrupted_run_resumes_at_the_first_unfinished_image(kb, model_test_profile, monkeypatch, tmp_path,
                                                                project_root):
     store, source, handoff = kb
-    config = k1_profile(model_test_profile)
+    # One image per chunk: with the flow limit of max_concurrency + 1 = 2 chunks, at most one other chunk is drained
+    # after the interruption, so some images are always left for the resume.
+    config = k1_profile(model_test_profile, batch_size=1)
     original = Checkpoints.commit
     calls = []
 
@@ -96,14 +98,23 @@ def test_interrupted_run_resumes_at_the_first_unfinished_image(kb, model_test_pr
     with pytest.raises(RuntimeError, match='simulated'):
         run(store, config, handoff, source, EmbeddingServer())
     monkeypatch.setattr(Checkpoints, 'commit', original)
+    # RES-1 Q3: the fatal error drains the chunks in flight, so every reply already received is also checkpointed.
+    finished = len(calls)
+    assert 2 <= finished < len(handoff['images'])
+    with store.writer() as writer:
+        checkpoints = writer.checkpoints(k1_embed.IMAGE_STAGE)
+        cached_refusals = sum(json.loads(checkpoints.load(key))['vector'] is None for key in calls)
     server = EmbeddingServer()
     resumed = run(store, config, handoff, source, server)
     report = resumed['report']
-    assert report['skipped_done'] == 2 and report['embedded'] + len(report['decode_failed']) == 2
+    assert report['skipped_done'] == finished
+    # decode_failed is the full semantic failure map, including cached refusals; counters describe this invocation.
+    assert report['embedded'] + len(report['decode_failed']) - cached_refusals == len(handoff['images']) - finished
     assert sum(server.input_counts()) == report['embedded']  # only unfinished images reach the server
     fresh = make_store(project_root, tmp_path / 'fresh')
     clean = run(fresh, config, k0_handoff(fresh, source), source, EmbeddingServer())
     assert resumed['image_embeddings'].equals(clean['image_embeddings'])
+    assert report['decode_failed'] == clean['report']['decode_failed']
 
 
 def test_embedder_change_reembeds_every_image(kb, model_test_profile):
