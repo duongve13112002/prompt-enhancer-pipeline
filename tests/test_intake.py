@@ -229,7 +229,8 @@ def test_refusal_exception_classes_only(env, project_root, monkeypatch, error, c
 
     monkeypatch.setattr(module, 'resolve_profile', fail)  # labelled failing profile-boundary double
     payload = checked(intake(request(), config, project_root=project_root), project_root)
-    assert payload['error'] == {'code': code, 'message': f'intake refused ({type(error).__name__})'}
+    label = code if isinstance(error, module._Refusal) else type(error).__name__
+    assert payload['error'] == {'code': code, 'message': f'intake refused ({label})'}
     assert payload['envelope']['status'] == 'failed'
 
 
@@ -286,7 +287,7 @@ def test_generate_image_refused_before_decode(env, project_root, monkeypatch, so
     for name in ('_image', 'configure_decode_backstop', 'prepare_vision_image_with_info'):
         monkeypatch.setattr(module, name, forbidden)
     payload = checked(intake(request(source_image=source), config, project_root=project_root), project_root)
-    assert payload['error'] == {'code': 'SOURCE_IMAGE_UNEXPECTED', 'message': 'intake refused (_Refusal)'}
+    assert payload['error'] == {'code': 'SOURCE_IMAGE_UNEXPECTED', 'message': 'intake refused (SOURCE_IMAGE_UNEXPECTED)'}
     assert payload['task'] == 'generate' and payload['source_image'] is None
     assert payload['effective_config'] is None
 
@@ -313,6 +314,7 @@ def test_refusal_envelope_identity(env, project_root, monkeypatch, with_source):
     assert payload['prompt'] == req['prompt'] and payload['task'] == req['task']
     assert payload['profile_id'] == 'p1' and payload['effective_config'] == config
     assert payload['error']['code'] == 'INTAKE_DEADLINE'
+    assert payload['error']['message'] == 'intake refused (INTAKE_DEADLINE at snapshot end)'
     assert payload['envelope'] == {
         'status': 'failed', 'output': None, 'attachments': [],
         'source_binding': {'source_image_id': image_id} if with_source else None,

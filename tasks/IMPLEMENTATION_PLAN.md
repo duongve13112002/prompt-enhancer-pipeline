@@ -19,7 +19,7 @@ Plan only. **Every code task (T-005 onward, the tooling tasks T-020 to T-026, an
 | T-011 | K4 aliases and K5 serving index | feature | R-015, R-016 | T-010 | yes |
 | T-012 | P profiles: register, manifest drafting, conflict lint, golden tests | feature | R-004 | T-009 | yes |
 | T-013 | S0 intake and S1 candidates, with the retrieval-off isolation test | feature | R-009 | T-011 | yes |
-| T-014 | S2 planner and S3 knowledge assembly | feature | R-001, R-008, R-013 | T-013 | yes, dev GPU |
+| T-014 | S2 planner and S3 knowledge assembly; also the per-backend `vlm.backends.<name>.image.max_side` (decision 144) | feature | R-001, R-008, R-013 | T-013 | yes, dev GPU |
 | T-015 | S4 writer, S5 validation, S6 envelope | feature | R-024, R-027 | T-014, T-012 | yes, dev GPU |
 | T-016 | Command-line entry points and the run guide for the user's deployment | feature | R-020 | T-015 | yes |
 | T-017 | Pilot on the dev machine: every scenario end to end | run | R-020 | T-016, T-003 | yes |

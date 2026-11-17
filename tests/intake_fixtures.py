@@ -20,7 +20,11 @@ def configuration(model_test_profile, tmp_path):
     config['index'].update(engine='numpy_exact', metric='cosine', build={'block_rows': 2},
                            lexical={'kind': 'char_ngram', 'ngram_size': 2})
     config['candidates']['shortlist_size'] = 2
+    config['candidates'].update(rrf_constant=10, max_prompt_windows=10000)  # labelled test-only
+    for source in config['candidates']['sources'].values():
+        source['depth'] = 3
     config['embedding']['query_text_limit'] = 100
+    config['embedding']['query_text_template'] = 'query: {text}'  # labelled test-only, not an E5 prefix
     config['assembly'].update(max_facts_per_concept=2, max_images_per_concept=1,
                               max_facts_per_request=4, fact_order='test-order')
     config['edit']['max_kb_reference_images'] = 0

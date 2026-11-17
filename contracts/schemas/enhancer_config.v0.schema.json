@@ -768,6 +768,7 @@
                 }
               ]
             },
+            "query_text_template": {"type": "string", "minLength": 1},
             "query_text_limit": {
               "anyOf": [
                 {
@@ -818,6 +819,7 @@
             "chosen",
             "revision",
             "query_text_limit",
+            "query_text_template",
             "backend",
             "request",
             "dimension",
@@ -1509,10 +1511,30 @@
                                   ]
                                 }
                               ]
+                            },
+                            "depth": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1
+                                },
+                                {
+                                  "enum": [
+                                    "fit_from_gt",
+                                    "fit_from_bench",
+                                    "fit_from_pilot",
+                                    "pin_required",
+                                    "deploy_required",
+                                    "design_required",
+                                    "ask_user"
+                                  ]
+                                }
+                              ]
                             }
                           },
                           "required": [
-                            "enabled"
+                            "enabled",
+                            "depth"
                           ],
                           "additionalProperties": false
                         },
@@ -1551,10 +1573,30 @@
                                   ]
                                 }
                               ]
+                            },
+                            "depth": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1
+                                },
+                                {
+                                  "enum": [
+                                    "fit_from_gt",
+                                    "fit_from_bench",
+                                    "fit_from_pilot",
+                                    "pin_required",
+                                    "deploy_required",
+                                    "design_required",
+                                    "ask_user"
+                                  ]
+                                }
+                              ]
                             }
                           },
                           "required": [
-                            "enabled"
+                            "enabled",
+                            "depth"
                           ],
                           "additionalProperties": false
                         },
@@ -1593,10 +1635,30 @@
                                   ]
                                 }
                               ]
+                            },
+                            "depth": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1
+                                },
+                                {
+                                  "enum": [
+                                    "fit_from_gt",
+                                    "fit_from_bench",
+                                    "fit_from_pilot",
+                                    "pin_required",
+                                    "deploy_required",
+                                    "design_required",
+                                    "ask_user"
+                                  ]
+                                }
+                              ]
                             }
                           },
                           "required": [
-                            "enabled"
+                            "enabled",
+                            "depth"
                           ],
                           "additionalProperties": false
                         },
@@ -1655,7 +1717,9 @@
             "fusion": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "enum": [
+                    "rrf"
+                  ]
                 },
                 {
                   "enum": [
@@ -1688,13 +1752,53 @@
                   ]
                 }
               ]
+            },
+            "rrf_constant": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "max_prompt_windows": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
             }
           },
           "required": [
             "sources",
             "segment_prompt",
             "fusion",
-            "shortlist_size"
+            "shortlist_size",
+            "rrf_constant",
+            "max_prompt_windows"
           ],
           "additionalProperties": false
         },

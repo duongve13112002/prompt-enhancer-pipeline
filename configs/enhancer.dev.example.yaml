@@ -20,6 +20,14 @@ runtime:
   gpus: [0]
   vram_budget_gb: 7                      # the user's dev GPU, decision 20: nvidia-smi reports 8151 MiB in total (T-018 P2), below 8 GiB, so 8 is refused at load
 
+candidates:
+  sources:
+    alias: {enabled: true, depth: fit_from_gt}
+    lexical: {enabled: true, depth: fit_from_gt}
+    dense: {enabled: true, depth: fit_from_gt}
+  rrf_constant: fit_from_gt
+  max_prompt_windows: fit_from_bench
+
 vision:
   max_decode_pixels: deploy_required      # No measured dev decode limit; independent of VLM backend limits
   max_image_side: 1024                   # decision 84: experiments and benchmarks keep the longer side at 1024 (aspect ratio kept, no upscale)
@@ -28,7 +36,8 @@ request_overrides:
   allowed_keys: []
 
 embedding:
-  chosen: embeddinggemma-2              # N104; the smoke choice for the dev machine, small enough to share the dev GPU; experiment E5 chooses for the full profile
+  query_text_template: design_required   # E5 supplies the query prefix independently of the document prefix
+  chosen: embeddinggemma-2             # N104; the smoke choice for the dev machine, small enough to share the dev GPU; experiment E5 chooses for the full profile
   backend: embedder                      # T-018: this project's embedding server on the original weights (decisions 137 to 139); the Qwen3-VL-Embedding-2B comparison selects embedder_qwen3vl2b through enhancer.dev-qwen3vl2b.example.yaml
   revision: f9972ac22e696a105c482202646979e33e4b5a1e   # must equal the backend's model.revision
   request:                               # EmbeddingGemma 2: no system instruction (N104); the document prefix is the card's `Document` prompt

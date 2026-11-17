@@ -676,7 +676,14 @@ def _get(config, key, path):
 def _command_reads(command, config):
     keys = COMMAND_READS[command]
     if command not in REQUEST_COMMANDS:
-        return tuple(part for key in keys for part in (MODEL_VISION_READS if key == 'vision' else (key,)))
+        # Query templates belong to S1, even when offline commands validate the other embedding leaves.
+        def expand(key):
+            if key == 'vision':
+                return MODEL_VISION_READS
+            if key == 'embedding' and isinstance(config.get('embedding'), dict):
+                return tuple('embedding.' + name for name in config['embedding'] if name != 'query_text_template')
+            return (key,)
+        return tuple(part for key in keys for part in expand(key))
     keys = (*keys, 'request_overrides')
     if not isinstance(config['rag'], dict):
         return keys
@@ -1550,13 +1557,66 @@ def _validate_override_policy(config, schema, path):
     return allowed
 
 
+CANDIDATE_READS = tuple(f'candidates.sources.{name}.{field}'
+                        for name in ('alias', 'lexical', 'dense') for field in ('enabled', 'depth')) + (
+    'candidates.segment_prompt', 'candidates.fusion', 'candidates.shortlist_size',
+    'candidates.rrf_constant', 'candidates.max_prompt_windows',
+    'embedding.query_text_template', 'embedding.query_text_limit')
+
+
+def validate_candidates_reads(config, path='configuration', sources=None, project_root=None):
+    """S1's direct-entry and request-startup gate; query-only values never enter K1's offline reads."""
+    sources = {} if sources is None else sources
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    schema = _schema(root, 'enhancer_config.v0')
+    for key in CANDIDATE_READS:
+        value = _get(config, key, path)
+        _sentinel(value, path, key, sources)
+        _validate(value, _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
+        _require_finite(value, path, key, sources)
+        if key.endswith('.depth') or key in ('candidates.max_prompt_windows', 'embedding.query_text_limit'):
+            if type(value) is not int or not 0 < value <= sys.maxsize:
+                raise ConfigurationError(f'{path}: {key}: expected a positive native integer')
+    if not _converts_to_float(config['candidates']['rrf_constant']):
+        raise ConfigurationError(f'{path}: candidates.rrf_constant: expected a finite representable number')
+    if config['embedding']['query_text_template'].count(TEXT_PLACEHOLDER) != 1:
+        raise ConfigurationError(f'{path}: embedding.query_text_template: expected exactly one {TEXT_PLACEHOLDER}')
+    if config['candidates']['sources']['dense']['enabled']:
+        validate_embedder_reads(config, path, sources, root)
+        _validate_embedding(config, path, sources)
+    return config['candidates']
+
+
+def _validate_request_base(config, schema):
+    """Administrator diagnostics name schema-owned fields, without echoing values or arbitrary map keys."""
+    try:
+        _validate(config, schema, 'configuration')
+    except ConfigurationError:
+        def leaves(error):
+            return [leaf for child in error.context for leaf in leaves(child)] if error.context else [error]
+        errors = [leaf for error in Draft202012Validator(schema).iter_errors(config) for leaf in leaves(error)]
+        error = max(errors, key=lambda item: len(item.absolute_path))
+        path = list(error.absolute_schema_path)
+        fields = [path[i + 1] for i, part in enumerate(path[:-1]) if part == 'properties']
+        if error.validator == 'required' and isinstance(error.instance, dict):
+            fields += [key for key in error.validator_value if key not in error.instance][:1]
+        key = '.'.join(fields) or 'schema_version'
+        raise ConfigurationError(f'configuration: {key}: invalid base configuration') from None
+    try:
+        return _validate_override_policy(config, schema, 'configuration')
+    except ConfigurationError:
+        raise ConfigurationError('configuration: request_overrides.allowed_keys: invalid override policy') from None
+
+
 def effective_request_config(config, overrides, *, project_root):
     """Apply only administrator-permitted, strictly typed overrides, then run request preflight."""
+    root = Path(project_root).resolve()
     try:
-        root = Path(project_root).resolve()
         schema = _schema(root, 'enhancer_config.v0')
-        _validate(config, schema, 'configuration')
-        allowed = _validate_override_policy(config, schema, 'configuration')
+    except ConfigurationError:
+        raise ConfigurationError('configuration: invalid base configuration') from None
+    allowed = _validate_request_base(config, schema)
+    try:
         if not isinstance(overrides, dict):
             raise ConfigurationError('request.overrides: expected an object')
         effective = deepcopy(config)
@@ -1648,6 +1708,7 @@ def _validate_loaded_config(config, command, root, path, sources):
         _require_float_seconds(config['runtime']['intake_deadline_s'], path, 'runtime.intake_deadline_s', sources)
         if config['rag']['enabled']:
             validate_index_reads(config, path, sources, root)
+            validate_candidates_reads(config, path, sources, root)
     if command == 'kb sync':
         for key in ('storage.lock.timeout_s', 'storage.lock.poll_s'):
             _require_float_seconds(_get(config, key, path), path, key, sources)

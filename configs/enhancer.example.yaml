@@ -49,6 +49,7 @@ embedding:                               # K1, experiment E5
   chosen: fit_from_gt
   revision: pin_required
   query_text_limit: design_required      # some encoders cap text length (SigLIP 2 does, N008); applies to that candidate only
+  query_text_template: design_required   # S1 query prefix, exactly one {text}; E5 supplies the value
   backend: deploy_required               # name of the vlm.backends entry that serves the embedder (openai_compatible only); its model.revision must equal revision above
   request:                               # T-008: the documented image request layouts differ per engine and model; fixed by the live smoke
     shape: design_required               # openai_input_content (llama.cpp /v1/embeddings with --mmproj, or this project's embed_server) | vllm_chat_messages (vLLM /v1/embeddings with messages)
@@ -97,12 +98,14 @@ rag:
 
 candidates:                              # S1, no model call
   sources:
-    alias: {enabled: true}
-    lexical: {enabled: true}
-    dense: {enabled: true}
+    alias: {enabled: true, depth: fit_from_gt}
+    lexical: {enabled: true, depth: fit_from_gt}
+    dense: {enabled: true, depth: fit_from_gt}
   segment_prompt: true
   fusion: rrf                            # moves to a fitted weighted fusion once labels exist, N113
   shortlist_size: fit_from_gt
+  rrf_constant: fit_from_gt
+  max_prompt_windows: fit_from_bench
 
 planner:                                 # S2
   second_chance_rounds: 1

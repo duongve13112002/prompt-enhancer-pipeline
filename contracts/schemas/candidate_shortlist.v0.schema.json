@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "candidate_shortlist.v0",
+  "title": "S1 candidate shortlist; final retrieval state belongs to the coordinator",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "snapshot_id",
+    "state",
+    "candidates",
+    "warnings",
+    "error"
+  ],
+  "properties": {
+    "snapshot_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "state": {
+      "enum": [
+        "ready",
+        "failed"
+      ]
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "concept_id",
+          "name",
+          "kind",
+          "description",
+          "matched_source",
+          "matched_span"
+        ],
+        "properties": {
+          "concept_id": {
+            "type": "string",
+            "pattern": "^concept:[0-9a-f]{64}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "character",
+              "clothing",
+              "place",
+              "object",
+              "style",
+              "other",
+              null
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[^\\r\\n\\u0085\\u2028\\u2029]*$"
+          },
+          "matched_source": {
+            "enum": [
+              "name",
+              "alias",
+              "lexical",
+              "dense"
+            ]
+          },
+          "matched_span": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "start",
+              "end",
+              "text"
+            ],
+            "properties": {
+              "start": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "end": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "span"
+        ],
+        "properties": {
+          "code": {
+            "const": "DENSE_QUERY_TOO_LONG"
+          },
+          "span": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "start",
+              "end",
+              "text"
+            ],
+            "properties": {
+              "start": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "end": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "error": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "enum": [
+                "WINDOW_BUDGET_EXCEEDED",
+                "SNAPSHOT_MISSING",
+                "RETRIEVAL_FAILED"
+              ]
+            },
+            "message": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "ready"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "error": {
+            "type": "null"
+          },
+          "snapshot_id": {
+            "type": "string"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "candidates": {
+            "maxItems": 0
+          },
+          "error": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  ]
+}

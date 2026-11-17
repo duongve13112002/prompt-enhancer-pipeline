@@ -109,7 +109,7 @@ def test_protocol_only_fields():
         else:
             constrained.append('.'.join(path))
     assert constrained == ['schema_version', 'knowledge.info_file.on_description_count_mismatch',
-                           'index.lexical.kind',
+                           'index.lexical.kind', 'candidates.fusion',
                            'vision.alpha_policy.mode', 'vision.transport', 'vlm.backends.main.unsupported_param_policy',
                            # T-018: the embedding server's three enum-valued keys (the first backend that has them)
                            'vlm.backends.embedder_qwen3vl8b.server.family', 'vlm.backends.embedder_qwen3vl8b.server.dtype',
@@ -134,6 +134,7 @@ def test_all_constrained_fields_are_known():
             allowed = (path == ('schema_version',)
                        or path == ('knowledge', 'info_file', 'on_description_count_mismatch')
                        or path == ('index', 'lexical', 'kind')  # K5: character n-grams are the only protocol
+                       or path == ('candidates', 'fusion')  # S1: only unweighted RRF is implemented until fitting
                        or path == ('vision', 'alpha_policy', 'mode')  # Refuse also removes the background member.
                        or path == ('vision', 'transport')  # T-008: protocol-bound, data_uri is the only value
                        or path[:2] == ('vlm', 'backends') and path[-1] == 'unsupported_param_policy'

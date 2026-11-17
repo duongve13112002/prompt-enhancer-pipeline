@@ -75,6 +75,14 @@ def test_override_revalidates_effective_config(intake_config, project_root):
             effective_request_config(intake_config, overrides, project_root=project_root)
 
 
+def test_request_schema_load_failure_is_structural(tmp_path):
+    # Review reproduction: this project root deliberately has no contracts directory.
+    root = tmp_path / 'private-schema-location'
+    with pytest.raises(ConfigurationError) as caught:
+        effective_request_config({}, {}, project_root=root)
+    assert str(caught.value) == 'configuration: invalid base configuration'
+
+
 @pytest.mark.parametrize('failure', ['denied', 'type', 'path', 'policy', 'container', 'object', 'base'])
 def test_override_diagnostics_are_structural(intake_config, project_root, failure):
     intake_config['request_overrides']['allowed_keys'] = ['profiles.root', 'vision.max_image_side']
@@ -92,7 +100,13 @@ def test_override_diagnostics_are_structural(intake_config, project_root, failur
         intake_config['vision']['quality'] = 'SECRET PROMPT TEXT'
     with pytest.raises(ConfigurationError) as caught:
         effective_request_config(intake_config, overrides, project_root=project_root)
-    assert str(caught.value) == 'request configuration validation failed (ConfigurationError)'
+    message = str(caught.value)
+    if failure in ('base', 'policy', 'container'):
+        assert 'configuration:' in message
+        assert ('vision.quality' if failure == 'base' else 'request_overrides.allowed_keys') in message
+        assert 'SECRET' not in message and 'private/' not in message
+    else:
+        assert message == 'request configuration validation failed (ConfigurationError)'
 
 
 @pytest.mark.parametrize('command', ['enhance once', 'enhance serve', 'eval run'])

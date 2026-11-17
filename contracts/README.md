@@ -152,6 +152,18 @@ VLM backend. `runtime.intake_deadline_s` is required positive finite seconds, ch
 at stage boundaries. It does not preempt an in-progress filesystem or Pillow call. Both example profiles
 retain `deploy_required` and `fit_from_bench` respectively until evidence supplies their values.
 
+## Candidate shortlist contract (S1)
+
+`candidate_shortlist.v0` contains the pinned `snapshot_id`, stage-local `state` (ready/failed),
+`candidates`, structural `warnings` and nullable `{code, message}` error. Each unique-concept entry
+contains canonical name, nullable known kind/description, match source and half-open code-point
+`matched_span: {start, end, text}` in the original prompt. Runtime validation also checks span equality
+and unique IDs. Description is the first non-null membership description in stable folder/concept order,
+with whitespace collapsed structurally to one line. JSON value evidence covers its raw source token.
+An empty ready list is valid; budget/index failures produce an empty failed list and the request continues
+without knowledge. Overlong dense queries are skipped with a span-bearing `DENSE_QUERY_TOO_LONG` warning.
+Query-only template/length fields never enter K1's offline reads or change the stored embedding space.
+
 ## Profile contract
 
 Two things are called a profile; see [Terms](#terms). This section describes the configuration profile.

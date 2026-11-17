@@ -14,7 +14,13 @@ The whole catalogue is never placed in the planner context, because accuracy fal
 
 **Decisions and configuration keys.** `candidates.*`: shortlist size and per-source depth (`fit_from_gt`, E1), enabled sources (E4), fusion method and weight (`fit_from_gt`), optional reranker (off by default, E3); `embedding.*` for the query encoder, which must match the snapshot's.
 
-**Compute.** CPU lookups plus embedding a few short texts; no model generation. Not implemented; nothing measured.
+**Library contract (T-013 P2).** `build_candidates(IntakeResult, embedder=...)` uses S0's single pin and effective configuration. `candidate_shortlist.v0` carries stage-local ready/failed state, candidates, structural warnings and an optional structural error; final retrieval state remains the coordinator's responsibility. Calling S1 with retrieval off is a programming error. No index or encoder is constructed on that path. A successful empty shortlist is valid. The supplied K1-compatible query encoder stays caller-owned.
+
+**Configuration.** Required per-source `depth` and `rrf_constant` retain `fit_from_gt`; `max_prompt_windows` retains `fit_from_bench` in base/dev. Only `fusion: rrf` is implemented: sum reciprocal `(constant + one-based rank)` across three unique-concept source lists, stable concept-ID ties. Repeated queries/embedding rows do not add votes. Dense depth bounds rows per query and modality and final source concepts; duplicate rows can therefore yield fewer unique concepts. Query settings reuse K1's space identity but replace the document template with `embedding.query_text_template` (`design_required` until E5). `query_text_limit` is a positive rendered-code-point bound; an overlong dense query is skipped with `DENSE_QUERY_TOO_LONG`, never truncated.
+
+**Bounds and failures.** Exact span width derives from the longest normalized pinned name/accepted alias and Unicode's maximum decomposition expansion, allowing normalization to shorten spans. The work budget counts admitted exact probes plus enabled lexical/dense query units; exceeding it returns failed S1 with `WINDOW_BUDGET_EXCEEDED`, allowing the request to continue without knowledge. Missing snapshots and operational index/embedding failures also return failed S1. Invalid configuration and incompatible query spaces raise before calls. No thresholds or production performance have been fitted.
+
+**Compute.** CPU lookups plus embedding short texts through K1's interface; no model generation. P2 tests use labelled doubles only; no live model or speed measurement.
 
 **Depends on.** S0, K5.
 

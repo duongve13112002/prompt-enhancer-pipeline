@@ -67,9 +67,10 @@ class IntakeResult:
 
 
 class _Refusal(ValueError):
-    def __init__(self, code, message):
+    def __init__(self, code, message, *, stage=None):
         super().__init__(message)
         self.code = code
+        self.stage = stage
 
 
 def _image(data):
@@ -95,7 +96,14 @@ def validate_request(request, *, project_root):
 def _refuse(payload, code, error):
     payload['outcome'] = 'refused'
     # Diagnostics describe structure only; exception text can contain request values or local paths.
-    payload['error'] = {'code': code, 'message': f'intake refused ({type(error).__name__})'}
+    label = type(error).__name__
+    if isinstance(error, _Refusal):
+        label = code
+        # Protocol-bound stages originate only at the controlled boundaries below.
+        if error.stage in ('validation', 'profile start', 'profile end', 'image start', 'image end',
+                           'snapshot start', 'snapshot end'):
+            label += f' at {error.stage}'
+    payload['error'] = {'code': code, 'message': f'intake refused ({label})'}
     # These are schema-bound refusal fields, not model output or inferred retrieval success.
     state = 'disabled' if payload['retrieval']['state'] == 'disabled' else 'failed'
     payload['retrieval'] = {'state': state, 'snapshot_id': None}
@@ -132,7 +140,7 @@ def intake(request, config, *, project_root):
 
     def boundary(stage):
         if time.monotonic() - started >= effective['runtime']['intake_deadline_s']:
-            raise _Refusal('INTAKE_DEADLINE', f'intake deadline exceeded at {stage}')
+            raise _Refusal('INTAKE_DEADLINE', 'intake deadline exceeded', stage=stage)
 
     try:
         validate_request(request, project_root=project_root)
