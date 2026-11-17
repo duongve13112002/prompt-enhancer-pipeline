@@ -394,7 +394,7 @@ except `test_model_client` 79)
 
 ## AUTO PROGRESS 2026-11-17T22:21:35+07:00 (PreCompact, trigger=auto)
 Written by the worker's PreCompact hook (mechanical); the sections above stay authoritative.
-- git status (D:\Project_github\prompt-enhancer-pipeline\.tmp\worktrees\RES-1):
+- git status (<project>\.tmp\worktrees\RES-1):
   - `## HEAD (no branch)`
   - `M configs/enhancer.example.yaml`
   - `M contracts/README.md`
@@ -411,7 +411,7 @@ Written by the worker's PreCompact hook (mechanical); the sections above stay au
   - `M src/prompt_enhancer/kb_sync.py`
   - `M src/prompt_enhancer/model_client.py`
   - `... 40 more lines`
-- last changed files: `D:\Project_github\prompt-enhancer-pipeline\.tmp\worktrees\RES-1\tests\test_stage_flow.py`; `D:\Project_github\prompt-enhancer-pipeline\.tmp\worktrees\RES-1\tests\test_k1_embed.py`; `D:\Project_github\prompt-enhancer-pipeline\.tmp\worktrees\RES-1\tests\test_k4_aliases.py`; `D:\Project_github\prompt-enhancer-pipeline\.tmp\worktrees\RES-1\tests\test_model_resources.py`; `D:\Project_github\prompt-enhancer-pipeline\.tmp\worktrees\RES-1\src\prompt_enhancer\model_resources.py`; `D:\Project_github\prompt-enhancer-pipeline\.tmp\worktrees\RES-1\src\prompt_enhancer\planner.py`; `D:\Project_github\prompt-enhancer-pipeline\.tmp\worktrees\RES-1\src\prompt_enhancer\candidates.py`; `D:\Project_github\prompt-enhancer-pipeline\.tmp\worktrees\RES-1\src\prompt_enhancer\k2_naming.py`; `D:\Project_github\prompt-enhancer-pipeline\.tmp\worktrees\RES-1\tasks\active\RES-1-resource-use.md`; `D:\Project_github\prompt-enhancer-pipeline\.tmp\worktrees\RES-1\src\prompt_enhancer\k4_aliases.py`
+- last changed files: `<project>\.tmp\worktrees\RES-1\tests\test_stage_flow.py`; `<project>\.tmp\worktrees\RES-1\tests\test_k1_embed.py`; `<project>\.tmp\worktrees\RES-1\tests\test_k4_aliases.py`; `<project>\.tmp\worktrees\RES-1\tests\test_model_resources.py`; `<project>\.tmp\worktrees\RES-1\src\prompt_enhancer\model_resources.py`; `<project>\.tmp\worktrees\RES-1\src\prompt_enhancer\planner.py`; `<project>\.tmp\worktrees\RES-1\src\prompt_enhancer\candidates.py`; `<project>\.tmp\worktrees\RES-1\src\prompt_enhancer\k2_naming.py`; `<project>\.tmp\worktrees\RES-1\tasks\active\RES-1-resource-use.md`; `<project>\.tmp\worktrees\RES-1\src\prompt_enhancer\k4_aliases.py`
 - last assistant text: Now the differential test file, 'tests/test_stage_flow.py'.
 ## Fix round 1 approval record
 
@@ -612,7 +612,7 @@ No profile/schema/example/key is added. Existing schema source is `contracts/sch
 
 **Result and evidence** (unit/mock_contract/property, CPU synthetic doubles only): exact absolute commands, PIDs, exit codes and actual pytest summaries are retained in `.tmp/RES-1/results.jsonl`. One file per pytest process; no `-n`; no simultaneous owned pytest processes. Every test passed through test_slot.py; fixed `.tmp/RES-1/bt` is deleted after each completed run.
 
-Command form, from this worktree: `D:/Project_github/prompt-enhancer-pipeline/.venv/Scripts/python.exe -B tools/agent-workflow/test_slot.py -- D:/Project_github/prompt-enhancer-pipeline/.venv/Scripts/python.exe -B -X faulthandler -m pytest -q tests/<one-file>.py --basetemp=D:/Project_github/prompt-enhancer-pipeline/.tmp/worktrees/RES-1/.tmp/RES-1/bt`. Environment: PYTHONNOUSERSITE=1, PYTHONDONTWRITEBYTECODE=1, PYTHONPATH=this worktree's src. CREATE_NO_WINDOW for owned child launchers.
+Command form, from this worktree: `<project>/.venv/Scripts/python.exe -B tools/agent-workflow/test_slot.py -- <project>/.venv/Scripts/python.exe -B -X faulthandler -m pytest -q tests/<one-file>.py --basetemp=<project>/.tmp/worktrees/RES-1/.tmp/RES-1/bt`. Environment: PYTHONNOUSERSITE=1, PYTHONDONTWRITEBYTECODE=1, PYTHONPATH=this worktree's src. CREATE_NO_WINDOW for owned child launchers.
 
 | File in tests/ | Actual passing summary |
 |---|---|
@@ -647,7 +647,7 @@ Total: **1114 passed, 40 skipped, 19 files**. Skips are reported as skips, not p
 **not_run:** full suite and tests/test_kb_sync_flow.py (reserved to PM); live model/GPU/network/download/install work (prohibited); the out-of-scope pre-encode check. Ruff commands were attempted, both exit 1; neither check ran because ruff is absent. Actual output for both `-m ruff check <scoped files>` and `-m ruff format --check <scoped files>`:
 
 ```text
-D:\Project_github\prompt-enhancer-pipeline\.venv\Scripts\python.exe: No module named ruff
+<project>\.venv\Scripts\python.exe: No module named ruff
 ```
 
 The scoped source/test/task `git diff --check` passed with no output. No Git write was performed. Source parser/validator properties, concurrent cache writers and the field/storage/property guards passed above; no quality or live throughput claim follows from doubles.
@@ -762,7 +762,7 @@ New tests/test_res1_decode_stop.py instruments real decoding at before-load/befo
 
 **Result and evidence (unit / mock_contract / property):** all 21 files below ran separately and serially through test_slot.py, no -n. Exact commands, PID ownership and exits: .tmp/RES-1/extension-started.jsonl and extension-results.jsonl. Verified totals and source hashes: .tmp/RES-1/extension-verification.txt. Total: **2120 passed, 40 skipped**. test_model_image also reports four existing Pillow I-mode PNG deprecation warnings; no policy/output was changed to suppress them.
 
-Command form from this worktree: `D:/Project_github/prompt-enhancer-pipeline/.venv/Scripts/python.exe -B tools/agent-workflow/test_slot.py -- D:/Project_github/prompt-enhancer-pipeline/.venv/Scripts/python.exe -B -X faulthandler -m pytest -q tests/<one-file>.py --basetemp=D:/Project_github/prompt-enhancer-pipeline/.tmp/worktrees/RES-1/.tmp/RES-1/bt`. Environment: PYTHONNOUSERSITE=1, PYTHONDONTWRITEBYTECODE=1, PYTHONPATH=this worktree's src. Owned children use CREATE_NO_WINDOW. Fixed basetemp removed after each run.
+Command form from this worktree: `<project>/.venv/Scripts/python.exe -B tools/agent-workflow/test_slot.py -- <project>/.venv/Scripts/python.exe -B -X faulthandler -m pytest -q tests/<one-file>.py --basetemp=<project>/.tmp/worktrees/RES-1/.tmp/RES-1/bt`. Environment: PYTHONNOUSERSITE=1, PYTHONDONTWRITEBYTECODE=1, PYTHONPATH=this worktree's src. Owned children use CREATE_NO_WINDOW. Fixed basetemp removed after each run.
 
 | Test file | Actual passing output |
 |---|---|
@@ -805,9 +805,9 @@ Command form from this worktree: `D:/Project_github/prompt-enhancer-pipeline/.ve
 
 **Checks / not_run:** syntax and whitespace checks passed; scoped git diff --check returned 0 with no output. Ruff check and format were attempted on k1_embed.py, model_image.py, test_res1_decode_stop.py and res1_image_oracle.py, both returned exit 1 with exact output below. No install attempted.
 ```text
-D:\Project_github\prompt-enhancer-pipeline\.venv\Scripts\python.exe: No module named ruff
+<project>\.venv\Scripts\python.exe: No module named ruff
 ruff check exit=1
-D:\Project_github\prompt-enhancer-pipeline\.venv\Scripts\python.exe: No module named ruff
+<project>\.venv\Scripts\python.exe: No module named ruff
 ruff format exit=1
 ```
 Full suite, test_kb_sync_flow.py, CI and live model/GPU/deployment runs are not_run (PM-owned or explicitly prohibited). No external network, model inference, downloads, installs, Git writes or secrets access. New tests use tiny generated images only.
@@ -906,7 +906,7 @@ tests/test_res1_resume.py adds test_k1_interrupted_done_companion_is_immutable: 
 
 **Result and evidence (CPU unit/mock_contract/property/replay, no live inference):** before runtime edit the new cases were red: `3 failed, 4 deselected in 90.63s (0:01:30)` (.tmp/RES-1/fix2-red.log). The changed/corrupt cases called fail on done keys; the refusal case replaced the vector artifact. After the guard, all eight required files passed separately and serially through test_slot.py on frozen runtime source. Total **770 passed, 40 skipped**; no skip is counted as a pass.
 
-Exact commands, PIDs, exit codes and actual summaries: .tmp/RES-1/fix2-started.jsonl and fix2-results.jsonl. Command form from this worktree: `D:/Project_github/prompt-enhancer-pipeline/.venv/Scripts/python.exe -B tools/agent-workflow/test_slot.py -- D:/Project_github/prompt-enhancer-pipeline/.venv/Scripts/python.exe -B -X faulthandler -m pytest -q tests/<one-file>.py --tb=short --basetemp=D:/Project_github/prompt-enhancer-pipeline/.tmp/worktrees/RES-1/.tmp/RES-1/fix2-bt`. The red run additionally selects `-k interrupted_done_companion`. Environment: PYTHONNOUSERSITE=1, PYTHONDONTWRITEBYTECODE=1, PYTHONPATH=this worktree's src; owned child launchers use CREATE_NO_WINDOW; no -n. The fixed basetemp was deleted after each completed command.
+Exact commands, PIDs, exit codes and actual summaries: .tmp/RES-1/fix2-started.jsonl and fix2-results.jsonl. Command form from this worktree: `<project>/.venv/Scripts/python.exe -B tools/agent-workflow/test_slot.py -- <project>/.venv/Scripts/python.exe -B -X faulthandler -m pytest -q tests/<one-file>.py --tb=short --basetemp=<project>/.tmp/worktrees/RES-1/.tmp/RES-1/fix2-bt`. The red run additionally selects `-k interrupted_done_companion`. Environment: PYTHONNOUSERSITE=1, PYTHONDONTWRITEBYTECODE=1, PYTHONPATH=this worktree's src; owned child launchers use CREATE_NO_WINDOW; no -n. The fixed basetemp was deleted after each completed command.
 
 | Required file | Actual passing output |
 |---|---|
@@ -937,7 +937,7 @@ No timeout/crash/collection failure was counted as a kill. The initial mutation-
 **Checks / not_run:** final syntax/source-hash/evidence/whitespace verification is retained in .tmp/RES-1/fix2-verification.txt; scoped git diff --check returned 0 with no output. Ruff check and format were both attempted on src/prompt_enhancer/k1_embed.py and tests/test_res1_resume.py, both exit 1, neither check ran. Exact output for each:
 
 ```text
-D:\Project_github\prompt-enhancer-pipeline\.venv\Scripts\python.exe: No module named ruff
+<project>\.venv\Scripts\python.exe: No module named ruff
 ```
 
 No install attempted. Full suite/test_kb_sync_flow.py/CI and independent retest are not_run here (PM-owned). Live model/GPU/network/downloads are prohibited and not_run. No new required implementation issue remains. No Git write, secrets access, database write or models write occurred.
@@ -1053,7 +1053,7 @@ test_res1_resume.py adds test_k1_interrupted_done_text_is_immutable for both suc
 
 **Result and evidence (CPU unit/mock_contract/property/replay; no live models):** ten distinct required/changed test files passed. Normal stage-flow ran twice; the full file also passed with scratch K2 observation tasks reversed. Across the twelve passing pytest processes: **875 passed, 35 skipped** (the ten distinct files once total 827 passed / 35 skipped; the two additional stage-flow runs contribute 48 passes). Three deliberate scratch-mutant failures are reported separately, never counted as passing tests. Exact absolute commands, PIDs, exits and summaries: .tmp/RES-1/fix3-started.jsonl and fix3-results.jsonl. Logs: fix3-<label>.log.
 
-Command form from this worktree: `D:/Project_github/prompt-enhancer-pipeline/.venv/Scripts/python.exe -B tools/agent-workflow/test_slot.py -- D:/Project_github/prompt-enhancer-pipeline/.venv/Scripts/python.exe -B -X faulthandler -m pytest -q tests/<one-file>.py --tb=short --basetemp=D:/Project_github/prompt-enhancer-pipeline/.tmp/worktrees/RES-1/.tmp/RES-1/fix3-bt`. Environment: PYTHONNOUSERSITE=1, PYTHONDONTWRITEBYTECODE=1, PYTHONPATH=this worktree's src. One pytest process at a time, no -n, CREATE_NO_WINDOW owned launchers; fixed basetemp removed after every completed run. Scratch checks add the test-only `-p fix3_inject` hook and evidence/tests import directories; exact arguments and labels are in the result ledger.
+Command form from this worktree: `<project>/.venv/Scripts/python.exe -B tools/agent-workflow/test_slot.py -- <project>/.venv/Scripts/python.exe -B -X faulthandler -m pytest -q tests/<one-file>.py --tb=short --basetemp=<project>/.tmp/worktrees/RES-1/.tmp/RES-1/fix3-bt`. Environment: PYTHONNOUSERSITE=1, PYTHONDONTWRITEBYTECODE=1, PYTHONPATH=this worktree's src. One pytest process at a time, no -n, CREATE_NO_WINDOW owned launchers; fixed basetemp removed after every completed run. Scratch checks add the test-only `-p fix3_inject` hook and evidence/tests import directories; exact arguments and labels are in the result ledger.
 
 | File / run | Actual output |
 |---|---|
@@ -1089,7 +1089,7 @@ All three killed; no survivor. Logs preserve the exact source substitutions' eff
 **Checks / not_run:** final static source hashes, test syntax, complete PID/result ledger, fixed-basetemp/scratch absence and scoped git diff --check are recorded in fix3-verification.txt. Ruff check and format were attempted for all nine changed/new test/helper files, both exit 1; neither check ran because ruff is absent, and no install was attempted. Exact output from each command:
 
 ```text
-D:\Project_github\prompt-enhancer-pipeline\.venv\Scripts\python.exe: No module named ruff
+<project>\.venv\Scripts\python.exe: No module named ruff
 ```
 
 Full suite/test_kb_sync_flow.py/CI and independent retest are not_run here (PM-owned). Live model/GPU/download/install/external network work is prohibited and not_run; existing bounded loopback fixtures used only labelled engine/model doubles and closed with their tests. No Git writes or secrets access. A clock.sleep call was rejected by the role's exact tool allowlist; no escalation or permission change followed. Normal owned-exec output collection completed every authorized run.
