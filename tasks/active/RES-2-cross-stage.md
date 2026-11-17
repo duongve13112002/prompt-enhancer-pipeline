@@ -1,6 +1,6 @@
 # RES-2: cross-stage pipelining in `kb sync`
 
-Status: **Step 0 drafted (Gemini 3.8 Flash scout, 2026-11-18 04:5x), PM-reviewed; awaiting a builder dispatch.** Not started: T-015, KBS-F2 integration and the T-017 pilot come first (plan targets in `tasks/STATUS.md`).
+Status: **Step 0 drafted (Gemini 3.8 Flash scout, 2026-11-18, before 04:43), PM-reviewed; awaiting a builder dispatch.** Not started: T-015, KBS-F2 integration and the T-017 pilot come first (plan targets in `tasks/STATUS.md`).
 
 ## Task brief
 
