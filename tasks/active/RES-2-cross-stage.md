@@ -53,7 +53,7 @@ Status: **Step 0 drafted (Gemini 3.8 Flash scout, 2026-11-18, before 04:43), PM-
 | Operational value or behavior | Validated configuration path | Validation | Example/profile | Override test and refusal test | Retained-literal class |
 |---|---|---|---|---|---|
 | Request capacity across stages | `vlm.backends.<b>.max_concurrency` | existing | existing examples | combined peak equals the cap; 0, negative, non-int refused | configurable |
-| Cross-server overlap (phase 2 only) | new key, name to be fixed in the build Step 0 | boolean, sentinel `deploy_required` | dev example `false` | overlap on/off differential; absent or sentinel refused at start | configurable |
+| Cross-server overlap (phase 2 only) | `runtime.stage_overlap.embedder_with_vlm` (decision 152) | boolean, sentinel `deploy_required` | dev example `false` | overlap on/off differential; absent or sentinel refused at start | configurable |
 | Inter-stage queue bound | derived from `max_concurrency` | n/a | n/a | queue never exceeds the bound | safety-bound |
 
 ### Plan with a checkable finish
@@ -66,4 +66,4 @@ Status: **Step 0 drafted (Gemini 3.8 Flash scout, 2026-11-18, before 04:43), PM-
 
 - Barriers and line references re-checked at `kb_sync.py:29-36,146-170`; the draft matches the source.
 - Added the resident-servers unknown and question 2 from `docs/dev-machine.md:31`: the scout's plan would overlap embedder and VLM stages that the dev machine cannot hold together.
-- Answers 1, 3, 4 and 5 are PM decisions pending user review; answer 2 needs the user's confirmation before phase 2 (it adds a deployment key).
+- Answers 1, 3, 4 and 5 are PM decisions pending user review. Answer 2 was confirmed by the user on 2026-11-18 (decision 152): the key is `runtime.stage_overlap.embedder_with_vlm`, so phase 2 may follow phase 1.
