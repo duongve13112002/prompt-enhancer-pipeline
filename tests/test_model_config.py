@@ -62,7 +62,7 @@ def test_backend_operational_schema(tmp_path, project_root, section, key, overri
     backend['http'] = dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
                            max_retries=0, backoff_initial_s=0, backoff_max_s=4, retry_statuses=[])
     backend['probe'] = dict(max_requests=1, timeout_s=1)
-    backend['image'] = dict(max_decode_pixels=100)
+    backend['image'] = dict(max_decode_pixels=100, max_side='none')
     backend[section][key] = override
     path = tmp_path / 'config.yaml'
     path.write_text(yaml.safe_dump(profile), encoding='utf-8')
@@ -231,7 +231,7 @@ ROLE_VALUES = [
     ('reasoning.effort', 'high', 'bad'),
     ('reasoning.budget_tokens', 12, -1),
     ('reasoning.template_kwargs_key', 'custom_switch', 2),
-    ('image.source', 'alternate_source', ''),
+    ('image.source', 'user_reference', 'alternate_source'),  # T-014: a closed enum of image sources
     ('image.max_side', 640, 0),
     ('image.format', 'png', ''),
     ('image.quality', 75, 0),
@@ -267,7 +267,7 @@ def test_role_values_through_command_load(tmp_path, project_root, key, override,
                    http=dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1,
                              pool_timeout_s=1, max_retries=0, backoff_initial_s=0,
                              backoff_max_s=0, retry_statuses=[]),
-                   probe=dict(max_requests=1, timeout_s=1), image=dict(max_decode_pixels=1000))
+                   probe=dict(max_requests=1, timeout_s=1), image=dict(max_decode_pixels=1000, max_side='none'))
     backend['model'].update(id='local-model', revision='revision')
     profile['vlm']['backends']['alternate'] = deepcopy(backend)
     keys = key.split('.')
@@ -379,9 +379,9 @@ def test_unsafe_url_refused_at_profile_load(tmp_path, project_root, base, route)
      ('vlm.roles.manifest_drafter.output.format', 'json_object'), 'output.format'),
     ([('vlm.roles.manifest_drafter.backend', 'cloud_gemini')],
      ('vlm.roles.manifest_drafter.image', 'none'),
-     ('vlm.roles.manifest_drafter.image', {'source': 'image', 'format': 'png', 'quality': 90, 'transport': 'data_uri'}), 'image'),
+     ('vlm.roles.manifest_drafter.image', {'source': 'source_image', 'format': 'png', 'quality': 90, 'transport': 'data_uri'}), 'image'),
     ([('vlm.roles.manifest_drafter.backend', 'cloud_gemini'),
-      ('vlm.roles.manifest_drafter.image', {'source': 'image', 'format': 'png', 'quality': 90, 'transport': 'data_uri'})],
+      ('vlm.roles.manifest_drafter.image', {'source': 'source_image', 'format': 'png', 'quality': 90, 'transport': 'data_uri'})],
      ('vlm.backends.cloud_gemini.allow_images', False),
      ('vlm.backends.cloud_gemini.allow_images', True), 'image'),
     ([], ('vlm.backends.cloud_gemini.base_urls', ['https://example.org']),

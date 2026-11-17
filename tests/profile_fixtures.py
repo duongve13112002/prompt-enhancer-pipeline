@@ -43,7 +43,7 @@ def config_data(tmp_path):
     backend['http'] = dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
                            max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[])
     backend['probe'] = dict(max_requests=1, timeout_s=1)
-    backend['image'] = dict(max_decode_pixels=1000)
+    backend['image'] = dict(max_decode_pixels=1000, max_side='none')
     config['profiles'].update(root=str(tmp_path / 'profiles'), exclude=['_example'], default_profile_id='p1')
     return config
 

@@ -83,7 +83,9 @@ def options(value):
             'medium', 'cards', 'live', 'json_schema', 'json_object', 'engine_native',
             'response_format', 'from_vision', 'intent_ir.v0', 'verifier_result.v0', '2025-01-01',
             'openai_compatible', 'anthropic', 'gemini', 'vllm', 'llama_cpp', 'fallback_to_default_backend', 'stop', 'arrow', '7d', 'refuse', 'flatten', '#123456',
-            'openai_input_content', 'native', 'numpy_exact', 'cosine', 'inner_product', 'char_ngram', [],
+            'openai_input_content', 'native', 'numpy_exact', 'cosine', 'inner_product', 'char_ngram',
+            'user_reference',  # T-014: role image.source is a closed enum of five values
+            [],
             ['alternative'], ['generate'], ['edit'], {}, {'other': 'alternative'},
             {'chat': 'chat', 'health': 'health'}, {'block_rows': 2},
             {'source': 'source_image', 'format': 'png', 'quality': 80, 'transport': 'data_uri'},

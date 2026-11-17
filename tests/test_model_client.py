@@ -123,12 +123,12 @@ def test_image_failure_is_coded_with_original_cause(kind):
         source_kind = kind.removesuffix('_png').removesuffix('_webp')
         target_format = 'png' if kind.endswith('_png') else 'webp' if kind.endswith('_webp') else 'jpeg'
         role = {'backend': 'main', 'prompt_id': 'test', 'max_tokens': 30, 'sampling': {},
-                'image': {'max_side': 'none', 'format': target_format, 'quality': 90},
+                'image': {'source': 'source_image', 'max_side': 'none', 'format': target_format, 'quality': 90},
                 'reasoning': {'mode': 'auto', 'effort': 'none', 'budget_tokens': 'none'},
                 'output': {'format': 'none', 'schema_id': 'none', 'strict': False, 'validate_response': False}}
         backend = {'provider': 'openai_compatible', 'engine': {'name': 'llama_cpp', 'version': 'v'},
                    'model': {'id': 'local', 'revision': 'r'}, 'endpoints': {'chat': 'chat'},
-                   'image': {'max_decode_pixels': 1000}}
+                   'image': {'max_decode_pixels': 1000, 'max_side': 'none'}}
         config = {'vision': {'max_image_side': 'none', 'format': 'jpeg', 'alpha_policy': {'mode': 'refuse'}},
                   'vlm': {'roles': {'planner': role}, 'backends': {'main': backend}, 'default_backend': 'main'}}
         client = RoleClient(config, {'main': DoubleTransport('ok')},
@@ -186,11 +186,11 @@ def test_call_cancellation_propagates(monkeypatch):
 def test_image_requires_verified_capability_and_is_resized(inherit):
     async def run():
         role = {'backend': 'main', 'prompt_id': 'test', 'max_tokens': 30,
-                'sampling': {'temperature': 0.2}, 'image': {'max_side': 4, 'format': 'png', 'quality': 90},
+                'sampling': {'temperature': 0.2}, 'image': {'source': 'source_image', 'max_side': 4, 'format': 'png', 'quality': 90},
                 'reasoning': {'mode': 'auto', 'effort': 'none', 'budget_tokens': 'none'},
                 'output': {'format': 'none', 'schema_id': 'none', 'strict': False, 'validate_response': False}}
         backend = {'provider': 'openai_compatible', 'engine': {'name': 'llama_cpp', 'version': 'test-version'}, 'model': {'id': 'local', 'revision': 'r'},
-                   'endpoints': {'chat': 'chat'}, 'image': {'max_decode_pixels': 1000}}
+                   'endpoints': {'chat': 'chat'}, 'image': {'max_decode_pixels': 1000, 'max_side': 'none'}}
         if inherit:
             del role['image']['max_side']
         config = {'vision': {'max_image_side': 4 if inherit else 'none', 'format': 'png', 'quality': 90, 'alpha_policy': {'mode': 'refuse'}},
@@ -222,12 +222,12 @@ def image_call(fmt, data):
     """One local image call with role image format `fmt`; the body the labelled transport double received."""
     async def run():
         role = {'backend': 'main', 'prompt_id': 'test', 'max_tokens': 30,
-                'sampling': {'temperature': 0.2}, 'image': {'max_side': 'none', 'format': fmt, 'quality': 90},
+                'sampling': {'temperature': 0.2}, 'image': {'source': 'source_image', 'max_side': 'none', 'format': fmt, 'quality': 90},
                 'reasoning': {'mode': 'auto', 'effort': 'none', 'budget_tokens': 'none'},
                 'output': {'format': 'none', 'schema_id': 'none', 'strict': False, 'validate_response': False}}
         backend = {'provider': 'openai_compatible', 'engine': {'name': 'llama_cpp', 'version': 'test-version'},
                    'model': {'id': 'local', 'revision': 'r'}, 'endpoints': {'chat': 'chat'},
-                   'image': {'max_decode_pixels': 1000}}
+                   'image': {'max_decode_pixels': 1000, 'max_side': 'none'}}
         config = {'vision': {'max_image_side': 'none', 'format': 'png', 'quality': 90,
                              'alpha_policy': {'mode': 'refuse'}},
                   'vlm': {'roles': {'planner': role}, 'backends': {'main': backend}, 'default_backend': 'main'}}
@@ -318,12 +318,12 @@ def test_local_probe_plan_runs_both_challenge_pairs():
 def test_cloud_image_forbidden_falls_back_and_reprobes_local():
     async def run():
         role = {'backend': 'cloud', 'prompt_id': 'test', 'max_tokens': 30, 'sampling': {},
-                'image': {'max_side': 4, 'format': 'png', 'quality': 90},
+                'image': {'source': 'source_image', 'max_side': 4, 'format': 'png', 'quality': 90},
                 'reasoning': {'mode': 'auto', 'effort': 'none', 'budget_tokens': 'none'},
                 'output': {'format': 'none', 'schema_id': 'none', 'strict': False, 'validate_response': False}}
-        local = {'provider': 'openai_compatible', 'engine': {'name': 'llama_cpp', 'version': 'test-version'}, 'model': {'id': 'local', 'revision': 'r'},
+        local ={'provider': 'openai_compatible', 'engine': {'name': 'llama_cpp', 'version': 'test-version'}, 'model': {'id': 'local', 'revision': 'r'},
                  'endpoints': {'chat': 'chat'}, 'probe': {'max_requests': 1, 'timeout_s': 1},
-                 'image': {'max_decode_pixels': 1000}}
+                 'image': {'max_decode_pixels': 1000, 'max_side': 'none'}}
         config = {'vision': {'max_image_side': 'none', 'format': 'png', 'quality': 90, 'alpha_policy': {'mode': 'refuse'}},
                   'vlm': {'roles': {'planner': role}, 'backends': {'main': local,
                           'cloud': {'provider': 'anthropic', 'allow_images': False}}, 'default_backend': 'main'}}
@@ -382,13 +382,13 @@ def test_cloud_image_states_the_registered_media_type(tmp_path):
         (tmp_path / '.secrets').mkdir()
         (tmp_path / '.secrets' / 'fake.key').write_text('synthetic-key', encoding='utf-8')
         role = {'backend': 'cloud', 'prompt_id': 'test', 'max_tokens': 10, 'sampling': {},
-                'image': {'max_side': 'none', 'format': 'jpeg2000', 'quality': 90},
+                'image': {'source': 'source_image', 'max_side': 'none', 'format': 'jpeg2000', 'quality': 90},
                 'reasoning': {'mode': 'auto', 'effort': 'none', 'budget_tokens': 'none'},
                 'output': {'format': 'none', 'schema_id': 'none', 'strict': False, 'validate_response': False}}
         backend = {'provider': 'anthropic', 'engine': {'name': 'anthropic'}, 'api_key_file': '.secrets/fake.key',
                    'anthropic_version': '2025-01-01', 'anthropic_workspace_id': 'none', 'allow_images': True,
                    'model': {'id': 'fake', 'revision': 'r'}, 'endpoints': {'chat': 'messages'},
-                   'image': {'max_decode_pixels': 1000}}
+                   'image': {'max_decode_pixels': 1000, 'max_side': 'none'}}
         config = {'vision': {'max_image_side': 'none', 'format': 'png', 'quality': 90,
                              'alpha_policy': {'mode': 'refuse'}},
                   'vlm': {'roles': {'planner': role}, 'backends': {'cloud': backend}, 'default_backend': 'cloud'}}

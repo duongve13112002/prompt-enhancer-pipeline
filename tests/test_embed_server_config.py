@@ -338,7 +338,7 @@ SERVER_VALUES = {'attn_implementation': 'eager',  # eager: the kernel both famil
 
 def _backend_values(port):
     return {'engine': {'name': 'embed_server', 'version': 'test-version'},  # test-only version pin
-            'base_urls': [f'http://127.0.0.1:{port}'], 'image': {'max_decode_pixels': 100000000},
+            'base_urls': [f'http://127.0.0.1:{port}'], 'image': {'max_decode_pixels': 100000000, 'max_side': 'none'},
             'http': {'connect_timeout_s': 1, 'read_timeout_s': 1, 'write_timeout_s': 1, 'pool_timeout_s': 1,
                      'max_retries': 0, 'backoff_initial_s': 0, 'backoff_max_s': 0, 'retry_statuses': []},
             'server': SERVER_VALUES}

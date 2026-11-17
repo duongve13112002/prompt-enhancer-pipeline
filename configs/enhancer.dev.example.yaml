@@ -66,7 +66,7 @@ vlm:
       max_concurrency: 1
       http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
       probe: {max_requests: design_required, timeout_s: design_required}
-      image: {max_decode_pixels: deploy_required}
+      image: {max_decode_pixels: deploy_required, max_side: none}
     embedder:                            # K1 embedding server: EmbeddingGemma 2 from its original weights (T-018); the weights sit under models/ and are verified against models/manifest.json
       provider: openai_compatible
       engine: {name: embed_server, version: pin_required}   # python -m prompt_enhancer.embed_server serve, run in .venv-gpu
@@ -77,7 +77,7 @@ vlm:
       max_concurrency: 1
       http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
       probe: {max_requests: design_required, timeout_s: design_required}   # unused by K1; required by the backend schema
-      image: {max_decode_pixels: deploy_required}
+      image: {max_decode_pixels: deploy_required, max_side: none}
       endpoints: {embeddings: v1/embeddings, health: health}
       server:                            # T-018; every key is a profile value, the server has no defaults
         family: embedding_gemma2
@@ -107,7 +107,7 @@ vlm:
       max_concurrency: 1
       http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
       probe: {max_requests: design_required, timeout_s: design_required}
-      image: {max_decode_pixels: deploy_required}
+      image: {max_decode_pixels: deploy_required, max_side: none}
       endpoints: {embeddings: v1/embeddings, health: health}
       server:
         family: qwen3_vl_embedding

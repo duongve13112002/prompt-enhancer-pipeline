@@ -36,6 +36,7 @@ def configuration(model_test_profile, tmp_path):
             role[field] = deepcopy(prototype[field])
         if isinstance(role['image'], dict):
             role['image'].update(source='source_image', quality=80)
+    config['vlm']['roles']['planner']['image']['source'] = 'edit_source_only'  # the only source S2 sends (T-014)
     config['vlm']['roles']['writer']['output'].update(strict=True, transport='response_format')
     return config
 

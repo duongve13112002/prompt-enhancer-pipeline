@@ -1885,7 +1885,11 @@
             "on_family_match": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "enum": [
+                    "context_then_random",
+                    "omit",
+                    "ask"
+                  ]
                 },
                 {
                   "enum": [
@@ -1901,9 +1905,15 @@
               ]
             },
             "random_seed": {
+              "description": "per_request draws a fresh seed for every request (decision 15); a non-negative integer fixes the seed for reproducible evaluation and tests",
               "anyOf": [
                 {
-                  "type": "string"
+                  "const": "per_request"
+                },
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
                 },
                 {
                   "enum": [
@@ -3646,8 +3656,10 @@
                           },
                           "image": {
                             "type": "object",
-                            "properties": {"max_decode_pixels": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]}},
-                            "required": ["max_decode_pixels"], "additionalProperties": false
+                            "properties": {"max_decode_pixels": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]},
+                                           "max_side": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "none"}, {"const": "deploy_required"}],
+                                                        "description": "Decision 144: this backend's longest image side in pixels (aspect ratio kept, never upscaled); a chat call uses the smaller of this and the role's side; `none` sets no backend limit. Embedder backends must keep `none` until K1's cache identity includes it."}},
+                            "required": ["max_decode_pixels", "max_side"], "additionalProperties": false
                           },
                           "server": {
                             "anyOf": [
@@ -3957,10 +3969,16 @@
                                         "required": ["source", "format", "quality", "transport"],
                                         "properties": {
                                           "source": {
+                                            "description": "Which images a call of this role may carry (T-014): an image role name, edit_source_only (the request's source image) or edit_source_and_live_look (the source image plus knowledge images)",
                                             "anyOf": [
                                               {
-                                                "type": "string",
-                                                "minLength": 1
+                                                "enum": [
+                                                  "source_image",
+                                                  "user_reference",
+                                                  "knowledge_reference",
+                                                  "edit_source_only",
+                                                  "edit_source_and_live_look"
+                                                ]
                                               },
                                               {
                                                 "enum": [

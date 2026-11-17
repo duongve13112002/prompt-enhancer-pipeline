@@ -9,9 +9,9 @@ Rules for every prompt:
 - **The writer has no pipeline-owned system prompt.** The admin's system prompt is used verbatim; the pipeline adds only the Enhancement Brief as the user message, and a runtime addendum when a conflict is resolved as `config_wins` ([P-profiles](../docs/stages/P-profiles.md)). The admin's text lives in `configs/profiles/<profile_id>/system_prompt.txt` and is never edited.
 - Output schemas are in [contracts/schemas/](../contracts/schemas/); request fields in [vlm-request.md](../contracts/vlm-request.md).
 
-## `planner_v0` (S2), status: not written
+## `planner_v0` (S2), status: written
 
-Role `planner`. Placeholders: `{raw_prompt}`, `{task}`, `{shortlist}` (empty when retrieval is off), `{quote_semantics}` and `{creativity}` from the manifest and configuration. Delimited data: the raw prompt and every shortlist entry. Source image attached for `edit`. Asks for the Intent IR including the constraint ledger, with `resolved`, `family` or `no_match` per mention. Output schema: `intent_ir.v0`. A change invalidates golden tests, the linking experiment E1 results and verifier calibration that used its ledgers.
+Role `planner`. [System text](planner_v0.txt) is loaded byte-for-byte. One JSON user-data object holds `task`, `prompt`, `quote_semantics` (manifest), `creativity` (configuration), `edit_default_preservation` (edit only) and `shortlist` (empty when retrieval is off): per entry its `position`, name, kind, description and the card's variant groups with local `group_position` and `variant_position`, never pipeline identifiers. All of it is untrusted data (R-026). Source image attached for `edit`. Asks for the plan with `resolved`, `family` or `no_match` per mention, context ratings of family candidates and variants, knowledge needs and the constraint ledger, with spans copied verbatim. Output schema: `planner_reply.v0`; code checks positions and spans and builds `intent_ir.v0` and `plan_result.v0`. CPU double tests establish containment and validation, not real-model quality. A change invalidates golden tests, the linking experiment E1 results and verifier calibration that used its ledgers.
 
 ## `verifier_v0` (S5), status: not written
 

@@ -34,6 +34,25 @@ CAPABILITIES = frozenset(('text', 'image', 'multiple_images', 'json_object', 'js
                             'frequency_penalty', 'presence_penalty', 'repetition_penalty', 'seed', 'stop'))))
 
 
+# Protocol-bound (T-014): the image roles a call may carry for each `vlm.roles.<name>.image.source` value; the
+# schema enum (vlm_role.v0) names the same keys. An image role outside its set is refused before any request.
+IMAGE_SOURCE_ROLES = {'source_image': ('source_image',), 'user_reference': ('user_reference',),
+                      'knowledge_reference': ('knowledge_reference',), 'edit_source_only': ('source_image',),
+                      'edit_source_and_live_look': ('source_image', 'knowledge_reference')}
+NO_LIMIT = 'none'  # protocol-bound profile value: no longest-side limit (decision 84)
+
+
+def image_max_side(config, role_image, backend):
+    """Decision 144: the smaller of the role's side (`from_vision` resolved) and the backend's; `none` is no limit."""
+    side = role_image.get('max_side', 'from_vision')
+    if side == 'from_vision':
+        side = config['vision']['max_image_side']
+    limits = [value for value in (side, backend['image']['max_side']) if value != NO_LIMIT]
+    if any(type(value) is not int or value < 1 for value in limits):
+        raise ConfigurationError('image max_side: expected a positive integer or none')
+    return min(limits) if limits else NO_LIMIT
+
+
 def validate_require(require):
     """Caller demands are exact known names, never substring matches or ignored typos."""
     if not isinstance(require, (tuple, frozenset)) or any(type(name) is not str for name in require):
@@ -49,15 +68,21 @@ def semantic_role_settings(config, role_name):
     role = config['vlm']['roles'][role_name]
     backends = config['vlm']['backends']
     selected = backends[role['backend']]
+    image = role['image']
 
     def identity(backend):
-        return {'provider': backend['provider'], 'engine': resolve_backend_engine(backend, 'vlm.backends'),
-                'model': deepcopy(backend['model']), 'extra_body': deepcopy(backend.get('extra_body', {}))}
+        found = {'provider': backend['provider'], 'engine': resolve_backend_engine(backend, 'vlm.backends'),
+                 'model': deepcopy(backend['model']), 'extra_body': deepcopy(backend.get('extra_body', {}))}
+        # Decision 144: a backend cap changes the pixels sent, so it is reply identity; `none` sends what was sent
+        # before the key existed, so it adds nothing: the model-settings component of offline checkpoint keys is
+        # unchanged (full keys still change with tool source revisions, R-017).
+        if isinstance(image, dict) and backend['image']['max_side'] != NO_LIMIT:
+            found['image_max_side'] = backend['image']['max_side']
+        return found
 
     result = {'identity': 'semantic_reply_v1',  # artifact-bound: never interpret old whole-profile keys here
               'inference': {key: deepcopy(role[key]) for key in ('max_tokens', 'sampling', 'reasoning', 'output')},
               'backend': identity(selected)}
-    image = role['image']
     if selected['provider'] != 'openai_compatible':
         route = {'on_budget_exhausted': selected['on_budget_exhausted']}
         if isinstance(image, dict):
@@ -111,7 +136,9 @@ class ModelClientRun:
                 _sentinel(vision['max_image_side'], self.project_root, 'vision.max_image_side', {})
             if image['format'] == 'from_vision':
                 _sentinel(vision['format'], self.project_root, 'vision.format', {})
-        default = self.config['vlm']['default_backend']
+            if image['source'] not in IMAGE_SOURCE_ROLES:
+                raise ConfigurationError(f'vlm.roles.{role_name}.image.source: unknown image source')
+        default =self.config['vlm']['default_backend']
         _sentinel(default, self.project_root, 'vlm.default_backend', {})
         for name in {role['backend'], default}:
             backend = self.config['vlm']['backends'][name]
@@ -314,6 +341,13 @@ class RoleClient:
                 raise ModelCallError('writer requires a profile manifest')
             role = resolve_writer_format(role, manifest, project_root=self.project_root)
         backend_name = role['backend']
+        if images and isinstance(role['image'], dict):
+            permitted = IMAGE_SOURCE_ROLES.get(role['image']['source'], ())
+            for image_role, _ in images:
+                if image_role not in permitted:
+                    # Before any probe or request: a role receives only the images its configured source names.
+                    raise ModelCallError(f'image role {image_role!r} is not permitted by '
+                                         f'vlm.roles.{role_name}.image.source')
         attempts = []
         fallback_warnings = []
         while True:
@@ -380,8 +414,7 @@ class RoleClient:
             if images:
                 image_settings = role['image']
                 vision = self.config['vision']
-                max_side = image_settings.get('max_side', 'from_vision')
-                max_side = vision['max_image_side'] if max_side == 'from_vision' else max_side
+                max_side = image_max_side(self.config, image_settings, backend)  # per backend, after any fallback
                 fmt = image_settings['format']
                 fmt = vision['format'] if fmt == 'from_vision' else fmt
                 quality = image_settings['quality']
@@ -444,9 +477,15 @@ class RoleClient:
                 vision_config = {key: vision[key] for key in ('max_image_side', 'format', 'alpha_policy')
                                  if ((key == 'max_image_side' and image_config.get('max_side', 'from_vision') == 'from_vision')
                                      or (key == 'format' and image_config['format'] == 'from_vision') or key == 'alpha_policy')}
+            # Decision 144: the side actually used and the backend cap, so requests differing only in the cap differ.
+            side_config = None
+            if isinstance(image_config, dict):
+                side_config = {'used': image_max_side(self.config, image_config, backend),
+                               'backend': backend['image']['max_side']}
             request_hash = _digest({'body_hash': body_hash, 'role': role_name, 'prompt_id': role['prompt_id'],
                                     'image_roles': [image_role for image_role, _ in images],
-                                    'image': image_config, 'vision': vision_config, 'sampling': role['sampling'],
+                                    'image': image_config, 'vision': vision_config, 'image_max_side': side_config,
+                                    'sampling': role['sampling'],
                                     'reasoning': role['reasoning'], 'output': configured_output,
                                     'resolved_output': output, 'engine': engine,
                                     'model_revision': backend['model']['revision']})

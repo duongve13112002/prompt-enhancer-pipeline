@@ -40,8 +40,8 @@
           "required": ["source", "format", "quality", "transport"],
           "properties": {
             "source": {
-              "type": "string",
-              "minLength": 1
+              "enum": ["source_image", "user_reference", "knowledge_reference", "edit_source_only", "edit_source_and_live_look"],
+              "description": "Which images a call may carry: an image role name, edit_source_only (the request's source image) or edit_source_and_live_look (the source image plus knowledge images); enforced per call by the model client (T-014)"
             },
             "max_side": {
               "anyOf": [

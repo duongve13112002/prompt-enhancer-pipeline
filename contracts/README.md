@@ -164,6 +164,32 @@ An empty ready list is valid; budget/index failures produce an empty failed list
 without knowledge. Overlong dense queries are skipped with a span-bearing `DENSE_QUERY_TOO_LONG` warning.
 Query-only template/length fields never enter K1's offline reads or change the stored embedding space.
 
+## Planner contract (S2)
+
+The planner model returns `planner_reply.v0`: concepts, variant groups and variants appear only as zero-based
+positions into the shortlist data the request sent (each entry with name, kind, description and the card's variant
+groups from the same pin), never as identifiers, seeds or picks. Code checks every position, entity reference and
+verbatim span (link mentions, the mentions of `source: user` entities, constraint spans, literal texts and passthrough
+tokens are prompt substrings, each text inside its span; an entity read from the source image is not prompt text) and
+that every integer is a native integer (`1.0` is refused); a reply that fails the schema or a check is retried once, then S2 is `degraded` without a plan
+(`PLANNER_REPLY_INVALID`). A failed call (HTTP error, refusal, truncation, budget stop) is `failed` without retry.
+Code builds `intent_ir.v0` inside `plan_result.v0`: a family link takes the code's pick (keep `fits`, else `neutral`,
+else all; uniform with a per-request seed, or the configured integer `resolution.random_seed`), recorded in
+`selections` when `resolution.trace_choice` is true; a resolved link is never changed by ratings (decisions 15, 69).
+`variant_ratings` carries the planner's ratings or named variant per card variant group of the chosen concept for S3
+(decision 16). The second-chance lookup reruns S1 on one mention's text over the same pin, then the planner once
+more, at most `planner.second_chance_rounds` times, and only when grounding was available: a failed S1 result
+(decision 143) or a failed card read continues without knowledge-base grounding, adds the warning `RETRIEVAL_FAILED`
+and runs no second chance; a ready but empty shortlist still can. With retrieval off, S2 receives no shortlist and touches no
+knowledge path. `planner.catalogue_in_context: true` and `edit.source_entity_linking: true` are refused at start
+(not implemented); `resolution.on_family_match: ask` requires `clarification.mode: ask`.
+
+Role image sources: `vlm.roles.<name>.image.source` is `source_image`, `user_reference`, `knowledge_reference`,
+`edit_source_only` (the request's source image) or `edit_source_and_live_look` (that plus knowledge images); the
+model client refuses an image whose role the source does not name, before any request. Each backend's
+`image.max_side` (decision 144) caps the longest side of images sent through it; a chat call uses the smaller of the
+role's side and the backend's. Embedder backends must keep `none` until K1's cache identity includes the cap.
+
 ## Profile contract
 
 Two things are called a profile; see [Terms](#terms). This section describes the configuration profile.
@@ -192,4 +218,4 @@ A stage result of many files is committed **data first, manifest last**: the man
 
 ## Schemas
 
-JSON Schema draft 2020-12 files in [schemas/](schemas/), versioned in the name; a change is a new version. All are drafts: `enhancer_config.v0`, `request.v0`, `intake_result.v0`, `intent_ir.v0`, `constraint_ledger.v0`, `knowledge_pack.v0`, `image_observation.v0`, `concept_card.v0`, `verifier_result.v0`, `profile_manifest.v0`, `golden_case.v0`, `response_envelope.v0`, `alias_set.v0`, `info_assessment.v0`, `folder_naming.v0`, `eval_scenario.v0`, `vlm_role.v0`. Ranges in them are the schemas' own bounds, not engine limits. VLM request fields and engine mapping: [vlm-request.md](vlm-request.md).
+JSON Schema draft 2020-12 files in [schemas/](schemas/), versioned in the name; a change is a new version. All are drafts: `enhancer_config.v0`, `request.v0`, `intake_result.v0`, `candidate_shortlist.v0`, `planner_reply.v0`, `plan_result.v0`, `intent_ir.v0`, `constraint_ledger.v0`, `knowledge_pack.v0`, `image_observation.v0`, `concept_card.v0`, `verifier_result.v0`, `profile_manifest.v0`, `golden_case.v0`, `response_envelope.v0`, `alias_set.v0`, `info_assessment.v0`, `folder_naming.v0`, `eval_scenario.v0`, `vlm_role.v0`. Ranges in them are the schemas' own bounds, not engine limits. VLM request fields and engine mapping: [vlm-request.md](vlm-request.md).

@@ -198,7 +198,7 @@ vlm:                                     # R-018: rules name no model; models ar
       max_concurrency: fit_from_bench
       http: &model_http {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
       probe: &model_probe {max_requests: design_required, timeout_s: design_required}
-      image: &model_image {max_decode_pixels: deploy_required}
+      image: &model_image {max_decode_pixels: deploy_required, max_side: none}   # max_side (decision 144): this backend's longest image side; a chat call uses the smaller of it and the role's side; none = no backend limit; embedder backends keep none until K1 includes it
     embedder_qwen3vl8b:                  # T-018: Qwen3-VL-Embedding-8B on this project's embedding server (decision 137); selected with embedding.backend, never run on the dev machine
       provider: openai_compatible
       engine: {name: embed_server, version: pin_required}
@@ -284,7 +284,7 @@ vlm:                                     # R-018: rules name no model; models ar
         template_kwargs_key: enable_thinking   # name of the chat-template switch; sent as a value, N121
       output:
         format: json_schema
-        schema_id: intent_ir.v0          # contracts/schemas/
+        schema_id: planner_reply.v0      # contracts/schemas/; code builds intent_ir.v0 from it (T-014)
         strict: true
         transport: response_format
         validate_response: true          # servers may ignore schema keywords silently, N122

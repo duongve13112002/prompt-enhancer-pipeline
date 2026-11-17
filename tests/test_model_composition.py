@@ -182,7 +182,7 @@ def test_loaded_profile_composes_role_client(tmp_path, project_root, monkeypatch
                        endpoints={'chat': 'chat', 'health': 'health'}, max_concurrency=2,
                        http=dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
                                  max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[]),
-                       probe=dict(max_requests=20, timeout_s=1), image=dict(max_decode_pixels=1000), extra_body={})
+                       probe=dict(max_requests=20, timeout_s=1), image=dict(max_decode_pixels=1000, max_side='none'), extra_body={})
         backend['model'].update(id='model-base', revision='revision-base')
         if observation in retry_cases:
             backend['http'].update(max_retries=1, retry_statuses=[503], backoff_initial_s=0.2, backoff_max_s=2)
@@ -365,7 +365,7 @@ def test_cloud_budget_is_shared_by_roles_from_same_run(tmp_path, project_root, p
                      endpoints={'chat': 'chat', 'health': 'health'}, max_concurrency=1,
                      http=dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
                                max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[]),
-                     probe=dict(max_requests=1, timeout_s=1), image=dict(max_decode_pixels=1000))
+                     probe=dict(max_requests=1, timeout_s=1), image=dict(max_decode_pixels=1000, max_side='none'))
         local['model'].update(id='local', revision='revision')
         cloud = deepcopy(local)
         cloud.update(provider='anthropic', engine={'name': 'anthropic'}, api_key_file='.secrets/synthetic.key', anthropic_version='2025-01-01', anthropic_workspace_id='none',

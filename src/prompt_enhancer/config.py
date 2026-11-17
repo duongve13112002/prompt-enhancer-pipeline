@@ -984,9 +984,15 @@ def validate_embedder_reads(config, path, sources, project_root=None):
             raise ConfigurationError(f'{_source(sources, key, path)}: {key}: the embedding server decodes only '
                                      f'{", ".join(ALLOWED_FORMATS)}, not {fmt!r}')
     _check_backoff_order(config['vlm']['backends'][name]['http'], path, f'vlm.backends.{name}.http', sources)
+    # Decision 144 applies to chat roles only so far: K1's embedding-space identity does not include a backend cap,
+    # so a cap here would be silently ignored or would change stored vectors without changing their key (T-014 Q5).
+    key = f'vlm.backends.{name}.image.max_side'
+    if _get(config, key, path) != NONE:
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: an embedder backend must keep none until '
+                                 "K1's cache identity includes the backend image cap")
 
 
-SERVER_READS = ('runtime.gpus', 'runtime.vram_budget_gb', 'embedding.backend', 'embedding.batch_size',
+SERVER_READS =('runtime.gpus', 'runtime.vram_budget_gb', 'embedding.backend', 'embedding.batch_size',
                 'embedding.dimension', 'embedding.dimension_mode', 'embedding.revision', 'embedding.request.shape',
                 'embedding.request.image_instruction')
 SERVER_BACKEND_READS = ('provider', 'engine', 'engine.name', 'engine.version', 'base_urls', 'model.id', 'model.revision',
@@ -1602,6 +1608,54 @@ def validate_candidates_reads(config, path='configuration', sources=None, projec
     return config['candidates']
 
 
+PLANNER_READS = ('planner.second_chance_rounds', 'planner.catalogue_in_context', 'resolution.on_family_match',
+                 'resolution.random_seed', 'resolution.trace_choice', 'clarification.mode', 'creativity',
+                 'edit.default_preservation', 'edit.source_entity_linking', 'vlm.roles.planner')
+PLANNER_REPLY_SCHEMA = 'planner_reply.v0'  # artifact-bound: S2 builds intent_ir.v0 from this reply shape only
+PLANNER_IMAGE_SOURCE = 'edit_source_only'  # protocol-bound: the only image S2 can send is the request's source image
+
+
+def validate_planner_reads(config, path='configuration', sources=None, project_root=None):
+    """S2's request-startup and direct-entry gate (T-014); retrieval on or off, the planner always runs."""
+    sources = {} if sources is None else sources
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    schema = _schema(root, 'enhancer_config.v0')
+
+    def refuse(key, message):
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {message}')
+
+    for key in PLANNER_READS:
+        value = _get(config, key, path)
+        _sentinel(value, path, key, sources)
+        _validate(value, _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
+        _require_finite(value, path, key, sources)
+    role = config['vlm']['roles']['planner']
+    _validate(role, _schema(root, 'vlm_role.v0'), path, 'vlm.roles.planner', sources)
+    # Decision 144: the cap of every backend a planner call may reach, as an exact integer or none.
+    for name in sorted({role['backend'], _get(config, 'vlm.default_backend', path)}):
+        key = f'vlm.backends.{name}.image.max_side'
+        value = _get(config, key, path)
+        _sentinel(value, path, key, sources)
+        _validate(value, _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
+    if config['planner']['second_chance_rounds'] > sys.maxsize:
+        refuse('planner.second_chance_rounds', 'expected a native integer')
+    if config['planner']['catalogue_in_context'] is not False:
+        refuse('planner.catalogue_in_context', 'true is not implemented: the planner sees the shortlist only (N120)')
+    if config['edit']['source_entity_linking'] is not False:
+        refuse('edit.source_entity_linking', 'true is not implemented: source-image entity linking is later work')
+    if config['resolution']['on_family_match'] == 'ask' and config['clarification']['mode'] != 'ask':
+        refuse('resolution.on_family_match', 'ask requires clarification.mode ask (decision 68)')
+    output = role['output']
+    if output['format'] != 'json_schema' or output['schema_id'] != PLANNER_REPLY_SCHEMA:
+        refuse('vlm.roles.planner.output', f'expected format json_schema with schema_id {PLANNER_REPLY_SCHEMA}')
+    if output['transport'] != 'response_format':
+        refuse('vlm.roles.planner.output.transport', 'only response_format is implemented by the model client')
+    if role['image'] != 'none' and role['image']['source'] != PLANNER_IMAGE_SOURCE:
+        refuse('vlm.roles.planner.image.source', f'S2 can send only the request source image ({PLANNER_IMAGE_SOURCE}) '
+               'or no image (image: none)')
+    return config['planner']
+
+
 def _validate_request_base(config, schema):
     """Administrator diagnostics name schema-owned fields, without echoing values or arbitrary map keys."""
     try:
@@ -1721,6 +1775,7 @@ def _validate_loaded_config(config, command, root, path, sources):
         validate_reference_check_reads(config, path, sources, root)
     if command in REQUEST_COMMANDS:
         _require_float_seconds(config['runtime']['intake_deadline_s'], path, 'runtime.intake_deadline_s', sources)
+        validate_planner_reads(config, path, sources, root)
         if config['rag']['enabled']:
             validate_index_reads(config, path, sources, root)
             validate_candidates_reads(config, path, sources, root)
