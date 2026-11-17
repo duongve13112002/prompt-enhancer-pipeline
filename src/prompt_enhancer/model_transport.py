@@ -42,7 +42,10 @@ class ModelTransport:
     async def close(self):
         await self.client.aclose()
 
-    async def post(self, route, body, headers):
+    async def post_probe(self, route, body, headers, allowance):
+        return await self.post(route, body, headers, allowance=allowance)
+
+    async def post(self, route, body, headers, *, allowance=None):
         http = self.settings['http']
         url = endpoint_url(self.settings['base_urls'][0], route)
         cap = http['backoff_max_s']
@@ -55,6 +58,13 @@ class ModelTransport:
                 if self.settings['provider'] != 'openai_compatible':
                     token = await self.ledger.reserve(self.backend)
                 try:
+                    if allowance is not None:
+                        try:
+                            allowance.take()
+                        except BaseException:
+                            if token is not None:
+                                await asyncio.shield(self.ledger.release(token))
+                            raise
                     if token is not None:
                         # A cancellation at this boundary must not return a grant
                         # while an attempt might already be sent.

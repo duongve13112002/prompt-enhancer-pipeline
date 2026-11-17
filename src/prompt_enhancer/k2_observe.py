@@ -14,7 +14,7 @@ import pyarrow as pa
 
 from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_observation_reads
 from .k1_embed import MODEL_TOOL_MODULES, _read_verified, tool_revision
-from .k2_naming import _digest, _validate_reply, failure_code
+from .k2_naming import _digest, _validate_reply, failure_code, record_probe_failure
 from .model_client import ModelCallError, ModelClientRun, semantic_role_settings
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id
@@ -266,8 +266,8 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
                         raise ValueError('SOURCE_CHANGED: image no longer matches K1 content')
                     if client is None:
                         if owned_run is None:
-                            owned_run = ModelClientRun(config, root, probe_cases=probe_cases or {},
-                                                       local_probe_plans=local_probe_plans or {})
+                            owned_run = ModelClientRun(config, root, probe_cases=probe_cases,
+                                                       local_probe_plans=local_probe_plans)
                         bound = await owned_run.for_role('observer')
                     else:
                         bound = await client.for_role('observer')
@@ -286,6 +286,7 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
                     rows = _rows(document)
                     store.catalog.build('observations', rows)
                 except (ValueError, TypeError, OverflowError, UnicodeError, ModelCallError) as error:
+                    record_probe_failure(writer, key, error, revisions)
                     checkpoints.fail(key, failure_code(error), revisions=revisions)
                     report['failed'][key] = failure_code(error)
                     return

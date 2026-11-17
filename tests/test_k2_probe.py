@@ -47,6 +47,11 @@ def test_multi_image_probe_requires_both_images_and_order(ignore_order, refuse, 
                         (challenge('data:image/png;base64,second', 'data:image/png;base64,first'), 21), limit, 1))
     assert result.capabilities.get('multiple_images') is expected
     assert len(transport.requests) == limit
+    assert [case['challenge'] for case in result.evidence] == ['first', 'second']
+    statuses = [case['status'] for case in result.evidence]
+    assert statuses == (['complete', 'incomplete'] if limit == 1 else
+                        ['negative', 'negative'] if refuse else
+                        ['complete', 'negative'] if ignore_order else ['complete', 'complete'])
 
 
 def test_malformed_multi_image_plan_is_refused_without_requests():
@@ -145,7 +150,7 @@ def test_production_pair_requires_both_synthetic_images_and_order(ignore_order, 
             return httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps({'value': value})}}]})
 
     result = asyncio.run(probe_local_multiple_images_pair(SyntheticTransport(), 'chat',
-                        *multiple_images_plan('configured-model', 80), limit, 1))
+                        *multiple_images_plan('configured-model', 80, lambda data: ('image/png', data)), limit, 1))
     assert result.capabilities.get('multiple_images') is expected
 
 

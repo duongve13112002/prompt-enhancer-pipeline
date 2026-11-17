@@ -15,7 +15,7 @@ from .config import (ConfigurationError, _EXACT_INTEGERS, _StrictSafeLoader, _le
 from .k0 import parse_info, trim_info_token
 from .k0_scan import decode_info, read_source_file
 from .k1_embed import MODEL_TOOL_MODULES, _read_verified, tool_revision
-from .model_client import ModelCallError, ModelClientRun, semantic_role_settings
+from .model_client import ModelCallError, ModelClientRun, semantic_role_settings, safe_model_code, safe_probe_events
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id, normalise_name
 from .storage.identity import canonical_json, check_folder_id, is_image_id
@@ -49,16 +49,29 @@ def _validate_reply(root, schema_id, value):
 
 def failure_code(error):
     """Return protocol codes only; exception details belong inside the model boundary."""
+    if isinstance(error, ModelCallError):
+        return safe_model_code(error.code)
     prefix = str(error).split(':', 1)[0]
     if prefix in {'SOURCE_CHANGED', 'IMAGE_INVALID', 'CAPABILITY_UNAVAILABLE', 'SCHEMA_INVALID',
                   'BUDGET_EXHAUSTED', 'MODEL_CALL_INVALID', 'CONFIGURATION_INVALID', 'INPUT_INVALID',
                   'CLIENT_STATE_INVALID', 'MODEL_CALL_FAILED', 'HTTP_ERROR', 'INCOMPLETE_OR_REFUSED'}:
         return prefix
-    if isinstance(error, ModelCallError):
-        return 'MODEL_CALL_FAILED'
     if isinstance(error, OSError):
         return 'SOURCE_READ_FAILED'
     return 'SCHEMA_INVALID'
+
+
+def record_probe_failure(writer, key, error, revisions):
+    """Keep failed startup evidence through the existing anchored checkpoint boundary."""
+    if not isinstance(error, ModelCallError):
+        return
+    events = safe_probe_events(error.probe_evidence)
+    if not events:
+        return
+    document = {'error': failure_code(error), 'input_key': key, 'probes': events}
+    identity = artifact_key('model_probe_failure', _digest(document), revisions)
+    writer.checkpoints('model_probe_failure').commit(
+        identity, 'model_probe_failure', canonical_json(document).encode('utf-8'), revisions=revisions)
 
 
 def parse_assessment(value, parsed, *, project_root):
@@ -519,8 +532,8 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
             bound = await client.for_role(name, require=required)
         else:
             if owned_run is None:
-                owned_run = ModelClientRun(config, root, probe_cases=probe_cases or {},
-                                           local_probe_plans=local_probe_plans or {})
+                 owned_run = ModelClientRun(config, root, probe_cases=probe_cases,
+                                            local_probe_plans=local_probe_plans)
             bound = await owned_run.for_role(name, require=required)
         return await bound.call(prompts[name], canonical_json(_naming_payload(text)), images=attachments)
 
@@ -632,6 +645,8 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
                                                              'concepts': deepcopy(reply['concepts']),
                                                              'reason': reply['reason']})
                 except (ModelCallError, ValueError, OSError) as error:
+                    record_probe_failure(writer, key, error, revisions[
+                        'info_assessor' if stage == 'k2_assessment' else 'folder_namer'])
                     report['failed'][identity] = failure_code(error)
                     if key is not None:
                         writer.checkpoints(stage).fail(key, failure_code(error), revisions=revisions[

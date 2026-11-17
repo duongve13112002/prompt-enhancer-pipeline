@@ -218,7 +218,11 @@ def test_lazy_proof_uses_configured_deadline_without_retrying_unknown_result(k2_
     asyncio.run(execute())
     assert len(calls) == 2
     assert run.probes['main'].status == 'failed'
-    assert set(run.probes['main'].errors.values()) == {'TimeoutError'}
+    errors = dict(run.probes['main'].errors)
+    # KBS-F1 records one summary code per failed capability next to the per-challenge errors (same keys as the
+    # `multiple_images` capability, never a challenge name): the proof failed, distinct from an unspent allowance.
+    assert errors.pop('multiple_images') == 'PROBE_FAILED'
+    assert errors == {'first': 'TimeoutError', 'second': 'TimeoutError'}  # every challenge error is the timeout
     assert run.probes['main'].capabilities.get('multiple_images') is None
 
 

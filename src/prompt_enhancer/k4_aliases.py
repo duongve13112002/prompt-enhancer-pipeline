@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_alias_reads
-from .k2_naming import _digest, _validate_reply, failure_code
+from .k2_naming import _digest, _validate_reply, failure_code, record_probe_failure
 from .k1_embed import MODEL_TOOL_MODULES, tool_revision
 from .model_client import ModelCallError, ModelClientRun, semantic_role_settings
 from .profile_prompt import load_prompt
@@ -181,8 +181,8 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
                     else:
                         if client is None:
                             if owned_run is None:
-                                owned_run = ModelClientRun(config, root, probe_cases=probe_cases or {},
-                                                           local_probe_plans=local_probe_plans or {})
+                                owned_run = ModelClientRun(config, root, probe_cases=probe_cases,
+                                                           local_probe_plans=local_probe_plans)
                             bound = await owned_run.for_role('alias_generator')
                         else:
                             bound = await client.for_role('alias_generator')
@@ -199,6 +199,7 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
                     candidates[identity] = (reply['aliases'], provenance)
                     artifacts.append(artifact)
                 except (ValueError, TypeError, UnicodeError, ModelCallError) as error:
+                    record_probe_failure(writer, key, error, revisions)
                     if record is not None:
                         writer.checkpoints('k4_call_failure').commit(
                             key, 'k4_call_failure', canonical_json({'error': failure_code(error)}).encode('utf-8'),

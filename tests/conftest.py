@@ -60,6 +60,8 @@ def project_root(tmp_path_factory):
     root = tmp_path_factory.getbasetemp()
     schemas = Path(__file__).resolve().parents[1] / 'contracts' / 'schemas'
     shutil.copytree(schemas, root / 'contracts' / 'schemas')
+    # The production capability-probe bundle (KBS-F1): production entry points load it from the project root.
+    shutil.copytree(schemas.parent / 'probes', root / 'contracts' / 'probes')
     return root
 
 

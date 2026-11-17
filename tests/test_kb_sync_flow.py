@@ -96,7 +96,7 @@ def test_sync_refuses_k4_failure_with_partial_aliases(k2_env, monkeypatch, exist
     monkeypatch.setattr(SnapshotBuilder, 'finish', lambda *a, **k: pytest.fail('finish on failed K4'))
     monkeypatch.setattr(Writer, 'publish', lambda *a, **k: pytest.fail('publish on failed K4'))
     try:
-        with pytest.raises(StorageError, match='^k4: STAGE_FAILED: count=1$'):
+        with pytest.raises(StorageError, match='^k4: STAGE_FAILED: count=1; codes=SCHEMA_INVALID=1$'):
             invoke(k2_env, server)
         assert {row['origin'] for row in captured[0]['rows']['aliases']} == {'author', 'generated'}
         if old_index:
@@ -121,7 +121,7 @@ def test_every_failed_stage_blocks_publication(k2_env, monkeypatch, stage):
 
     monkeypatch.setattr(module, function, fail)
     monkeypatch.setattr(SnapshotBuilder, 'finish', lambda *a, **k: pytest.fail('finish on failure'))
-    with pytest.raises(StorageError, match=f'^{stage}: STAGE_FAILED: count=1$'):
+    with pytest.raises(StorageError, match=f'^{stage}: STAGE_FAILED: count=1; codes=SCHEMA_INVALID=1$'):
         invoke(k2_env, SyncServer())
     assert k2_env.store.current() is None
 

@@ -35,7 +35,7 @@ import yaml
 
 from .config import (_AMBIGUOUS_BREAKS, ConfigurationError, _MetaLoader, _StrictSafeLoader, _filename, _inside,
                      _load_yaml, _parse_manifest, _schema, _schema_path, _sentinel, load_profile)
-from .model_client import ModelCallError
+from .model_client import ModelCallError, safe_model_code
 from .profile_lint import (ADDENDUM_ID, DECISIONS, conflict_findings, input_variable, key_findings, render_addendum,
                            resolve_key, template_findings)
 from .profile_prompt import (ProfileError, load_prompt, parse_meta, parse_structure, placeholders, sha256_tag,
@@ -302,7 +302,7 @@ async def register_profile(config, profile_id, drafter, *, project_root):
     try:
         value, record = await drafter.call(drafter_prompt, user_text)
     except ModelCallError as error:
-        code = str(error).partition(':')[0]
+        code = safe_model_code(error.code)
         raise ProfileError('PROFILE_DRAFT_FAILED', code, model_code=code) from error
     if record.get('status') != 'OK':
         raise ProfileError('PROFILE_DRAFT_FAILED', str(record.get('status')), model_code=record.get('status'),

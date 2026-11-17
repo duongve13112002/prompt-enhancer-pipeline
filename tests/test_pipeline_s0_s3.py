@@ -6,10 +6,13 @@ labelled drafter and runner doubles before the request starts.
 """
 
 import asyncio
+import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 import json
 from threading import Thread
 
+from PIL import Image
 import pytest
 
 from assembly_fixtures import KIMONO, assembly_config, facet
@@ -19,7 +22,7 @@ from prompt_enhancer.assembly import build_assembly
 from prompt_enhancer.candidates import build_candidates, query_embedder_settings
 from prompt_enhancer.intake import intake
 from prompt_enhancer.k1_embed import Embedder
-from prompt_enhancer.model_client import ProbeCasesMissing, compose_model_client
+from prompt_enhancer.model_client import compose_model_client
 from prompt_enhancer.planner import plan
 from storage_fixtures import dataset
 
@@ -38,6 +41,8 @@ class ModelServerDouble(BaseHTTPRequestHandler):
         if self.path.endswith('/embeddings'):
             answer = {'data': [{'index': index, 'embedding': [1.0, 0.0, 0.0, 0.0]}
                                for index, _ in enumerate(body['input'])]}
+        elif not self.is_planner(body):
+            answer = {'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(self.probe(body))}}]}
         else:
             data = json.loads(body['messages'][-1]['content'] if isinstance(body['messages'][-1]['content'], str)
                               else body['messages'][-1]['content'][-1]['text'])
@@ -60,6 +65,33 @@ class ModelServerDouble(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    @staticmethod
+    def is_planner(body):
+        content = body['messages'][-1]['content']
+        text = content if isinstance(content, str) else content[-1].get('text', '')
+        try:
+            return isinstance(json.loads(text), dict) and 'shortlist' in json.loads(text)
+        except ValueError:
+            return False
+
+    @staticmethod
+    def probe(body):
+        """Production capability probes (KBS-F1): image challenges are answered from pixels, text challenges echo
+        the literal object of the instruction, as the KBS-F1 production double does."""
+        content = body['messages'][-1]['content']
+        counts = []
+        for part in content if isinstance(content, list) else ():
+            if part['type'] == 'image_url':
+                encoded = part['image_url']['url'].split(',', 1)[1]
+                with Image.open(BytesIO(base64.b64decode(encoded))) as image:
+                    row = [sum(image.convert('RGB').getpixel((x, image.height // 2))) < 384
+                           for x in range(image.width)]
+                    counts.append(sum(dark and (x == 0 or not row[x - 1]) for x, dark in enumerate(row)))
+        if counts:
+            return {'value': counts[0] * 10 + counts[1] if len(counts) == 2 else counts[0]}
+        text = content if isinstance(content, str) else content[0]['text']
+        return json.JSONDecoder().raw_decode(text[text.index('{'):])[0]
+
     def log_message(self, format, *args):
         pass
 
@@ -80,11 +112,7 @@ def server():
         assert not thread.is_alive()
 
 
-# Expected failure: exactly the missing production probe cases (KBS-F1), named by its own exception type, so any other
-# ModelCallError fails the test. KBS-F1 rewrites that path and removes the condition; the PM hand-merges it, and this
-# test must then pass outright with no mark (strict=True makes an unexpected pass fail until the mark is removed).
-@pytest.mark.xfail(strict=True, raises=ProbeCasesMissing,
-                   reason='KBS-F1: production capability probes (model_client.py raises ProbeCasesMissing)')
+# Production entry points with nothing injected: since KBS-F1 the client builds its own capability probes.
 def test_generate_request_runs_s0_to_s3_on_production_entry_points(model_test_profile, tmp_path, project_root,
                                                                    server):
     instance, seen = server
@@ -94,6 +122,9 @@ def test_generate_request_runs_s0_to_s3_on_production_entry_points(model_test_pr
                                                                          'health': 'health'})
     config['vlm']['backends']['embedder']['base_urls'] = [url]
     config['embedding']['query_text_limit'] = 1000  # labelled test-only
+    # Labelled test-only: room for the production capability probes and their bundled 96x64 images (KBS-F1).
+    config['vlm']['backends']['main']['probe'] = {'max_requests': 10, 'timeout_s': 2}
+    config['vlm']['backends']['main']['image']['max_decode_pixels'] = 20_000_000
     config['candidates']['max_prompt_windows'] = 100000
     rows = dataset(revision=query_embedder_settings(config).revision)
     image = rows['images'][0]['image_id']
@@ -113,8 +144,7 @@ def test_generate_request_runs_s0_to_s3_on_production_entry_points(model_test_pr
             try:
                 shortlist = await build_candidates(s0, embedder=embedder)
                 assert shortlist['state'] == 'ready'
-                client = await compose_model_client(effective, 'planner', project_root=project_root,
-                                                    probe_cases={}, local_probe_plans={})
+                client = await compose_model_client(effective, 'planner', project_root=project_root)
                 try:
                     planned = await plan(s0, shortlist, client, project_root=project_root, embedder=embedder)
                 finally:

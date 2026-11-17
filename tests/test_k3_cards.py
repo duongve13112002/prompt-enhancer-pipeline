@@ -154,3 +154,51 @@ def test_interrupt_after_group_commit_reuses_model_work(k2_env, monkeypatch):
             invoke_cards(k2_env, data, server)
     resumed = invoke_cards(k2_env, data, server)
     assert resumed['rows']['cards'] and len(server.requests) == 1
+
+
+@pytest.mark.parametrize('failure', ['negative', 'failed', 'incomplete'])
+def test_card_probe_failure_evidence_persists_before_generation(k2_env, monkeypatch, failure):
+    import asyncio
+    from pathlib import Path
+    import shutil
+    import httpx
+    from prompt_enhancer.k3_cards import build_cards
+    from prompt_enhancer.model_probe import BUNDLE_PATH
+    from prompt_enhancer.model_transport import ModelTransport
+    from test_kb_sync_production_probes import ProductionServer
+
+    data = inputs(k2_env)
+    target = k2_env.root / BUNDLE_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(Path(__file__).resolve().parents[1] / BUNDLE_PATH, target)
+    k2_env.config['vlm']['backends']['main']['probe'] = {'max_requests': 1 if failure == 'incomplete' else 2,
+                                                       'timeout_s': 1}
+    seen = []
+    double = ProductionServer()
+    original = ModelTransport.__init__
+
+    def respond(request):
+        seen.append(json.loads(request.content))
+        if failure == 'failed':
+            raise httpx.ReadError('LABELLED_PRIVATE_ERROR')
+        reply = double.answer(request.url.path, seen[-1])
+        if failure == 'negative':
+            reply['choices'][0]['message']['content'] = '{"value":false}'
+        return httpx.Response(200, json=reply)
+
+    def init(transport, *args, **kwargs):
+        original(transport, *args, **dict(kwargs, transport=httpx.MockTransport(respond)))
+
+    monkeypatch.setattr(ModelTransport, '__init__', init)
+    result = asyncio.run(build_cards(k2_env.store, k2_env.config, **data))
+    code = {'negative': 'CAPABILITY_UNAVAILABLE', 'failed': 'PROBE_FAILED', 'incomplete': 'PROBE_INCOMPLETE'}[failure]
+    assert set(result['report']['failed'].values()) == {code} and result['rows']['cards'] == []
+    assert len(seen) == (1 if failure == 'incomplete' else 2)
+    with k2_env.store.writer() as writer:
+        rows = [row for row in writer._state_rows().values() if row['stage'] == 'model_probe_failure']
+        assert len(rows) == 1 and not rows[0]['call_records']
+        document = json.loads(writer.checkpoints('model_probe_failure').load(rows[0]['input_key']))
+        assert document['error'] == code and document['probes']
+        assert {item['role'] for item in document['probes']} == {'card_builder'}
+        assert document['probes'][-1]['status'] == failure
+        assert 'LABELLED_PRIVATE_ERROR' not in json.dumps(document)

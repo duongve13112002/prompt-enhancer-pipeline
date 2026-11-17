@@ -1,6 +1,8 @@
 """Preflighted K0-to-K5 sync with one writer and publication last (R-014/R-017)."""
 
 from pathlib import Path
+from collections import Counter
+from contextlib import AsyncExitStack
 
 from .config import COMMAND_READS, _get, _schema, validate_sync_config
 from .k0 import guard_removals
@@ -14,6 +16,7 @@ from .k3_cards import build_cards
 from .k4_aliases import build_aliases
 from .k5_index import ServingIndex, _tools, build_index
 from .profile_prompt import load_prompt
+from .model_client import ModelClientRun, MODEL_CODES
 from .storage import StorageError, open_knowledge_store
 from .storage.tables import SNAPSHOT_TABLES
 
@@ -27,7 +30,10 @@ def require_success(stage, result):
     """Partial rows cannot substitute for successful completion of a model stage."""
     failed = result['report']['failed']
     if failed:
-        raise StorageError(f'{stage}: STAGE_FAILED: count={len(failed)}')
+        codes = Counter(code if type(code) is str and code in MODEL_CODES | {'SOURCE_CHANGED', 'SOURCE_READ_FAILED'}
+                        else 'MODEL_CALL_FAILED' for code in failed.values())
+        summary = ','.join(f'{code}={count}' for code, count in sorted(codes.items()))
+        raise StorageError(f'{stage}: STAGE_FAILED: count={len(failed)}; codes={summary}')
 
 
 def concept_texts(rows):
@@ -84,7 +90,7 @@ def _checkpoint(writer, scanned, knowledge):
 async def sync_knowledge(config, *, project_root, plan=False, force=False, client=None, transport=None):
     """Execute with optional caller-owned semantic client and labelled-test embedding transport.
 
-    Normal callers supply neither seam; each stage lazily owns and closes its real configured HTTP client.
+    Normal callers supply neither seam; the coordinator owns one lazy model run across all stages.
     The unchanged branch precedes builder/checkpoint/client creation. The writer prevents concurrent sync/GC.
     """
     validate_sync_config(config, project_root=project_root)
@@ -107,7 +113,8 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
         result['model_calls'] = {'conditional': True, 'reason': 'depends_on_model_replies',
                                  'roles': list(ROLES), 'image_inputs': len(result['rows']['images'])}
         return result
-    with store.writer() as writer:
+    async with AsyncExitStack() as cleanup:
+        writer = cleanup.enter_context(store.writer())
         scanned = scan()
         guard = scanned['report']['guard']
         guard_removals(scanned['plan']['folders'], guard['previous'], guard['threshold'], force=force)
@@ -123,6 +130,9 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
                 store.verify_snapshot(*current)
                 _previous_for_plan(store, inspect=lambda pin: ServingIndex(pin, config))
                 return {'status': 'unchanged', 'snapshot_id': current[0], 'report': scanned['report']}
+        if client is None:
+            client = ModelClientRun(config, project)
+            cleanup.push_async_callback(client.close)
         artifacts = {_checkpoint(writer, scanned, knowledge)}
         builder = writer.begin_snapshot(parent=current[0] if current else None)
         reports = {}

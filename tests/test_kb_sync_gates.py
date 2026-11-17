@@ -159,7 +159,7 @@ def test_each_sync_read_leaf_refused_before_k0(k2_env, monkeypatch, failure):
 def test_sync_refuses_k4_failure_with_partial_aliases(partial):
     result = {'report': {'failed': {'trusted-id': 'SCHEMA_INVALID'}},
               'rows': {'aliases': [{'origin': 'author'}, {'origin': 'generated'}] if partial else []}}
-    with pytest.raises(StorageError, match='^k4: STAGE_FAILED: count=1$'):
+    with pytest.raises(StorageError, match='^k4: STAGE_FAILED: count=1; codes=SCHEMA_INVALID=1$'):
         require_success('k4', result)
 
 
