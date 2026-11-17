@@ -30,11 +30,11 @@ The orchestrator is whatever session the user opens; this policy does not choose
 | Read, search, digest logs and diffs, research reading, checker | Haiku 5.5 `low` | `gpt-6-luna` `low` | Gemini 3.8 Flash `low` (1M context for long digests) |
 | Pre-mortem, edge-case scout, approach note | Haiku 5.5 `medium` | `gpt-6.1-terra` `medium` | **Gemini 3.8 Flash `medium`** (first choice) |
 | Implement: easy or medium, clear spec | Sonnet 5.5 `medium` | **`gpt-6.1-terra` `medium`** | Gemini 3.8 Flash `medium` |
-| Implement: moderately hard, multi-file | **Sonnet 5.5 `high`** | `gpt-6.1-sol` `high` | - |
-| Implement: hard, high-risk, migration | **Opus 5.5 `high`** | `gpt-6.1-sol` `xhigh` | - |
-| Implement: Opus `high` failed or hardest architecture | Fable 5.2 `high` (before raising Opus past `high`) | `gpt-6-astra` `high` | - |
-| Review, ordinary work | Sonnet 5.5 `medium` | `gpt-6.1-sol` `medium` | **Gemini 3.8 Flash `medium`** (first; never the only review) |
-| Review, high-risk (two reviewers, different families) | Sonnet 5.5 `high`, Opus 5.5 only on disagreement or P0/P1 | **`gpt-6.1-sol` `high`** | Gemini 3.8 Flash `high` |
+| Implement: moderately hard, multi-file | **Sonnet 5.5 `high`** | `gpt-6.2-sol` `high` | - |
+| Implement: hard, high-risk, migration | **Opus 5.5 `high`** | `gpt-6.2-sol` `xhigh` | - |
+| Implement: Opus `high` failed or hardest architecture | Fable 5.2 `high` (before raising Opus past `high`) | `gpt-6.2-astra` `high` | - |
+| Review, ordinary work | Sonnet 5.5 `medium` | `gpt-6.2-sol` `medium` | **Gemini 3.8 Flash `medium`** (first; never the only review) |
+| Review, high-risk (two reviewers, different families) | Sonnet 5.5 `high`, Opus 5.5 only on disagreement or P0/P1 | **`gpt-6.2-sol` `high`** | Gemini 3.8 Flash `high` |
 | Docs, wording, config-value edit (`trivial`) | Haiku 5.5 `low` | `gpt-6-luna` `low` | Gemini 3.8 Flash `low` |
 
 - **Bold** is the default pick when quota allows; otherwise use the same row in another column.
