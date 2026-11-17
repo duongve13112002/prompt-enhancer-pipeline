@@ -12,7 +12,11 @@ What the server owns, and the bound of each (fix rounds 1 and 2, R3, R4, RT1 to 
 - request bodies: at most `server.max_pending_requests` POSTs are admitted at once (a slot is taken before the body is
   read and held until the response is sent); the rest get 503 `overloaded` without a byte of body being buffered;
 - time: one deadline of `server.read_timeout_s` for reading a request and another for sending its reply;
-- bytes read after a refusal: at most `server.max_discard_bytes`, whatever length the client declares;
+- bytes read after a refusal: at most `server.max_discard_bytes`, whatever length the client declares, and for the time
+  that is left of `server.read_timeout_s`. This holds for a handler's refusal and for an over-cap refusal, whose socket
+  lingers on the accept loop (at most `server.max_connections` at once, further capped by the selector's capacity).
+  The reply of a body beyond the budget, of a refusal past the linger bound, and of a connection turned away at stop is
+  best effort: the close then holds unread bytes, and Windows resets the connection and may drop the reply;
 - logs: the first line of each kind of connection or engine error is written, later ones are counted and summed up in
   one line at shutdown; no thread waits for the console (`BoundedOutput`, fix round 4, RT3F1);
 - stop: see `stop_server`.
@@ -40,6 +44,24 @@ CONNECTION_THREAD = 'embed-conn'  # name of every handler thread, so a test or a
 OUTPUT_THREAD = 'embed-output'  # name of the console writer thread
 CLOSE_THREAD = 'embed-close'  # name of the thread that closes the engine at stop
 OUTPUT_QUEUE_LINES = 64  # safety-bound: operator lines waiting for a slow console; more are dropped and counted
+# protocol-bound: sockets one `select` call can watch. Windows has no `poll`, so the accept loop uses `SelectSelector`,
+# and CPython's `selectmodule.c` takes FD_SETSIZE 512 there (experiment, CPython 3.12.10 on Windows: 512 registered
+# sockets pass, 513 raise `ValueError: too many file descriptors in select()`). A POSIX build without `poll` falls back
+# to `select` with FD_SETSIZE 1024; with `PollSelector` there is no such limit.
+SELECT_CAPACITY = 512 if os.name == 'nt' else 1024
+
+
+def _selector_type():
+    return getattr(selectors, 'PollSelector', selectors.SelectSelector)  # what the stdlib loop uses
+
+
+def linger_bound(max_connections, selector_type=None):
+    """How many over-cap refusals may wait for their drain at once: `server.max_connections` (the deployment sized the
+    server for that many open sockets), and, when the selector is `select`, no more than its capacity less the
+    listening socket (handlers read on their own, they are not in the accept loop's selector)."""
+    if (selector_type or _selector_type()) is selectors.SelectSelector:
+        return max(min(max_connections, SELECT_CAPACITY - 1), 0)
+    return max_connections
 
 
 class ShutdownIncomplete(RuntimeError):
@@ -398,11 +420,10 @@ def _handler(state):
             self._discard_unread_body()
 
         def _unread_body(self):
-            """Declared body bytes not yet read; None when the length is unknown (a chunked body)."""
+            """Declared body bytes not yet read; None when the length is unknown: a chunked body, or a request whose
+            line or headers did not parse (the stdlib answered it with `send_error` before `headers` existed)."""
             headers = getattr(self, 'headers', None)
-            if headers is None:
-                return 0
-            if headers.get('Transfer-Encoding') is not None:
+            if headers is None or headers.get('Transfer-Encoding') is not None:
                 return None
             length = headers.get('Content-Length', '')
             return max(int(length) - self._consumed, 0) if length.isascii() and length.isdigit() else 0
@@ -442,6 +463,11 @@ class _Server(ThreadingHTTPServer):
         self._connections = {}  # accepted socket -> its handler thread (None while the thread is being created)
         self._unclosed = set()  # accepted sockets whose close was refused while they kept their handle (RT5F1)
         self._stopping = threading.Event()
+        # Over-cap refusals whose reply is sent and whose write side is shut: socket -> [deadline, bytes still allowed].
+        # The accept loop drains them (guarded by `_lock`); `_selector` is the loop's, set while it runs.
+        self._lingering = {}
+        self._selector = None
+        self._linger_bound = linger_bound(state.settings.max_connections)
         super().__init__(address, handler)
         # `select` can report a connection that is gone before `accept` takes it; with a timeout the accept gives up
         # after one slice (a `TimeoutError`, which `_handle_request_noblock` drops as the `OSError` it is) instead of
@@ -454,22 +480,32 @@ class _Server(ThreadingHTTPServer):
         once, and the stop joins this thread within its window and names it when it is still alive. Nothing in the
         loop waits for a client or the console: a refusal is written on a non-blocking socket and logged through
         `BoundedOutput`."""
-        selector_type = getattr(selectors, 'PollSelector', selectors.SelectSelector)  # what the stdlib loop uses
         try:
-            with selector_type() as selector:
+            with _selector_type()() as selector:
                 selector.register(self, selectors.EVENT_READ)
-                while not self._stopping.is_set():
-                    try:
-                        ready = selector.select(poll_interval)
-                    except OSError:
-                        if self._stopping.is_set():  # the listener was closed under the select: the stop
+                self._selector = selector
+                try:
+                    while not self._stopping.is_set():
+                        try:
+                            ready = selector.select(poll_interval)
+                        except OSError:
+                            if self._stopping.is_set():  # the listener was closed under the select: the stop
+                                break
+                            raise
+                        if self._stopping.is_set():
                             break
-                        raise
-                    if self._stopping.is_set():
-                        break
-                    if ready:
-                        self._handle_request_noblock()
-                    self.service_actions()
+                        accept = False
+                        for key, _ in ready:
+                            if key.fileobj is self:
+                                accept = True
+                            else:
+                                self._drain_lingering(key.fileobj)
+                        if accept:
+                            self._handle_request_noblock()
+                        self._expire_lingering()
+                        self.service_actions()
+                finally:
+                    self._close_lingering()  # still waiting for their drain: closed with the loop
         except Exception as error:  # the stdlib would print a trace on stderr from this thread; the type is enough
             self._state.log.note('accept_error', type(error).__name__)
 
@@ -540,21 +576,92 @@ class _Server(ThreadingHTTPServer):
 
     def _turn_away(self, request):
         """Answer an over-cap connection on the accept thread without blocking it: one small reply on a
-        non-blocking socket, then close. Best effort: one block of an already buffered request is dropped first so the
-        close is not a reset, but a request still arriving may make the client see a reset instead of the reply."""
+        non-blocking socket and a half-close, then the socket lingers (`_linger`) while the accept loop drops what the
+        client is still sending, at most `server.max_discard_bytes` and until the read deadline, so the close is not a
+        reset that discards the reply (a Windows reset drops a reply the client has not read yet).
+        Best effort past that: when `_linger_bound` refusals are already waiting, or the server is stopping, the socket
+        is closed at once after dropping one buffered block, and a request still arriving may then make the client see
+        a reset instead of the reply."""
         closing = self._state.closing
         self._state.log.note('connection_refused', 'stopping' if closing else 'overloaded')
+        lingers = False
         try:
             request.setblocking(False)
-            try:
-                request.recv(DRAIN_BLOCK)
-            except OSError:  # nothing buffered yet (would block), or the client is gone
-                pass
             request.send(_refusal(HTTPStatus.SERVICE_UNAVAILABLE, 'stopping' if closing else 'overloaded',
                                   'the server is stopping' if closing else 'too many connections'))
+            request.shutdown(socket.SHUT_WR)
+            lingers = not closing and self._linger(request)
+            if not lingers:
+                try:
+                    request.recv(DRAIN_BLOCK)
+                except OSError:  # nothing buffered yet (would block), or the client is gone
+                    pass
         except OSError:
             pass
+        if not lingers:
+            self.shutdown_request(request)
+
+    def _linger(self, request):
+        """Keep a refused socket for its drain; False (nothing kept) at the bound or when the selector refuses it."""
+        if self._selector is None:
+            return False
+        settings = self._state.settings
+        with self._lock:
+            if len(self._lingering) >= self._linger_bound:
+                return False
+            self._lingering[request] = [time.monotonic() + settings.read_timeout_s, settings.max_discard_bytes]
+        try:
+            self._selector.register(request, selectors.EVENT_READ)
+        except (OSError, ValueError, KeyError):
+            with self._lock:
+                self._lingering.pop(request, None)
+            return False
+        return True
+
+    def _drain_lingering(self, request):
+        """Read and drop one block from a lingering socket; end it at end of input, at its budget or on an error."""
+        with self._lock:
+            entry = self._lingering.get(request)
+        if entry is None:
+            return
+        try:
+            data = request.recv(min(DRAIN_BLOCK, entry[1]))
+        except BlockingIOError:  # nothing there after all
+            return
+        except OSError:  # the client is gone
+            data = b''
+        entry[1] -= len(data)
+        if not data or entry[1] <= 0:
+            self._end_lingering(request)
+
+    def _expire_lingering(self):
+        now = time.monotonic()
+        with self._lock:
+            late = [request for request, (deadline, _) in self._lingering.items() if deadline <= now]
+        for request in late:
+            self._end_lingering(request)
+
+    def _end_lingering(self, request):
+        with self._lock:
+            kept = self._lingering.pop(request, None)
+        if kept is None:  # the stop or the loop already closed it
+            return
+        try:
+            self._selector.unregister(request)
+        except (OSError, ValueError, KeyError, RuntimeError, AttributeError):  # the selector is closed or lost it
+            pass
         self.shutdown_request(request)
+
+    def _close_lingering(self):
+        with self._lock:
+            sockets = list(self._lingering)
+        for request in sockets:
+            self._end_lingering(request)
+
+    def lingering(self):
+        """How many refused sockets still wait for their drain."""
+        with self._lock:
+            return len(self._lingering)
 
     def handle_error(self, request, client_address):
         # The stdlib prints a full trace per failed connection on stderr (a blocking write); one JSON line with the
@@ -589,6 +696,7 @@ class _Server(ThreadingHTTPServer):
     def close_connections(self):
         """Close what is left (a handler that did not finish) and retry once every socket whose close was refused:
         no accepted socket outlives the stop unreported. Each socket is tried once here."""
+        self._close_lingering()  # normally closed by the accept loop's exit; this covers a loop that did not end
         with self._lock:
             sockets = list(self._connections) + [sock for sock in self._unclosed if sock not in self._connections]
         for sock in sockets:

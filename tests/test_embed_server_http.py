@@ -39,9 +39,14 @@ def served(project_root, model_test_profile):
         yield settings, profile, base, engine, stop, result
 
 
+HELD_S = 60  # test-only: how long a request held by a gate waits for its reply or its gate. A hold ends at the test's
+# release, so this bounds only a test that never releases; a shorter wait fails a correct server when the machine
+# stalls the test body for longer than it (T-018-R4: a 10 s client timeout ended two held requests under load).
+
+
 def post(base, settings, payload, **kwargs):
     content = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
-    return httpx.post(base + settings.embeddings_path, content=content, timeout=10, **kwargs)
+    return httpx.post(base + settings.embeddings_path, content=content, **{'timeout': HELD_S, **kwargs})
 
 
 def data_uri(data=None):
@@ -143,6 +148,20 @@ def test_refusals_carry_a_json_error_and_never_reach_the_engine(served):
     assert engine.calls == []
 
 
+def status_line(raw):
+    """The reply's first line: read until it is complete or the connection ends (one `recv` may return a part of it)."""
+    data = b''
+    while b'\r\n' not in data:
+        try:
+            block = raw.recv(4096)
+        except OSError:  # a reset: what arrived is what counts
+            break
+        if not block:
+            break
+        data += block
+    return data.split(b'\r\n')[0]
+
+
 def test_oversized_and_unframed_bodies(served):
     settings, _, base, engine, _, _ = served
     too_big = b'{"model": "x", "input": ["' + b'a' * settings.max_request_bytes + b'"]}'
@@ -153,13 +172,13 @@ def test_oversized_and_unframed_bodies(served):
     assert post(base, settings, exact + b' ').status_code == 413  # one byte over
     with socket.create_connection((settings.host, settings.port), timeout=5) as raw:  # no Content-Length
         raw.sendall(f'POST {settings.embeddings_path} HTTP/1.0\r\n\r\n'.encode())
-        assert b' 411 ' in raw.recv(4096).split(b'\r\n')[0]
+        assert b' 411 ' in status_line(raw)
     with socket.create_connection((settings.host, settings.port), timeout=5) as raw:  # chunked
         raw.sendall(f'POST {settings.embeddings_path} HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n'.encode())
-        assert b' 411 ' in raw.recv(4096).split(b'\r\n')[0]
+        assert b' 411 ' in status_line(raw)
     with socket.create_connection((settings.host, settings.port), timeout=5) as raw:  # a bad length
         raw.sendall(f'POST {settings.embeddings_path} HTTP/1.0\r\nContent-Length: -5\r\n\r\n'.encode())
-        assert b' 411 ' in raw.recv(4096).split(b'\r\n')[0]
+        assert b' 411 ' in status_line(raw)
     assert len(engine.calls) == 1  # only the request of exactly the limit reached the engine
 
 
@@ -222,7 +241,7 @@ def test_health_says_loading_until_the_engine_is_ready(project_root, model_test_
     release, result = threading.Event(), {}
 
     def slow_load(_):
-        release.wait(10)
+        release.wait(HELD_S)  # held until the test releases it: "loading" must not end by the clock (T-018-R4)
         return EngineDouble()
 
     stop = threading.Event()
@@ -366,7 +385,7 @@ def test_idle_exit_waits_for_admitted_work_and_counts_from_its_release_on_an_inj
             polls_without_exit(result)
         finally:
             gate.release.set()
-            client.join(15)
+            client.join(HELD_S)
         assert outcome == {'status': 200}, outcome
         assert released.wait(10)
         polls_without_exit(result)  # the clock has not moved since the release: idle time is zero, not five seconds
@@ -478,7 +497,7 @@ class Gate(EngineDouble):
 
     def embed(self, items):
         self.entered.set()
-        assert self.release.wait(15)
+        assert self.release.wait(HELD_S)
         return super().embed(items)
 
 
@@ -665,7 +684,7 @@ def test_requests_beyond_the_admission_bound_are_refused_before_they_are_decoded
         finally:
             gate.release.set()
             for thread in holders:
-                thread.join(15)
+                thread.join(HELD_S)
         assert answers == [200, 200]
         assert post(base, settings, one_image).status_code == 200  # both slots were released
 
@@ -681,7 +700,7 @@ def test_the_admission_bound_is_what_the_profile_says(project_root, model_test_p
             assert post(base, settings, request(['a'])).status_code == 503  # a bound of 1 admits one
         finally:
             gate.release.set()
-            holder.join(15)
+            holder.join(HELD_S)
 
 
 @pytest.mark.parametrize('host', ['127.0.0.1', 'localhost', '127.0.0.2'])

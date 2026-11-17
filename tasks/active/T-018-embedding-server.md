@@ -1474,3 +1474,154 @@ Test-only change: no runtime value, profile key, schema or default changed. Rows
 - Changed files: `tests/test_embed_server_http.py`, `tests/test_embed_server_lifecycle.py`, this task file.
 - Open issues: the unexplained single failure of `test_oversized_and_unframed_bodies` (run 5 of the first loop).
 - Cleanup: deleted `c4_control.py`, `c4_mutant.py`, `test_retest1_probes.py` and my scratch; kept `.tmp/T-018/fr2/{mutants.py,mutants.log,http5.log,http5b.log}`. `.tmp/T-018/retest1-bt` could not be removed (Permission denied): PM cleanup.
+
+## R4 fix
+
+Task T-018-R4 (Claude Sonnet 5.5, `high`; Codex reviews). R-015, R-017, R-018. Trivial: no. Small: no. Base `3a47ac3`. Status: **Step 0 approved by the PM; implemented and verified (see "Result" below); waiting for review.**
+
+### Step 0
+
+**How the evidence was made.** Scratch probes only (never tracked): `.tmp/T-018-R4/probe/test_probe.py`, `test_diag.py`, `test_diag2.py`, `test_paths.py`, run by `.tmp/T-018-R4/run_tests.py` (one pytest process through `test_slot.py`, `-X faulthandler`, fixed `--basetemp` removed after each run). Machine load: `.tmp/T-018-R4/load.py start 28` = 28 hidden busy-loop `python -c "while True: pass"` processes (16 logical cores; the machine also runs other sessions' tests), stopped by their recorded PIDs; 0 left. Logs kept: `.tmp/T-018-R4/{base-life-1..5,base-http-1..5,diag-load,diag2-load,paths-load,probe1}.log`. Linux: `not_run` (no Linux host here; every statement below is Windows evidence unless marked assumption).
+
+**Reproduction under load** (lifecycle subset `-k "full_pipe or summary_that_cannot"`, 7 tests, 5 runs): 3 of 5 runs failed. `base-life-1`: `test_a_refusal_logged_into_a_full_pipe...` `assert b' 503 ' in b''` (the PM's failure, line 704) and `test_a_stop_summary_that_cannot_be_written...` (`summary == []`); `base-life-4`: summary test `lines == []`; `base-life-5`: summary test `wait_for(lambda: len(handler_threads()) == 1)` timed out (line 730, the PM's second failure). HTTP subset `-k "oversized_and_unframed or unread_body_bytes_pending"`, 5 runs: 5 green (`test_oversized_and_unframed_bodies` not reproduced).
+
+**Decision per failing test (server versus test).**
+
+| Test | Verdict | Evidence |
+|---|---|---|
+| `test_a_refusal_logged_into_a_full_pipe...` (`:704`), `test_a_stop_summary_that_cannot_be_written...` (`:730` and its `lines == []`) | **test defect, server correct** | The client sends nothing, so the server closes no socket with unread bytes: the Windows-RST theory cannot give `b''` here. `test_diag.py` (same body, timestamps, 30 rounds under load): 10 of 30 replies empty, each arriving 0.55 to 0.77 s after the connect (= one 0.5 s read deadline), the 20 good ones at 0.11 to 0.25 s. `test_diag2.py` (labels each accept as REFUSED or SERVED, 24 rounds): in all 4 empty rounds the **readiness probe's handler thread of `running_server` was still alive** (`after-ready handler_threads=1`, `registered=1`) when the holder connected, so with `max_connections=1` the server correctly refused the **holder** (REFUSED), `wait_for(len(handler_threads()) == 1)` was already satisfied by the probe's thread, the **extra** was then served as a normal connection with no request, and closed without a reply when its own 0.5 s read deadline passed (`reply=b''@0.656`). The same race makes `wait_for(... == 1)` time out (holder refused, probe thread ends: zero handlers) = the `:730` failure. Quoted: `ORDER round=6 ... after-ready handler_threads=1 | accept@0.016(registered=1) | REFUSED | holder-connected seen_threads=1 | wait_for-passed@0.016 | accept@0.094(registered=0) | SERVED | reply=b''@0.656` (`diag2-load.log`). The holder's real 0.5 s deadline is a second real-clock hazard (a holder that outlives a stall of 0.5 s frees its slot; `test_probe.py::test_A`: after a 0.8 s stall the extra gets `b''` deterministically). |
+| `test_oversized_and_unframed_bodies` (http, P3 once) | **not reproduced, cause unknown** | 5 of 5 loaded subset runs green; `test_paths.py` over 40 exchanges per case under load: a 404 or 413 refusal with an unread body of 2000, 399999, 400000 and 400001 bytes (budget 400000) reached the client 40 of 40 times each; so no server evidence of a loss at or below the budget. The test's raw 411 checks use one `recv(4096)` (a short or reset read is possible); that is the only weakness found. The full file will be run 5 times under load (below); a failure there will be captured with its assertion text before any claim. |
+
+**A separate server defect found by the sweep** (not the cause of the two failures above, because those tests send nothing): the over-cap refusal (`_turn_away`, `server.py:541-557`) does one non-blocking `recv` then sends the 503 and closes. A request that arrives after that `recv` is unread at the close, and Windows resets the connection. `test_probe.py::test_B` (cap 1 held, 60 over-cap connections per size, client sends the request and then reads, no CPU load, `probe1.log`): body 0 (head only) **4 of 60 lost**; 2000 bytes 43 lost; 65536 40; 400000 40; 400001 45; 1.5 MB 58. The goal says a refusal the server decides to send must reach the client: the server is at fault here, and this is the one runtime change proposed.
+
+### Class sweep: close and refusal paths in `server.py` that can close with unread bytes
+
+| # | Path | Evidence | Disposition |
+|---|---|---|---|
+| S1 | over-cap connection, accept thread (`_turn_away`, `:541`) | test_B above: lost from 0 bytes up (7 % to 97 %) | **fix**: keep the socket after the reply, half-close, drain on the accept loop (design below), bounded |
+| S2 | same, while `closing` (stop) | the accept loop ends within one poll; sockets still lingering are closed then | **document**: best effort at stop (a client still sending may see a reset); test that the stop closes them |
+| S3 | handler refusals before the body is read: 404/405 route and method, 411 framing, 413 size, 503 loading/stopping/overloaded, GET with a body (`handle` -> `_discard_unread_body`, `:396-426`) | `test_paths.py` under load: 2000, 399999, 400000, 400001 bytes: 40 of 40 each (404 and 413) and 503 overloaded with 2000 and 100000 bytes 40 of 40 | **left** (works); property test added for bodies below, at and above the budget |
+| S4 | the same with a body of 4 x budget (1.6 MB) | 24 of 40 and 21 of 40 delivered (16 and 19 lost) | **document and test**: beyond `server.max_discard_bytes` the reply is best effort; the property test asserts only that the reply, when it comes, is a complete status line and that the server read at most the budget (the existing `drained == [discard]` tests keep the byte bound) |
+| S5 | 408 stalled body (the read deadline has passed) | the client sent what it meant to send; the drain cannot read after the deadline (`OSError`, caught) | **left**: reply is sent before the close; covered by `test_a_stalled_upload_*` |
+| S6 | 400 `incomplete_body` (client closed early, or stop cut it) | nothing to answer by design | **left**, documented in the code already |
+| S7 | request line or headers that do not parse (stdlib `send_error` 400/414/431; `self.headers` absent, so `_unread_body` returns 0 and nothing is drained) | 414 with a request line of 70000 and 300000 bytes: 40 of 40; 600000 bytes: 3 of 40 lost | **question 3** (treat as unframed: drain up to the budget) |
+| S8 | stop: `cut_connections` shuts both directions of live handlers after the grace | by design (RT1); replies of work past its body are written during the grace | **left** |
+| S9 | `_serve_connection` finally -> `shutdown_request` (shutdown WR + close) after the drain | same rule as S3/S4 | **left** |
+
+### Class sweep: real-clock waits, sleep ordering and thread-count barriers in the two test files
+
+| Where | What | Disposition |
+|---|---|---|
+| `running_server` (`tests/embed_server_fixtures.py:96-103`) | the readiness probe's handler can outlive the fixture's return | **fix** in the fixture: wait (eventually, 10 s) until no `embed-conn` thread is alive before yielding |
+| lifecycle `:690-717`, `:720-746` (the two failures) | holder with a real 0.5 s deadline; barrier `len(handler_threads()) == 1` | **fix**: holder deadline held by the existing `hold_deadlines` seam (http `:523`); barrier = the holder's own reader recorded (`readers`), which proves its handler was created; `read_timeout_s` stays 0.5 (it still bounds the stop windows) |
+| lifecycle `:89-124` cap tests (cap 2 and 4, 25 refusals inside a 3 s deadline), `:127-157` slow connections, `:161-176` flood (30 refusals inside 5 s) | the same barrier and real deadlines | **fix** the same way; the "idle holders end at their read deadline" step becomes a release of the held deadlines (the production deadline is proven by the http tests `:572`, `:613`) |
+| lifecycle `stop_bound` (`:637`) and its uses (`:194-197`, `:292-295`, `:705-708`, `:734-737`, `:794-797`, `:820-822`, `:962-964`, child harness `:928`, `:1273`) | real-clock upper bound `5 W + 1 s` | **widen** `SLACK_S` 1.0 -> 5.0 (test-only; what the bound detects is a stop that waits for a console or a stuck loop, which is unbounded, not a few seconds); `:294-295` uses the same helper instead of a literal 3 |
+| lifecycle `:226`, `:262`, `:148` sleeps; child harness `:879` | sleeps before a negative assertion or an ordering that either outcome satisfies (P3 fix round 2 rows) | **left**: no readiness probe in the child; its `extra.recv` is not asserted |
+| lifecycle `:33-37`, `:59-60`, `:670-677` | eventual polls | **left** |
+| lifecycle `:749-771`, `:985`, `:995` | `< 1.0`, `< 0.4`, `< 1.2` for calls that must not wait for a console | **left** (ms of work against an unbounded block); re-checked by the loaded runs |
+| http `:146-163` `test_oversized_and_unframed_bodies` | one `recv(4096)` per raw 411 check | **fix**: read until the status line is complete or EOF (a helper shared with `exchange`); no server claim |
+| http `:504-511`, `:566`, `:583`, `:609` | upper bounds 3.5 s (1 s deadlines) | **left** (P3 fix round 2: 2.5 s of slack); re-checked by the loaded runs |
+| http `:232-249`, `:296-299`, `:428-430`, `:652-655` | eventual polls | **left** |
+
+### Proposed runtime change (S1), no new key
+
+`_Server._turn_away` sends the 503, half-closes (`SHUT_WR`), and, when fewer than `LINGER_LIMIT` (32; safety-bound constant: Windows `select` holds at most 512 sockets) refusals are waiting, keeps the socket in a `_lingering` map (guarded by the existing `_lock`) with a deadline of `server.read_timeout_s` and a byte budget of `server.max_discard_bytes`. The accept loop (`serve_forever`) registers those sockets in its selector, reads at most `DRAIN_BLOCK` per ready socket without blocking, and closes a socket at end of input, at the budget, at its deadline or on an error; the loop exit and `close_connections` close what is left through `shutdown_request` (a refused close is already tracked in `_unclosed`). Past the limit (or while `closing`) it behaves as today (close at once, best effort). The accept thread still never waits for a client or the console. Bounds come from existing keys only: `max_discard_bytes` (bytes), `read_timeout_s` (time), `max_connections` (what makes a connection over-cap).
+
+### Configuration impact (R4, before any runtime edit)
+
+| Value or behaviour | Path / source | Change |
+|---|---|---|
+| bytes dropped after an over-cap refusal | `server.max_discard_bytes` (validated, `deploy_required` in the three examples) | new second consumer (`_turn_away` drain); same key, no new key |
+| time an over-cap socket may linger | `server.read_timeout_s` | new consumer; same key |
+| what makes a connection over-cap | `server.max_connections` | unchanged |
+| number of lingering refusals | `LINGER_LIMIT = 32` constant | **new retained literal, class safety-bound** (Windows `select` capacity); not an operational value, not a profile key |
+| test-only: `SLACK_S` 5.0, holder `hold_deadlines`, fixture wait | tests | test-only |
+
+Tests for the audit (written after approval): the existing override and refusal tests of the three keys stay green and unchanged (`tests/test_embed_server_config.py:64-98,152-161`); a non-default override test for the new consumer (`max_discard_bytes` 150000 and 250000: the lingering drain stops at exactly that budget, as the handler path's `test_the_discard_is_capped...`); `read_timeout_s` 0.3: a quiet lingering socket is closed within the window (eventual check); `max_connections` 2 and 4: the lingering refusals follow the cap.
+
+### Questions (ranked, each with my proposed answer)
+
+1. **Runtime change S1: lingering drain on the accept loop (above) or a dedicated refusal thread?** *Proposed: the accept loop, because it adds no thread to start, join or report at stop; the dedicated thread is cleaner for the accept loop but needs a new survivor kind and a queue.* The documentation-only option (leave the over-cap refusal best effort) is rejected: 7 % to 97 % of refusals were lost in a probe with no load.
+2. **`LINGER_LIMIT = 32` as a safety-bound constant, not a profile key?** *Proposed: yes (no new key without asking); a refusal beyond it is closed at once, as today.*
+3. **S7: treat a request that fails to parse (`self.headers` absent) as unframed and drain up to the budget, like a chunked body?** *Proposed: yes, one condition in `_unread_body`; evidence is 3 of 40 lost at 600000 bytes, so the gain is small; if you prefer, document it instead.*
+4. **Fixture change: let `running_server` wait for the probe handler to end (affects every embed-server test file)?** *Proposed: yes; it is eventual (10 s), never asserts, and the lifecycle tests also use the held-deadline seam so they do not depend on it.*
+5. **`SLACK_S` 1.0 -> 5.0 for the stop-bound assertions?** *Proposed: yes (test-only); no stop reached the old bound in 5 loaded runs, so this is margin, not a fix.*
+
+### Plan (checkable finish)
+
+1. Tests first, no runtime edit: fixture wait; seam and barrier in the lifecycle tests of the sweep; robust 411 reads; `SLACK_S`. Check: the two lifecycle files, one process each, 5 runs each under a second CPU-heavy process started and stopped by me (the other file, plus the 28 busy loops), all green.
+2. After approval of questions 1 to 3: S1 in `server.py` (and S7 if approved) with its docstring and module-docstring lines (the documented limit: beyond `max_discard_bytes` a reply is best effort); tests: over-cap refusal with pending request bytes below, at and above the budget, lingering cap, deadline, stop closes lingering sockets, override tests; the property test of refusals (Hypothesis, real loopback server, bodies below, at and above `max_discard_bytes`: a complete status line before the close for below and at; above: a complete status line or a reset, never a hang, the server reads at most the budget).
+3. 3 to 10 mutants on a scratch copy (lingering never closed, budget ignored, deadline ignored, cap off, reply sent after the drain, barrier removed), report survivors.
+4. Run: both files x 5 under load, every other `tests/test_embed_server_*.py` once, the 2 server smoke tests of this task file (CPU only: `tests/test_embed_server_lifecycle.py::test_stop_closes_every_accepted_socket_and_joins_every_handler_before_the_engine` and `tests/test_embed_server_http.py::test_health_and_one_request`; the task file names no smoke test by id for the server, this is my reading: say if you meant others), `ruff` (not installed in the project venv at P3: will state), no full suite.
+5. Configuration audit, completion report, remove `.tmp/T-018-R4/` scratch except the cited logs.
+
+**Done check:** the two failures no longer occur in 5 of 5 loaded runs of each file; the property test passes; mutants killed; every `test_embed_server_*.py` file green once.
+
+### PM decision pending user review
+
+- Standing choice made in Step 0: probes and loads only under `.tmp/T-018-R4/`, killed by PID; two test processes at once only for load runs.
+- **PM answers to the Step 0 questions (plan approved; each is a "PM decision pending user review"):** (1) the lingering drain lives on the accept loop and the accept thread never waits for a client or the console; (2) **changed**: no free-standing `LINGER_LIMIT`: at most `server.max_connections` refusals linger at once, further capped by the selector's own capacity (protocol-bound: Windows `select` holds 512 sockets; the listener is subtracted; handlers do not share the selector), the number derived from the platform fact with its source in a comment and one test pinning the clamp; past the bound or while `closing`, close at once as today (best effort, documented); (3) a request that fails to parse is unframed and is drained up to `server.max_discard_bytes`; (4) `running_server` waits eventually (10 s) for the probe's `embed-conn` thread and never asserts on it; (5) `SLACK_S` 1.0 -> 5.0 (test-only), and the `:294-295` bound uses the helper. Smoke tests: `test_stop_closes_every_accepted_socket_and_joins_every_handler_before_the_engine` and `test_health_and_one_request`, CPU only. Load: at most 16 busy loops, at most two test processes at once, loops stopped by recorded PID the moment each run ends.
+
+Noticed, not done: `base-life-*` runs were slow under 28 busy loops (2 to 4.5 min per 7 tests); the one Winsock error `WinError 10106` at interpreter start (`diag2` first attempt, one `import asyncio` in the pytest `anyio` plugin) happened once under load and is environmental, not a server fact.
+
+### Changes (R4)
+
+- **`server.py` (S1, S2, S7).** `_turn_away` sends the 503, half-closes, and keeps the socket in `_lingering` (`[deadline = now + read_timeout_s, bytes left = max_discard_bytes]`, guarded by `_lock`); the accept loop registers it in its selector and `_drain_lingering` reads at most `min(DRAIN_BLOCK, left)` per ready socket without blocking; `_end_lingering` closes at end of input, at the budget, on an error or at `_expire_lingering` (each loop iteration); the loop's `finally` and `close_connections` call `_close_lingering`. The bound is `linger_bound(max_connections)`: `max_connections`, further `SELECT_CAPACITY - 1` when the selector is `select` (Windows: `SELECT_CAPACITY = 512`, protocol-bound, experiment `select_cap.py`: 512 sockets pass, 513 raise `ValueError: too many file descriptors in select()`; the listener takes one; handlers read on their own and are not in the selector). Past the bound, or while `closing`, the socket drops one buffered block and is closed at once (best effort, documented in the module docstring and `docs/stages/K1-embed.md`). `_unread_body` returns `None` (drain up to the budget) when `headers` never parsed (S7). No new key, no free-standing count.
+- **`tests/embed_server_fixtures.py`:** `running_server` waits (eventually, 10 s, never asserts) until the readiness probe's `embed-conn` thread has ended.
+- **`tests/test_embed_server_lifecycle.py`:** `hold` and `expire` helpers on the existing `hold_deadlines` seam: the cap, slow-connection, flood and the two failing pipe tests hold their holders by their own recorded readers (the barrier proves the holder got a handler) and release them explicitly; `SLACK_S` 5.0 and the `:294` bound uses `stop_bound`; `HELD_S` for the gate waits. New: `lingered` and `server_instances` labelled seams; budget override (`max_discard_bytes` 150000 and 250000), deadline (`read_timeout_s` 0.3), `max_connections` 2 and 4 bound and stop closes the lingering sockets, selector-clamp pin; three Hypothesis property tests of refusals (route 404, oversize 413, over-cap 503) for bodies below, at and above the budget; the existing discard-cap test gains an `unparsable_line` head (S7).
+- **`tests/test_embed_server_http.py`:** `HELD_S = 60` (client timeout and gate waits of held requests, `join`s after a release, the "loading" hold of `test_health_says_loading...`); `status_line` for the raw 411 checks.
+- **`docs/stages/K1-embed.md`:** one sentence on the over-cap refusal.
+
+### Result: how the two named failures and the one unexplained failure ended
+
+- `:704` and `:730` (and their `lines == []` face): cause = readiness-probe handler holding the slot plus the holder's real 0.5 s deadline (test defects, evidence above); fixed by the fixture wait and the held-deadline barrier. Loaded subset after the test edit only (before S1, `t1-1.log`, 16 loops): 11 passed; `t1-2`, `t1-3`: 11 passed (these two include S1).
+- Two further real-clock holds found by the loaded runs of the first HTTP series, both fixed: `test_requests_beyond_the_admission_bound...` (both held clients ended with `httpx.ReadTimeout` after the 10 s client timeout while the test body stalled) and `test_health_says_loading_until_the_engine_is_ready` (the 10 s `slow_load` wait let "loading" end by itself: `assert 200 == 503`).
+- `test_oversized_and_unframed_bodies`: not reproduced in any loaded run (5 + 5 + 5 runs of the file, 0 failures in that test); not claimed fixed; the status-line read is more robust.
+
+### Class sweep: outcome of the rows
+
+S1 fixed; S2 documented; S3 left, property test added; S4 documented in code and docs, property test asserts only termination and a complete status line when a reply arrives; S5, S6, S8, S9 left; S7 fixed (drain up to the budget). Test rows as in Step 0, plus two new rows found under load: the held clients' 10 s timeout and `join(15)` (fixed: `HELD_S`), and the 10 s `slow_load` hold (fixed).
+
+### Mutants (scratch copy `.tmp/T-018-R4/mut/src`, `.tmp/T-018-R4/mutants.py`, log `.tmp/T-018-R4/mutants.log`, `-x`, selection `over_cap or lingering or reaches_the_client or discard or budget`; tracked files untouched)
+
+Control (unmutated copy): 17 passed. **10 of 10 killed:** M1 no lingering; M2 budget ignored; M3 deadline never passes; M4 bound not applied; M5 selector clamp removed; M6 lingering never closed at stop; M7 unparsable request not drained; M8 no half-close after the reply; M9 expiry never runs; M10 clamp off by the listener. Survivors: none. Not mutated: the test-side fixture wait and the held-deadline barrier (their proof is the loaded runs and `diag2`).
+
+### How the machine was loaded, and the commands
+
+- Load: `.tmp/T-018-R4/load.py start 16` = 16 hidden busy loops (`python -c "while True: pass"`, `CREATE_NO_WINDOW`), PIDs recorded in `load.pids`, stopped by those PIDs; the other file's series was the second CPU-heavy process. Other sessions also ran suites meanwhile (the test slot limit showed 2 slots at one point).
+- **Honest deviation:** my `TaskStop` of a background shell did not stop its child loops and runs; one earlier series (`httpf`) and a second set of 16 loops therefore ran on while I started the next series, so for about 40 minutes the machine carried about 32 loops and more than two test processes (over the PM cap). I found it, listed the processes by command line (read only), stopped each by its literal PID (56 processes, none of other sessions or of the PM's `cli_worker`), verified 0 left, discarded every log of that period and reran the final series from scratch under the stated load. The earlier lifecycle runs `life-1..5` (5 of 5 green, 71 passed each) were taken under 16 loops plus the mutation run and the other-files run (3 processes), i.e. heavier than allowed; they are kept as extra stress evidence only.
+- **Final series** (`both.sh`, final files, 16 loops, lifecycle series and http series side by side, one pytest process per file, `-X faulthandler`, `test_slot.py`, fixed `--basetemp` removed after each run): lifecycle file `fin-life-1..5.log`: `71 passed` x 5 (513 s, 497 s, 485 s, 539 s, 562 s); http file `fin-http-1..5.log`: `39 passed` x 5 (600 s, 575 s, 578 s, 695 s, 614 s). Loops stopped at the end of the series by the recorded PIDs: 0 left.
+- Every other `tests/test_embed_server_*.py` once, one process per file (`others.sh`, logs `other-*.log`): cli 8 passed; config 160; dev_compare 71; identity 27; manifest 35 passed, 1 skipped; models 18; protocol 89; read_set 80; reference 149. After the last test-file edits `config` and `models` (the two that import the http file) were rerun: 160 and 18 passed (`other2-*.log`).
+- Smoke tests (CPU only, `smoke.log`): `test_stop_closes_every_accepted_socket_and_joins_every_handler_before_the_engine` and `test_health_and_one_request`: `2 passed in 9.49s`.
+- `ruff format --check` / `ruff check`: `not_run` (`No module named ruff` in the project `.venv`; installs not allowed). All added code lines are 120 characters or fewer.
+- `not_run`: Linux and CI (no host; the property and clamp tests are written platform-neutral: `SELECT_CAPACITY` is 1024 on POSIX and the bound uses `PollSelector` there, an assumption not verified); full suite (not asked).
+
+### Configuration audit (R4)
+
+| Operational value or behaviour | Validated configuration path | Validation | Example / profile | Non-default override test and refusal test | Retained-literal class |
+|---|---|---|---|---|---|
+| bytes dropped after an over-cap refusal | `server.max_discard_bytes` (new consumer `_linger`/`_drain_lingering`) | integer >= 1 and >= `max_request_bytes` (`config.py:1105`) | `deploy_required` in the three examples | override: `test_an_over_cap_refusal_drops_at_most_the_server_budget_whatever_the_client_sends` (150000, 250000); refusal: `test_embed_server_config.py:155-157`, unchanged and green | configurable |
+| time an over-cap socket may linger | `server.read_timeout_s` (new consumer `_linger` deadline) | number > 0, timer-safe (`config.py` read-timeout rules) | examples | override: `test_a_quiet_lingering_refusal_is_closed_when_the_read_deadline_passes` (0.3 s, never before it); refusal: `test_embed_server_config.py:158-161`, unchanged | configurable |
+| what is over-cap, and how many refusals linger | `server.max_connections` (new consumer `linger_bound`) | integer >= `max_pending_requests` | examples | override: `test_the_lingering_refusals_are_bounded_by_max_connections_and_the_stop_closes_them` (2 and 4); refusal: `test_embed_server_config.py:152-154`, unchanged | configurable |
+| sockets one `select` holds | `SELECT_CAPACITY` (512 Windows, 1024 POSIX) in `server.py` | none (a platform fact) | n/a | `test_the_lingering_bound_is_capped_by_the_selector_capacity` pins the clamp (`min(max_connections, capacity - 1)`, listener subtracted, unclamped for a selector without the limit) and the Windows value | protocol-bound (source: CPython `selectmodule.c` FD_SETSIZE and the `select_cap.py` experiment, Windows 3.12.10) |
+| `DRAIN_BLOCK` (64 KiB read per ready lingering socket) | constant, unchanged class | n/a | n/a | n/a | safety-bound (unchanged) |
+| unparsable request drained like an unframed body (S7) | `server.max_discard_bytes` | as above | as above | `test_the_discard_is_capped_by_the_server_budget_whatever_the_client_declares[unparsable_line]` (150000, 250000) | configurable |
+| test values `HELD_S` 60, `SLACK_S` 5.0, fixture wait 10 s, `hold_deadlines` | tests | n/a | n/a | n/a | test-only |
+
+No new profile key, no schema or example change; no hidden default; the three keys' override and refusal tests are unchanged and green (`config` 160 passed). Property tests: the three refusal properties (route, oversize, over-cap; below, at and above the budget) and the existing `drain` property.
+
+### PM decisions pending user review (R4)
+
+- Test-only widths chosen: `HELD_S = 60` s and `SLACK_S = 5.0` s; the fixture wait of 10 s is eventual and never asserts.
+- S4 stays a documented best effort: a body beyond `max_discard_bytes` may lose its reply on Windows (16 and 19 of 40 lost at 4 x budget); the property test requires only that the connection ends and that a reply which arrives starts with a complete status line.
+- Drain of an unparsable request (S7) read as "unframed" per PM answer 3; a client that connects and sends nothing is unaffected (its drain ends at once, by end of input or by the passed deadline).
+
+### Completion report (R4)
+
+- **Behaviour:** the two flaky lifecycle tests were test defects (readiness-probe handler holding the single slot plus real 0.5 s holder deadlines): fixed by a fixture wait and held-deadline barriers on the holders' own handlers. Two more load-sensitive real-clock holds in the http file were found and fixed (`HELD_S`). One real server defect was found and fixed: an over-cap refusal was lost whenever the client's request arrived after the accept thread's single `recv` (4 to 58 of 60 lost depending on the body); the socket now lingers and is drained by the accept loop within `max_discard_bytes`, `read_timeout_s` and `max_connections` (and the `select` capacity); a request that fails to parse is drained like an unframed body. Beyond the budget the reply is best effort, documented and tested as such.
+- **Commands and output:** above (final series 5 x 71 passed and 5 x 39 passed under 16 busy loops; mutants 10 of 10 killed; other files green; smoke `2 passed`).
+- **not_run:** Linux/CI, ruff, full suite.
+- **Changed files:** `src/prompt_enhancer/embed_server/server.py`, `tests/embed_server_fixtures.py`, `tests/test_embed_server_lifecycle.py`, `tests/test_embed_server_http.py`, `docs/stages/K1-embed.md`, this task file.
+- **Open issues:** `test_oversized_and_unframed_bodies` never failed again, so its original cause stays unknown (no server evidence of a below-budget handler-path loss in the 400 probe exchanges of `paths-load.log` at 2000 to 400001 bytes). Linux behaviour unverified.
+- **Noticed, not done:** the Windows `WinError 10106` at interpreter start under load (once); `TaskStop` leaves child processes of a background shell running (lesson for the PM's tooling notes).
+- **Cleanup:** scratch under `.tmp/T-018-R4/` removed except the cited logs (`base-*`, `diag*`, `paths-load`, `probe1`, `t1-*`, `fin-*`, `other*`, `mutants.log`, `smoke.log`, `select_cap.py`); busy loops and runs stopped by PID, 0 left.

@@ -12,7 +12,7 @@ import httpx
 from prompt_enhancer.embed_server.pooling import l2_normalize
 from prompt_enhancer.embed_server.protocol import EngineError
 from prompt_enhancer.embed_server.models import EmbedResult
-from prompt_enhancer.embed_server.server import serve
+from prompt_enhancer.embed_server.server import CONNECTION_THREAD, serve
 
 DIMENSION = 4  # test-only: the vector length of the profile and of the engine double
 
@@ -95,12 +95,19 @@ def running_server(settings, engine=None, load=None, *, stop=None, clock=None, a
     thread.start()
     base = f'http://{settings.host}:{settings.port}'
     deadline = time.monotonic() + 10
+    ready = False
     while time.monotonic() < deadline and 'error' not in result:
         try:
             if httpx.get(base + settings.health_path, timeout=1).status_code == 200:
+                ready = True
                 break
         except httpx.HTTPError:
             time.sleep(0.05)
+    if ready:  # the probe's handler may outlive its reply; with a small connection cap it would hold the test's slot
+        settled = time.monotonic() + 10  # eventual, never asserted: a test that needs the slot checks its own barrier
+        while time.monotonic() < settled and any(
+                thread.name == CONNECTION_THREAD and thread.is_alive() for thread in threading.enumerate()):
+            time.sleep(0.01)
     try:
         yield base, engine, stop, result
     finally:

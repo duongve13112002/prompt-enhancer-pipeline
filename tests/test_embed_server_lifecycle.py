@@ -22,7 +22,8 @@ import pytest
 from prompt_enhancer.embed_server import server as server_module
 from prompt_enhancer.embed_server.server import CONNECTION_THREAD, ShutdownIncomplete, drain
 from embed_server_fixtures import EngineDouble, running_server
-from test_embed_server_http import Gate, exchange, make_settings, port_is_free, post, post_head, request
+from test_embed_server_http import (HELD_S, Gate, exchange, hold_deadlines, make_settings, port_is_free, post,
+                                    post_head, request)
 
 
 def handler_threads():
@@ -55,6 +56,21 @@ def read_to_end(sock):
     return b''.join(chunks)
 
 
+def hold(settings, readers, count=1):
+    """Connect `count` idle holders and wait until the server gave each a handler. The barrier is the holders' own
+    readers (recorded by `hold_deadlines`), not a thread count: a handler thread of the readiness probe satisfies a
+    count while the holder itself is being turned away (T-018-R4). The caller clears `readers` after the server is up."""
+    clients = [connect(settings) for _ in range(count)]
+    assert wait_for(lambda: len(readers) == count), 'a holder was not given a handler thread'
+    return clients
+
+
+def expire(readers):
+    """Let every held deadline pass now (the production `readinto` then ends the read)."""
+    for reader in list(readers):
+        reader._deadline = time.monotonic()
+
+
 @pytest.fixture(autouse=True)
 def no_handler_threads_before_the_test():
     assert wait_for(lambda: not handler_threads()), 'a handler thread of an earlier test is still alive'
@@ -73,7 +89,7 @@ class Recording(EngineDouble):
         self.events.append('embed-start')
         if self.gate is not None:
             self.gate.entered.set()
-            assert self.gate.release.wait(20)
+            assert self.gate.release.wait(HELD_S)
         try:
             return super().embed(items)
         finally:
@@ -97,9 +113,11 @@ def test_connections_over_the_cap_get_a_503_and_no_thread(project_root, model_te
             super().__init__(*args, **kwargs)
             created.append(self.name)
 
+    readers = hold_deadlines(monkeypatch)  # the holders cannot expire by the clock while the test looks at the cap
     with running_server(settings) as (base, engine, stop, result):
         monkeypatch.setattr(threading, 'Thread', Counting)  # the accept loop is up: count what is created from now on
-        holders = [connect(settings) for _ in range(cap)]
+        readers.clear()  # the readiness probe's reader
+        holders = hold(settings, readers, cap)
         try:
             assert wait_for(lambda: len(handler_threads()) == cap)
             assert created.count(CONNECTION_THREAD) == cap
@@ -113,7 +131,8 @@ def test_connections_over_the_cap_get_a_503_and_no_thread(project_root, model_te
                 assert httpx.get(base + settings.health_path, timeout=5).status_code == 503
             except httpx.TransportError:
                 pass
-            for holder in holders:  # the idle holders end at their read deadline and give the slots back
+            expire(readers)  # the idle holders end at their (now passed) read deadline and give the slots back
+            for holder in holders:
                 holder.settimeout(8)
                 assert holder.recv(10) == b''
         finally:
@@ -124,7 +143,7 @@ def test_connections_over_the_cap_get_a_503_and_no_thread(project_root, model_te
         assert engine.calls == []
 
 
-def test_many_slow_connections_never_exceed_the_cap(project_root, model_test_profile):
+def test_many_slow_connections_never_exceed_the_cap(project_root, model_test_profile, monkeypatch):
     settings, _ = make_settings(project_root, model_test_profile, max_connections=4, max_pending_requests=1,
                                 read_timeout_s=4)  # held connections must outlive the 0.5 s look below with margin
     peak = [0]
@@ -136,7 +155,9 @@ def test_many_slow_connections_never_exceed_the_cap(project_root, model_test_pro
             time.sleep(0.005)
 
     sampler = threading.Thread(target=sample, name='sampler')
+    readers = hold_deadlines(monkeypatch)
     with running_server(settings) as (base, engine, stop, result):
+        readers.clear()
         sampler.start()
         clients = []
         try:
@@ -144,10 +165,11 @@ def test_many_slow_connections_never_exceed_the_cap(project_root, model_test_pro
                 client = connect(settings)
                 client.sendall(b'POST /v1/emb')
                 clients.append(client)
-            assert wait_for(lambda: len(handler_threads()) == 4)
+            assert wait_for(lambda: len(readers) == 4)  # the four holders' own handlers
             time.sleep(0.5)
             assert len(handler_threads()) == 4
-            assert wait_for(lambda: not handler_threads(), timeout=15)  # the deadline ends every held connection
+            expire(readers)  # the deadline ends every held connection
+            assert wait_for(lambda: not handler_threads(), timeout=15)
         finally:
             sampling.set()
             sampler.join()
@@ -158,12 +180,14 @@ def test_many_slow_connections_never_exceed_the_cap(project_root, model_test_pro
         assert engine.calls == []
 
 
-def test_a_flood_of_turned_away_connections_logs_once_and_is_summed_up_at_stop(project_root, model_test_profile, capfd):
+def test_a_flood_of_turned_away_connections_logs_once_and_is_summed_up_at_stop(project_root, model_test_profile, capfd,
+                                                                              monkeypatch):
     settings, _ = make_settings(project_root, model_test_profile, max_connections=1, max_pending_requests=1,
                                 read_timeout_s=5)
+    readers = hold_deadlines(monkeypatch)
     with running_server(settings) as (base, engine, stop, result):
-        holder = connect(settings)
-        assert wait_for(lambda: len(handler_threads()) == 1)
+        readers.clear()
+        (holder,) = hold(settings, readers)
         for _ in range(30):
             with connect(settings) as extra:
                 read_to_end(extra)
@@ -227,7 +251,7 @@ def test_stop_lets_the_forward_pass_finish_and_closes_the_engine_after_it(projec
             assert 'reason' not in result and engine.closed is False  # the engine is not closed under a running forward
         finally:
             gate.release.set()
-            client.join(15)
+            client.join(HELD_S)
         assert wait_for(lambda: 'reason' in result)
     assert answer['status'] == 200  # the request in the engine was answered, not cut
     assert engine.events == ['embed-start', 'embed-end', ('close', 0)]
@@ -265,7 +289,7 @@ def test_a_request_queued_for_the_gpu_is_refused_at_stop_and_never_reaches_a_clo
         finally:
             gate.release.set()
             for client in clients:
-                client.join(15)
+                client.join(HELD_S)
         assert wait_for(lambda: 'reason' in result)
     assert sorted(answers, key=str) == [(200, None), (503, 'stopping')]
     assert engine.events == ['embed-start', 'embed-end', ('close', 0)]  # one forward, then the close; nothing after it
@@ -292,13 +316,13 @@ def test_a_forward_that_outlasts_the_stop_is_reported_and_the_engine_is_never_cl
             started = time.monotonic()
             stop.set()
             assert wait_for(lambda: 'error' in result, timeout=5)
-            assert time.monotonic() - started < 3  # about two read deadlines, not the length of the forward
+            assert time.monotonic() - started < stop_bound(settings)  # a few read deadlines, not the length of the forward
             assert isinstance(result['error'], ShutdownIncomplete) and 'forward pass' in str(result['error'])
             assert engine.closed is False and 'embed-after-close' not in engine.events
             assert port_is_free(settings)
         finally:
             gate.release.set()
-            client.join(15)
+            client.join(HELD_S)
         assert wait_for(lambda: not handler_threads())
     assert engine.events == ['embed-start', 'embed-end'] and engine.closed is False
 
@@ -332,7 +356,7 @@ class Hold:
     def pause(self):
         if self.armed.is_set():
             self.entered.set()
-            assert self.release.wait(20), 'the test never released the gate'
+            assert self.release.wait(HELD_S), 'the test never released the gate'
 
 
 def hold_at(stage, monkeypatch):
@@ -601,13 +625,15 @@ def push_until_closed(sock, limit=64 * 1024 * 1024):
 
 
 @pytest.mark.parametrize('discard', [150000, 250000])
-@pytest.mark.parametrize('head', ['declared_huge', 'chunked'])
+@pytest.mark.parametrize('head', ['declared_huge', 'chunked', 'unparsable_line'])
 def test_the_discard_is_capped_by_the_server_budget_whatever_the_client_declares(project_root, model_test_profile,
                                                                                  drained, discard, head):
     settings, _ = make_settings(project_root, model_test_profile, max_discard_bytes=discard, read_timeout_s=8)
     assert settings.max_request_bytes == 100000
-    declared = (f'POST {settings.embeddings_path} HTTP/1.1\r\nContent-Length: 1000000000000\r\n\r\n' if head == 'declared_huge'
-                else f'POST {settings.embeddings_path} HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n')
+    declared = {  # the last one: a request line beyond the stdlib's 65536 bytes, answered 414 before any header exists
+        'declared_huge': f'POST {settings.embeddings_path} HTTP/1.1\r\nContent-Length: 1000000000000\r\n\r\n',
+        'chunked': f'POST {settings.embeddings_path} HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n',
+        'unparsable_line': 'GET /' + 'a' * 70000}[head]
     with running_server(settings) as (base, engine, stop, result):
         with connect(settings) as raw:
             raw.sendall(declared.encode())
@@ -628,10 +654,224 @@ def test_a_body_smaller_than_the_budget_is_drained_to_its_declared_end(project_r
         assert drained == [300000]  # the declared length is the smaller of the two bounds
 
 
+# --- T-018-R4: over-cap refusals linger on the accept loop and are drained, bounded by existing keys ---------------------
+
+def server_instances(monkeypatch):
+    """Labelled seam: records every `_Server` the test creates, to read its lingering set."""
+    created, real = [], server_module._Server.__init__
+
+    def init(self, *args, **kwargs):
+        real(self, *args, **kwargs)
+        created.append(self)
+
+    monkeypatch.setattr(server_module._Server, '__init__', init)
+    return created
+
+
+@pytest.fixture
+def lingered(monkeypatch):
+    """Labelled seam: one record per over-cap socket kept for its drain, written when it ends: the bytes it dropped
+    (its budget less what was left) and how long it lingered. The production methods run unchanged."""
+    records, started = [], {}
+    real_linger, real_end = server_module._Server._linger, server_module._Server._end_lingering
+
+    def linger(self, request):
+        before = time.monotonic()  # taken before the deadline is set: the measured time is never below the deadline's
+        kept = real_linger(self, request)
+        if kept:
+            started[request] = before
+        return kept
+
+    def end(self, request):
+        with self._lock:
+            entry = self._lingering.get(request)
+        if entry is not None:
+            records.append({'dropped': self._state.settings.max_discard_bytes - entry[1],
+                            'lingered': time.monotonic() - started[request]})
+        return real_end(self, request)
+
+    monkeypatch.setattr(server_module._Server, '_linger', linger)
+    monkeypatch.setattr(server_module._Server, '_end_lingering', end)
+    return records
+
+
+@pytest.mark.parametrize('discard', [150000, 250000])
+def test_an_over_cap_refusal_drops_at_most_the_server_budget_whatever_the_client_sends(project_root,
+                                                                                       model_test_profile,
+                                                                                       monkeypatch, lingered, discard):
+    settings, _ = make_settings(project_root, model_test_profile, max_connections=1, max_pending_requests=1,
+                                max_discard_bytes=discard, read_timeout_s=8)
+    readers = hold_deadlines(monkeypatch)
+    with running_server(settings) as (base, engine, stop, result):
+        readers.clear()
+        (held,) = hold(settings, readers)
+        try:
+            with connect(settings) as extra:
+                sent = push_until_closed(extra)
+            assert sent is not None, 'the server kept reading past its budget'
+            assert wait_for(lambda: lingered)
+            assert [record['dropped'] for record in lingered] == [discard]  # exactly the budget, whatever was sent
+        finally:
+            held.close()
+        assert engine.calls == []
+
+
+def test_a_quiet_lingering_refusal_is_closed_when_the_read_deadline_passes(project_root, model_test_profile,
+                                                                            monkeypatch, lingered):
+    settings, _ = make_settings(project_root, model_test_profile, max_connections=1, max_pending_requests=1,
+                                read_timeout_s=0.3)
+    readers = hold_deadlines(monkeypatch)
+    with running_server(settings) as (base, engine, stop, result):
+        readers.clear()
+        (held,) = hold(settings, readers)
+        try:
+            with connect(settings) as extra:  # sends a piece of a request, then stays open and quiet
+                extra.sendall(b'POST /v1/emb')
+                assert b' 503 ' in read_to_end(extra).split(b'\r\n')[0]
+                assert wait_for(lambda: lingered)  # eventually closed by the server, not by the client
+                assert lingered[0]['lingered'] >= settings.read_timeout_s  # never before its deadline
+        finally:
+            held.close()
+
+
+@pytest.mark.parametrize('cap', [2, 4])
+def test_the_lingering_refusals_are_bounded_by_max_connections_and_the_stop_closes_them(project_root,
+                                                                                         model_test_profile,
+                                                                                         monkeypatch, cap):
+    settings, _ = make_settings(project_root, model_test_profile, max_connections=cap, max_pending_requests=1,
+                                read_timeout_s=30)
+    created = server_instances(monkeypatch)
+    readers = hold_deadlines(monkeypatch)
+    extras = []
+    holders = []
+    with running_server(settings) as (base, engine, stop, result):
+        readers.clear()
+        holders = hold(settings, readers, cap)
+        try:
+            for _ in range(cap + 3):  # each stays open and quiet, so it lingers until a bound or the stop ends it
+                extras.append(connect(settings))
+                assert b' 503 ' in read_to_end(extras[-1]).split(b'\r\n')[0]  # all are answered, kept or not
+            assert created[0].lingering() == cap  # the rest were closed at once, best effort
+            stop.set()
+            assert wait_for(lambda: 'reason' in result, timeout=stop_bound(settings))
+            assert created[0].lingering() == 0 and result == {'reason': 'stop'}
+        finally:
+            for client in extras + holders:
+                client.close()
+
+
+def test_the_lingering_bound_is_capped_by_the_selector_capacity(project_root, model_test_profile, monkeypatch):
+    import selectors
+
+    if os.name == 'nt':  # the platform fact the constant stands for (see its comment): `select` holds 512 sockets
+        assert server_module.SELECT_CAPACITY == 512
+    capacity = server_module.SELECT_CAPACITY
+    assert server_module.linger_bound(10 ** 6, selectors.SelectSelector) == capacity - 1  # the listener takes one
+    assert server_module.linger_bound(3, selectors.SelectSelector) == 3
+    assert server_module.linger_bound(10 ** 6, object) == 10 ** 6  # a selector without the limit is not clamped
+    monkeypatch.setattr(server_module, 'SELECT_CAPACITY', 4)
+    monkeypatch.setattr(server_module, '_selector_type', lambda: selectors.SelectSelector)
+    settings, _ = make_settings(project_root, model_test_profile, max_connections=8, max_pending_requests=8,
+                                read_timeout_s=30)
+    created = server_instances(monkeypatch)
+    readers = hold_deadlines(monkeypatch)
+    extras = []
+    holders = []
+    with running_server(settings) as (base, engine, stop, result):
+        readers.clear()
+        holders = hold(settings, readers, 8)
+        try:
+            for _ in range(6):
+                extras.append(connect(settings))
+                assert b' 503 ' in read_to_end(extras[-1]).split(b'\r\n')[0]
+            assert created[0].lingering() == 3  # max_connections 8, but the capacity 4 less the listener
+        finally:
+            for client in extras + holders:
+                client.close()
+
+
+# The property of a refusal the server decides to send (docs/test-plan.md, Property): its status line reaches the client
+# complete before the close whatever the size of the body the client already sent, up to `server.max_discard_bytes`;
+# beyond that the reply is best effort (the close holds unread bytes and Windows may reset), and the one thing still
+# required is that the connection ends and that a reply which does arrive is a complete status line.
+
+def refusal_exchange(settings, head, body):
+    """Send `head` and `body` as a client that writes everything before reading; return (reply, seconds)."""
+    started = time.monotonic()
+    with connect(settings) as raw:
+        raw.settimeout(10)
+        try:
+            raw.sendall(head + body)
+        except OSError:  # the server stopped reading at its budget: the reply is what remains to read
+            pass
+        reply = read_to_end(raw)
+    return reply, time.monotonic() - started
+
+
+def assert_refusal_property(reply, seconds, size, budget, status):
+    prefix = f'HTTP/1.0 {status} '.encode()
+    assert seconds < 8, 'the connection did not end'
+    if size <= budget:
+        assert reply.startswith(prefix) and b'\r\n' in reply, f'{size} bytes pending, budget {budget}: {reply[:40]!r}'
+    else:
+        assert reply == b'' or (reply.startswith(prefix) and b'\r\n' in reply)
+
+
+@hypothesis_settings(max_examples=30, deadline=None)
+@given(size=st.one_of(st.integers(0, 100000), st.just(100000), st.integers(100001, 200000)))
+def _route_refusal_property(settings, size):
+    reply, seconds = refusal_exchange(settings, post_head(settings, size, '/nope'), b'x' * size)
+    assert_refusal_property(reply, seconds, size, settings.max_discard_bytes, 404)
+
+
+def test_a_route_refusal_reaches_the_client_for_bodies_below_at_and_above_the_budget(project_root, model_test_profile):
+    settings, _ = make_settings(project_root, model_test_profile, max_discard_bytes=100000, read_timeout_s=10)
+    with running_server(settings):
+        _route_refusal_property(settings)
+
+
+@hypothesis_settings(max_examples=30, deadline=None)
+@given(size=st.one_of(st.integers(100001, 150000), st.just(150000), st.integers(150001, 300000)))
+def _oversize_refusal_property(settings, size):
+    reply, seconds = refusal_exchange(settings, post_head(settings, size), b'x' * size)
+    assert_refusal_property(reply, seconds, size, settings.max_discard_bytes, 413)
+
+
+def test_an_oversize_refusal_reaches_the_client_for_bodies_below_at_and_above_the_budget(project_root,
+                                                                                         model_test_profile):
+    settings, _ = make_settings(project_root, model_test_profile, max_discard_bytes=150000, read_timeout_s=10)
+    assert settings.max_request_bytes == 100000
+    with running_server(settings):
+        _oversize_refusal_property(settings)
+
+
+@hypothesis_settings(max_examples=30, deadline=None)
+@given(size=st.one_of(st.integers(0, 100000), st.just(100000), st.integers(100001, 200000)))
+def _over_cap_refusal_property(settings, size):
+    reply, seconds = refusal_exchange(settings, post_head(settings, size), b'x' * size)
+    assert_refusal_property(reply, seconds, size, settings.max_discard_bytes, 503)
+
+
+def test_an_over_cap_refusal_reaches_the_client_for_bodies_below_at_and_above_the_budget(project_root,
+                                                                                         model_test_profile,
+                                                                                         monkeypatch):
+    settings, _ = make_settings(project_root, model_test_profile, max_connections=4, max_pending_requests=1,
+                                max_discard_bytes=100000, read_timeout_s=30)
+    readers = hold_deadlines(monkeypatch)
+    with running_server(settings) as (base, engine, stop, result):
+        readers.clear()
+        holders = hold(settings, readers, 4)
+        try:
+            _over_cap_refusal_property(settings)
+        finally:
+            for holder in holders:
+                holder.close()
+
+
 # --- round 4 (RT3F1): nothing on the accept thread or in the stop waits for the console or for the accept loop ----------
 
 OUTPUT_THREAD = server_module.OUTPUT_THREAD
-SLACK_S = 1.0  # test-only: scheduling tolerance on top of the documented stop bound
+SLACK_S = 5.0  # test-only: scheduling tolerance on top of the documented stop bound (a hang is unbounded)
 
 
 def stop_bound(settings):
@@ -695,11 +935,12 @@ def test_a_refusal_logged_into_a_full_pipe_does_not_hold_the_accept_loop_or_the_
     read_fd, write_fd, filled = full_pipe()
     stream = pipe_stream(write_fd)
     monkeypatch.setattr(sys, 'stdout', stream)
+    readers = hold_deadlines(monkeypatch)  # the holder keeps its slot whatever the machine load does to the clock
     held = None
     try:
         with running_server(settings) as (_, engine, stop, result):
-            held = connect(settings)
-            assert wait_for(lambda: len(handler_threads()) == 1)
+            readers.clear()
+            (held,) = hold(settings, readers)
             with connect(settings) as extra:  # over the cap: refused and logged on the accept thread
                 assert b' 503 ' in read_to_end(extra).split(b'\r\n')[0]  # the log line did not hold the accept thread
             started = time.monotonic()
@@ -723,11 +964,12 @@ def test_a_stop_summary_that_cannot_be_written_does_not_hold_the_stop(project_ro
     read_fd, write_fd, filled = full_pipe()
     stream = pipe_stream(write_fd)
     monkeypatch.setattr(sys, 'stdout', stream)
+    readers = hold_deadlines(monkeypatch)
     held = None
     try:
         with running_server(settings) as (_, engine, stop, result):
-            held = connect(settings)
-            assert wait_for(lambda: len(handler_threads()) == 1)
+            readers.clear()
+            (held,) = hold(settings, readers)
             for _ in range(3):  # three refusals of one kind: one line now, the count in the stop summary
                 with connect(settings) as extra:
                     read_to_end(extra)
@@ -781,7 +1023,7 @@ def test_a_stuck_accept_loop_is_reported_within_the_window_and_the_listener_stil
     def stuck(self, request, client_address):  # labelled double: the accept thread blocks inside its own work
         if armed.is_set():
             entered.set()
-            assert release.wait(20), 'the test never released the accept loop'
+            assert release.wait(HELD_S), 'the test never released the accept loop'
         return original(self, request, client_address)
 
     monkeypatch.setattr(server_module._Server, 'process_request', stuck)
@@ -811,7 +1053,7 @@ def test_an_engine_close_that_does_not_finish_is_reported_within_the_window(proj
 
     class Slow(EngineDouble):  # labelled double: a close that hangs (the collector or the driver)
         def close(self):
-            assert release.wait(20), 'the test never released the close'
+            assert release.wait(HELD_S), 'the test never released the close'
             super().close()
 
     engine = Slow()
