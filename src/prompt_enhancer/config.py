@@ -1656,6 +1656,40 @@ def validate_planner_reads(config, path='configuration', sources=None, project_r
     return config['planner']
 
 
+ASSEMBLY_READS = ('rag.evidence_mode', 'assembly.scope_matrix', 'assembly.default_outfit',
+                  'assembly.max_facts_per_concept', 'assembly.max_facts_per_request', 'assembly.fact_order',
+                  'resolution.on_variant_unspecified', 'resolution.random_seed', 'resolution.trace_choice',
+                  'edit.attach_kb_reference_images')
+# Read only when knowledge images may be attached (T-014 P2, PM answer 1).
+ASSEMBLY_ATTACH_READS = ('assembly.max_images_per_concept', 'edit.max_kb_reference_images')
+ASSEMBLY_EVIDENCE_MODE = 'cards'  # protocol-bound: the only evidence mode S3 implements (T-014 PM answer 3)
+
+
+def validate_assembly_reads(config, path='configuration', sources=None, project_root=None):
+    """S3's request-startup and direct-entry gate (T-014 P2); S3 runs only with retrieval on."""
+    sources = {} if sources is None else sources
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    schema = _schema(root, 'enhancer_config.v0')
+
+    def refuse(key, message):
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {message}')
+
+    attach = _get(config, 'edit.attach_kb_reference_images', path)
+    reads = ASSEMBLY_READS + (ASSEMBLY_ATTACH_READS if attach is True else ())
+    for key in reads:
+        value = _get(config, key, path)
+        _sentinel(value, path, key, sources)
+        _validate(value, _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
+        _require_finite(value, path, key, sources)
+        if key.startswith(('assembly.max_', 'edit.max_')) and value > sys.maxsize:
+            refuse(key, 'expected a native integer')
+    mode = config['rag']['evidence_mode']
+    if mode != ASSEMBLY_EVIDENCE_MODE:
+        refuse('rag.evidence_mode', f'{mode} is not implemented yet: live reading of knowledge-base images and the '
+               f'on-demand observer question are deferred (T-014); use {ASSEMBLY_EVIDENCE_MODE}')
+    return config['assembly']
+
+
 def _validate_request_base(config, schema):
     """Administrator diagnostics name schema-owned fields, without echoing values or arbitrary map keys."""
     try:
@@ -1779,6 +1813,7 @@ def _validate_loaded_config(config, command, root, path, sources):
         if config['rag']['enabled']:
             validate_index_reads(config, path, sources, root)
             validate_candidates_reads(config, path, sources, root)
+            validate_assembly_reads(config, path, sources, root)
     if command == 'kb sync':
         _validate_store_reads(config, command, root, path, sources)
         validate_index_reads(config, path, sources, root)

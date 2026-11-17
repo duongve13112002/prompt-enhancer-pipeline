@@ -27,6 +27,11 @@ class ModelCallError(RuntimeError):
     """A request could not be completed safely."""
 
 
+class ProbeCasesMissing(ModelCallError):
+    """The backend was composed without verifiable probe cases (the production gap KBS-F1 closes); a type of its
+    own so a test can name exactly this condition instead of every ModelCallError."""
+
+
 # Protocol-bound capability names consumed by the client and generation mapper.
 CAPABILITIES = frozenset(('text', 'image', 'multiple_images', 'json_object', 'json_schema',
                           'reasoning.mode', 'reasoning.effort', 'reasoning.budget_tokens',
@@ -300,7 +305,7 @@ class RoleClient:
                     if role_name is None or production_pair is not None else None)
             return await self._extend_multiple_images(backend_name, pair)
         if backend_name not in self.probe_cases:
-            raise ModelCallError('backend has no verifiable probe cases')
+            raise ProbeCasesMissing('backend has no verifiable probe cases')
         headers = {}
         if backend['provider'] != 'openai_compatible':
             if getattr(self.transports[backend_name], 'ledger', None) is None:

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "assembly_result.v0",
+  "title": "S3 assembly result",
+  "$comment": "Draft v0 (T-014 P2). The S3 stage result around knowledge_pack.v0 (docs/stages/S3-knowledge.md). retrieval_state uses the response retrieval-state enum minus disabled, because S3 is absent with retrieval off: skipped_no_knowledge_needed (the plan lists no needed facet), no_match (needs exist but no fact or image passed the filters), retrieved (at least one fact or image), failed (no pinned snapshot or a pinned-table read failed). pack is null exactly when the state is failed, and error is non-null exactly then; code checks the pairing and the pack invariants after this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["retrieval_state", "pack", "error"],
+  "properties": {
+    "retrieval_state": {"enum": ["skipped_no_knowledge_needed", "no_match", "retrieved", "failed"]},
+    "pack": {"anyOf": [{"$ref": "knowledge_pack.v0"}, {"type": "null"}]},
+    "error": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": {"enum": ["SNAPSHOT_MISSING", "KNOWLEDGE_READ_FAILED"]},
+            "message": {"type": "string", "minLength": 1}
+          }
+        },
+        {"type": "null"}
+      ]
+    }
+  }
+}

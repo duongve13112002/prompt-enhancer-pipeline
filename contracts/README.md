@@ -190,6 +190,49 @@ model client refuses an image whose role the source does not name, before any re
 `image.max_side` (decision 144) caps the longest side of images sent through it; a chat call uses the smaller of the
 role's side and the backend's. Embedder backends must keep `none` until K1's cache identity includes the cap.
 
+## Knowledge assembly contract (S3)
+
+S3 (`assembly.py`, T-014 P2) runs only with retrieval on, makes no model call, and runs only on a `ready` or
+`degraded` plan that has an Intent IR. It reads only the cards S0 pinned, plus the image tables when it attaches.
+It returns `assembly_result.v0`: `retrieval_state`, `pack` (`knowledge_pack.v0`) and `error`. The pack is null and
+the error is non-null exactly when the state is `failed`: no pinned snapshot (`SNAPSHOT_MISSING`) or a failed
+table read (`KNOWLEDGE_READ_FAILED`). With no needed facet the state is `skipped_no_knowledge_needed` and nothing
+is read.
+
+For each `resolved` or `family` link with a role, the card facets the plan needs are considered, and so are the
+card's unfaceted curated statements.
+
+- **One reason per considered fact.** Each fact is kept or left out exactly once. The first reason that applies
+  wins, in this order:
+  1. `OUT_OF_SCOPE`: the facet group is not in `assembly.scope_matrix[role]`, plus `apparel` for
+     `subject_identity` under `assembly.default_outfit: include`. Curated statements are always `OUT_OF_SCOPE`,
+     with `facet: null`.
+  2. `NEGATED_BY_USER`: a `negation` constraint binds the link's entity.
+  3. `USER_LOCKED`: the entity has a `source: user` attribute of the same facet. A link without an entity uses
+     the scene's user attributes.
+  4. `UNSTABLE`: the label is `stable_low_diversity` or `single_observation`.
+  5. `VARIANT_NOT_CHOSEN`
+  6. `BUDGET`
+- **Variants.** A `varies` facet keeps one variant: the variant the user named, else a pick by code from the
+  planner's ratings under `resolution.on_variant_unspecified: context_then_random`. Unrated variants count as
+  `neutral`. Under `omit` no variant is kept. A random pick is recorded in `selections` when
+  `resolution.trace_choice` is true. A `varies` facet without a variant group keeps nothing.
+- **Budget and order.** `assembly.fact_order: need_then_support` orders the kept facts by link order, the plan's
+  facet order, support count descending, then value. `max_facts_per_concept` counts across links, and
+  `max_facts_per_request` counts across the pack.
+- **Fact identity.** A fact id is `fact:` plus the SHA-256 of `[snapshot_id, link_index, concept_id, facet,
+  value]`. A curated statement adds its folder.
+- **Images.** Images are attached only for `edit` with `edit.attach_kb_reference_images`. Selection is greedy
+  coverage of the kept facts over their own supporting images, which must decode and have a `clear` or `partial`
+  observation. Ties go to coverage, then `clear`, then quality, then a single-concept folder. At most one image
+  per near-duplicate group, capped by `assembly.max_images_per_concept` and `edit.max_kb_reference_images`. The
+  channel is `attach`, and the note is the JSON list of `{facet, value}` pairs of the kept facts the image supports
+  (the card's own per-value image ids); observation rows only rank images, so a value left out as a variant or by
+  budget never reaches the note, and `validate_assembly` checks it.
+- **Text stays data.** All strings are copied unchanged (R-026).
+- **Deferred evidence modes.** `rag.evidence_mode` values `live` and `cards_then_live` are refused at start until
+  live reading and the on-demand observer question exist.
+
 ## Profile contract
 
 Two things are called a profile; see [Terms](#terms). This section describes the configuration profile.
@@ -218,4 +261,4 @@ A stage result of many files is committed **data first, manifest last**: the man
 
 ## Schemas
 
-JSON Schema draft 2020-12 files in [schemas/](schemas/), versioned in the name; a change is a new version. All are drafts: `enhancer_config.v0`, `request.v0`, `intake_result.v0`, `candidate_shortlist.v0`, `planner_reply.v0`, `plan_result.v0`, `intent_ir.v0`, `constraint_ledger.v0`, `knowledge_pack.v0`, `image_observation.v0`, `concept_card.v0`, `verifier_result.v0`, `profile_manifest.v0`, `golden_case.v0`, `response_envelope.v0`, `alias_set.v0`, `info_assessment.v0`, `folder_naming.v0`, `eval_scenario.v0`, `vlm_role.v0`. Ranges in them are the schemas' own bounds, not engine limits. VLM request fields and engine mapping: [vlm-request.md](vlm-request.md).
+JSON Schema draft 2020-12 files in [schemas/](schemas/), versioned in the name; a change is a new version. All are drafts: `enhancer_config.v0`, `request.v0`, `intake_result.v0`, `candidate_shortlist.v0`, `planner_reply.v0`, `plan_result.v0`, `intent_ir.v0`, `constraint_ledger.v0`, `knowledge_pack.v0`, `assembly_result.v0`, `image_observation.v0`, `concept_card.v0`, `verifier_result.v0`, `profile_manifest.v0`, `golden_case.v0`, `response_envelope.v0`, `alias_set.v0`, `info_assessment.v0`, `folder_naming.v0`, `eval_scenario.v0`, `vlm_role.v0`. Ranges in them are the schemas' own bounds, not engine limits. VLM request fields and engine mapping: [vlm-request.md](vlm-request.md).

@@ -94,7 +94,7 @@ index:                                   # K5, R-016
 
 rag:
   enabled: true                          # decision 12, R-009
-  evidence_mode: cards                   # decision 13; cards | live | cards_then_live
+  evidence_mode: cards                   # decision 13; cards | live | cards_then_live (live modes refused until implemented, T-014)
 
 candidates:                              # S1, no model call
   sources:
@@ -115,7 +115,7 @@ resolution:
   on_family_match: context_then_random   # decisions 15, 69: context orders the candidates, never empties the set
   random_seed: per_request               # a new choice for every request
   trace_choice: true
-  on_variant_unspecified: context_then_random   # decision 16
+  on_variant_unspecified: context_then_random   # decision 16; context_then_random | omit (S3)
 
 clarification:
   mode: best_effort                      # decision 68; best_effort (write the most plausible reading, status degraded) | ask (status needs_clarification)
@@ -128,15 +128,15 @@ assembly:                                # S3
     object: [object]
     style_reference: [style]
     other: []
-  default_outfit: omit                   # facts of a default outfit are left out unless the role asks for them
-  max_facts_per_concept: design_required
-  max_images_per_concept: design_required   # S3 image selection
-  max_facts_per_request: design_required
-  fact_order: design_required            # position matters, N078, N116
+  default_outfit: omit                   # omit | include (include admits apparel facts for subject_identity)
+  max_facts_per_concept: fit_from_gt     # E2/E8
+  max_images_per_concept: fit_from_gt    # S3 image selection; read only with edit.attach_kb_reference_images true
+  max_facts_per_request: fit_from_gt     # E2/E8
+  fact_order: need_then_support          # IR need order, then support count, then value; position matters, N078, N116
 
 edit:
   attach_kb_reference_images: false      # decision 14, R-011
-  max_kb_reference_images: design_required
+  max_kb_reference_images: fit_from_gt   # read only when attach_kb_reference_images is true
   source_entity_linking: false           # the source image is not linked to knowledge-base concepts by default
   default_preservation:                  # per edit kind (R-002); name what stays instead of describing it, N100
     local_edit: preserve_all_outside_target

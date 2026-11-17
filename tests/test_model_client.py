@@ -9,7 +9,7 @@ import httpx
 from PIL import Image
 import pytest
 
-from prompt_enhancer.model_client import ModelCallError, RoleClient
+from prompt_enhancer.model_client import ModelCallError, ProbeCasesMissing, RoleClient
 from prompt_enhancer.config import ConfigurationError
 from prompt_enhancer.model_probe import ProbeResult
 from prompt_enhancer.model_resources import BudgetExhausted
@@ -284,6 +284,21 @@ def test_client_runs_configured_probe_through_transport():
         result = await client.start_backend('main')
         assert result.status == 'complete' and result.capabilities['text']
         assert double.body == {'test': True}
+
+    asyncio.run(run())
+
+
+def test_backend_without_probe_cases_raises_its_own_type_and_sends_nothing():
+    """The KBS-F1 production gap is named by ProbeCasesMissing, a ModelCallError; no request is made."""
+    async def run():
+        backend = {'provider': 'openai_compatible', 'engine': {'name': 'llama_cpp', 'version': 'test-version'},
+                   'endpoints': {'chat': 'chat'}, 'probe': {'max_requests': 1, 'timeout_s': 1}}
+        double = DoubleTransport('evidence')
+        schema = SchemaRegistry(Path(__file__).resolve().parents[1] / 'contracts' / 'schemas')
+        client = RoleClient({'vlm': {'backends': {'main': backend}}}, {'main': double}, {}, schema, probe_cases={})
+        with pytest.raises(ProbeCasesMissing) as caught:
+            await client.start_backend('main')
+        assert isinstance(caught.value, ModelCallError) and double.body is None
 
     asyncio.run(run())
 

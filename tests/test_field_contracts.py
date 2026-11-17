@@ -85,8 +85,11 @@ def options(value):
             'openai_compatible', 'anthropic', 'gemini', 'vllm', 'llama_cpp', 'fallback_to_default_backend', 'stop', 'arrow', '7d', 'refuse', 'flatten', '#123456',
             'openai_input_content', 'native', 'numpy_exact', 'cosine', 'inner_product', 'char_ngram',
             'user_reference',  # T-014: role image.source is a closed enum of five values
+            'include', 'omit',  # T-014 P2: assembly.default_outfit and resolution.on_variant_unspecified enums
             [],
-            ['alternative'], ['generate'], ['edit'], {}, {'other': 'alternative'},
+            ['alternative'], ['generate'], ['edit'],
+            ['identity'],  # T-014 P2: scope-matrix rows are lists of facet groups
+            {}, {'other': 'alternative'},
             {'chat': 'chat', 'health': 'health'}, {'block_rows': 2},
             {'source': 'source_image', 'format': 'png', 'quality': 80, 'transport': 'data_uri'},
             value + '_alternative' if isinstance(value, str) else 'alternative']
@@ -112,6 +115,7 @@ def test_protocol_only_fields():
             constrained.append('.'.join(path))
     assert constrained == ['schema_version', 'knowledge.info_file.on_description_count_mismatch',
                            'index.lexical.kind', 'candidates.fusion',
+                           'assembly.fact_order',  # T-014 P2: need_then_support is the one implemented order
                            'vision.alpha_policy.mode', 'vision.transport', 'vlm.backends.main.unsupported_param_policy',
                            # T-018: the embedding server's three enum-valued keys (the first backend that has them)
                            'vlm.backends.embedder_qwen3vl8b.server.family', 'vlm.backends.embedder_qwen3vl8b.server.dtype',
@@ -137,6 +141,7 @@ def test_all_constrained_fields_are_known():
                        or path == ('knowledge', 'info_file', 'on_description_count_mismatch')
                        or path == ('index', 'lexical', 'kind')  # K5: character n-grams are the only protocol
                        or path == ('candidates', 'fusion')  # S1: only unweighted RRF is implemented until fitting
+                       or path == ('assembly', 'fact_order')  # S3: need_then_support is the one implemented order
                        or path == ('vision', 'alpha_policy', 'mode')  # Refuse also removes the background member.
                        or path == ('vision', 'transport')  # T-008: protocol-bound, data_uri is the only value
                        or path[:2] == ('vlm', 'backends') and path[-1] == 'unsupported_param_policy'

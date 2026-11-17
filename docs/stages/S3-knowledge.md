@@ -32,7 +32,22 @@
 
 **Decisions and configuration keys.** `assembly.scope_matrix`, `assembly.default_outfit`, `assembly.max_images_per_concept` (`design_required`), `rag.evidence_mode` (`cards` by default, decision 13), `edit.attach_kb_reference_images`, `edit.max_kb_reference_images`.
 
-**Compute.** CPU over cached tables. Not implemented; nothing measured.
+**As built (T-014 P2).**
+- `src/prompt_enhancer/assembly.py` returns `assembly_result.v0` with mode `cards` only. The rules are in
+  [contracts](../../contracts/README.md#knowledge-assembly-contract-s3).
+- `stable_low_diversity` is left out as `UNSTABLE` until E9 names the facets a role treats as intrinsic.
+- Unfaceted curated statements are left out as `OUT_OF_SCOPE`, because their text cannot be scope-filtered
+  structurally.
+- A `varies` facet without a variant group keeps no value.
+- The scene's user attributes lock the facets of a link that has no entity.
+- `live`, `cards_then_live` and the on-demand question (step 6) are deferred and refused at start.
+- An image note and its `facets` carry only values of kept facts that the image supports through the card's
+  `image_ids`; observation rows rank images and never supply a value.
+- S3 builds its schema registry once per call. A shared, snapshot-consistent registry cache for every stage belongs to
+  RES-1 (decision 149).
+- Each of these is a PM decision pending user review.
+
+**Compute.** CPU over cached tables. Nothing has been measured.
 
 **Depends on.** S2, K3, K5.
 

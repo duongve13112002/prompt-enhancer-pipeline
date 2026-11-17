@@ -26,7 +26,7 @@ def configuration(model_test_profile, tmp_path):
     config['embedding']['query_text_limit'] = 100
     config['embedding']['query_text_template'] = 'query: {text}'  # labelled test-only, not an E5 prefix
     config['assembly'].update(max_facts_per_concept=2, max_images_per_concept=1,
-                              max_facts_per_request=4, fact_order='test-order')
+                              max_facts_per_request=4, fact_order='need_then_support')
     config['edit']['max_kb_reference_images'] = 0
     config['validation']['verifier']['sampled_fraction_for_rest'] = 0
     for name in ('planner', 'writer', 'verifier', 'manifest_drafter'):

@@ -290,6 +290,10 @@ def test_retrieval_off_from_intake_to_plan_touches_no_knowledge(model_test_profi
         with intake({'task': 'generate', 'prompt': PROMPT}, config, project_root=project_root) as result:
             assert result.payload['outcome'] == 'ready' and result.knowledge is None
             planned = asyncio.run(plan(result, None, client, project_root=project_root))
+            # T-014 P2: S3 is absent from the retrieval-disabled graph and refuses before reading anything.
+            from prompt_enhancer.assembly import build_assembly
+            with pytest.raises(ValueError, match='absent from the retrieval-disabled graph'):
+                build_assembly(result, planned, project_root=project_root)
     finally:
         active[0] = False
     assert events == [] and planned['state'] == 'ready' and len(client.calls) == 1
