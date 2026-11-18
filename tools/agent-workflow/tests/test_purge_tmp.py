@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import importlib.util
+import itertools
 import json
 import os
 import shutil
@@ -216,9 +217,11 @@ def test_the_waiver_covers_only_the_worker_worktrees_own_state(pt: ModuleType, s
         wt = moved
     elif shape == "other protected name":
         (wt / "runs").mkdir()
+        (wt / "runs" / "evidence.json").write_text("{}", encoding="utf-8")  # an empty `runs` holds nothing
     elif shape == "state nested deeper":
         (wt / ".tmp" / "pm-state").rename(wt / ".tmp" / "keep")
         (wt / ".tmp" / "keep" / "pm-state").mkdir()
+        (wt / ".tmp" / "keep" / "pm-state" / "ledger.json").write_text("{}", encoding="utf-8")
     assert pt.archive_remove([str(wt)]) == 1
     assert wt.exists()
 
@@ -362,6 +365,375 @@ def test_a_nested_models_placeholder_is_removable_but_real_weights_are_not(
     (wt / "models").mkdir()
     (wt / "models" / "w.safetensors").write_bytes(b"1")
     assert pt.archive_remove([str(wt)]) == 1 and (wt / "models" / "w.safetensors").exists()
+
+
+@pytest.mark.parametrize("name", ["runs", "pm-state", "cli-jobs", "models", "RUNS"])
+def test_archive_remove_prunes_an_empty_nested_protected_tree_then_removes_the_worktree(
+    pt: ModuleType, name: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    wt = make_worktree(pt.PROJECT)
+    (wt / name / "sub" / "deeper").mkdir(parents=True)  # directories only: an empty `runs` after its evidence moved
+    (wt / "src" / "runs").mkdir(parents=True)  # a second empty one on another branch
+    assert pt.archive_remove([str(wt)]) == 0 and not wt.exists()
+    assert "pruned 2 empty protected-name tree(s)" in capsys.readouterr().out
+
+
+def test_a_dry_run_lists_the_prune_and_its_verdict_but_removes_nothing(
+    pt: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    wt = make_worktree(pt.PROJECT)
+    (wt / "runs" / "sub").mkdir(parents=True)
+    assert pt.archive_remove([str(wt)], dry_run=True) == 0
+    out = capsys.readouterr().out
+    assert "would prune 1 empty protected-name tree(s) (a directory in use or denied still refuses)" in out
+    assert "would archive reports and remove" in out
+    assert (wt / "runs" / "sub").is_dir()
+    (wt / "runs" / "sub" / "evidence.json").write_text("{}", encoding="utf-8")
+    assert pt.archive_remove([str(wt)], dry_run=True) == 1
+    assert "protected tree" in capsys.readouterr().out and (wt / "runs" / "sub" / "evidence.json").exists()
+
+
+@pytest.mark.parametrize("name", ["runs", "pm-state", "cli-jobs"])
+def test_a_nested_protected_tree_holding_one_file_anywhere_still_refuses(pt: ModuleType, name: str) -> None:
+    wt = make_worktree(pt.PROJECT)
+    deep = wt / name / "sub" / "deeper"
+    deep.mkdir(parents=True)
+    (deep / "evidence.json").write_text("{}", encoding="utf-8")
+    assert pt.archive_remove([str(wt)]) == 1
+    assert pt.purge_children(str(pt.PROJECT / ".tmp" / "worktrees"), ["wt1"]) == 1
+    assert (deep / "evidence.json").exists() and (wt / name / "sub").is_dir()
+
+
+@pytest.mark.parametrize("command", ["purge-children", "purge-older", "sweep"])
+def test_only_archive_remove_prunes_empty_protected_trees(pt: ModuleType, command: str) -> None:
+    holder = pt.PROJECT / ".tmp" / ("holder" if command == "purge-older" else "")
+    scratch = holder / "scratch-9"
+    (scratch / "runs" / "sub").mkdir(parents=True)
+    age(scratch, 100)
+    if command == "purge-children":
+        assert pt.purge_children(str(holder), ["scratch-9"]) == 1
+    elif command == "purge-older":
+        pt.purge_older(str(holder), 24)
+    else:
+        pt.sweep(config=cfg(pt))
+    assert (scratch / "runs" / "sub").is_dir()
+
+
+def test_an_owned_worktree_is_not_pruned(pt: ModuleType) -> None:
+    """The prune runs only after every other check passed: a busy worker's empty `runs` stays as it is."""
+    wt = make_worktree(pt.PROJECT)
+    (wt / "runs" / "sub").mkdir(parents=True)
+    write_registry(pt.PROJECT, busy_worker(wt))
+    assert pt.archive_remove([str(wt)]) == 1
+    assert (wt / "runs" / "sub").is_dir()
+
+
+def test_a_kept_container_is_not_pruned(pt: ModuleType) -> None:
+    """`.tmp/agy-work` is kept: the prune's precheck refuses it like the strict gate, so nothing inside changes."""
+    empty = pt.PROJECT / ".tmp" / "agy-work" / "review-1" / "runs" / "sub"
+    empty.mkdir(parents=True)
+    assert pt.archive_remove([str(pt.PROJECT / ".tmp" / "agy-work")]) == 1
+    assert empty.is_dir()
+
+
+def test_an_empty_secrets_directory_keeps_its_own_rule(pt: ModuleType) -> None:
+    wt = make_worktree(pt.PROJECT)
+    (wt / ".secrets" / "README.md").unlink()
+    (wt / ".secrets" / "keys").mkdir()  # no file at all, yet `.secrets` is never pruned
+    assert pt.archive_remove([str(wt)]) == 1 and (wt / ".secrets" / "keys").is_dir()
+
+
+def test_an_empty_protected_name_given_as_the_target_is_still_refused(pt: ModuleType) -> None:
+    target = pt.PROJECT / ".tmp" / "runs"
+    target.mkdir()
+    assert pt.archive_remove([str(target)]) == 1
+    assert pt.purge_children(str(pt.PROJECT / ".tmp"), ["runs"]) == 1
+    assert target.is_dir()
+
+
+def test_f1_a_file_written_into_the_empty_tree_after_the_last_check_survives(
+    pt: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review F1: the write lands between the fresh per-directory check and the `rmdir` itself (the last moment
+    before the act); `rmdir` refuses a directory that holds it, the strict gate then refuses the worktree."""
+    wt = make_worktree(pt.PROJECT)
+    (wt / "runs" / "sub").mkdir(parents=True)
+    real_rmdir = os.rmdir
+    late = wt / "runs" / "sub" / "late-evidence.json"
+
+    def racing_rmdir(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if not late.exists() and os.path.normcase(str(path)).endswith(os.path.normcase(os.path.join("runs", "sub"))):
+            late.write_text("{}", encoding="utf-8")
+        return real_rmdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(pt.os, "rmdir", racing_rmdir)
+    assert pt.archive_remove([str(wt)]) == 1
+    assert late.read_text(encoding="utf-8") == "{}"
+    out = capsys.readouterr().out  # the strict gate judges what the failed prune left, before any archive or removal
+    assert "refused, protected tree" in out and "archived" not in out
+
+
+def test_f1_the_removal_itself_never_deletes_a_file_it_did_not_plan(
+    pt: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_rmdir_each` only ever calls `os.rmdir`: a plan that names a directory holding a file stops there."""
+    tree = pt.PROJECT / ".tmp" / "plan"
+    (tree / "a").mkdir(parents=True)
+    (tree / "a" / "f.txt").write_text("x", encoding="utf-8")
+    calls: list[str] = []
+    monkeypatch.setattr(pt.os, "unlink", lambda *a, **k: calls.append("unlink"))
+    monkeypatch.setattr(pt.os, "remove", lambda *a, **k: calls.append("remove"))
+    assert not pt._rmdir_each([str(tree / "a"), str(tree)])
+    assert (tree / "a" / "f.txt").exists() and calls == []
+
+
+@pytest.mark.parametrize("spelling", [".secrets", ".SeCrEtS"])
+def test_f2_nothing_below_a_nested_secrets_directory_is_listed_or_removed(
+    pt: ModuleType, spelling: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wt = make_worktree(pt.PROJECT)
+    hidden = wt / "runs" / spelling
+    (hidden / "deeper").mkdir(parents=True)
+    (wt / "src" / spelling / "deeper").mkdir(parents=True)
+    listed: list[str] = []
+    real_scandir = os.scandir
+
+    def recording_scandir(path=".", *args, **kwargs):  # type: ignore[no-untyped-def]
+        listed.append(os.path.normcase(os.fspath(path)))
+        return real_scandir(path, *args, **kwargs)
+
+    monkeypatch.setattr(pt.os, "scandir", recording_scandir)
+    assert pt.archive_remove([str(wt)]) == 1
+    assert hidden.joinpath("deeper").is_dir() and (wt / "src" / spelling / "deeper").is_dir()
+    below = [os.path.normcase(str(hidden)), os.path.normcase(str(wt / "src" / spelling))]
+    assert not [p for p in listed if any(p == b or p.startswith(b + os.sep) for b in below)]
+
+
+@pytest.mark.parametrize("where", ["direct", "below a protected tree"])
+def test_f3_an_empty_path_pair_directory_is_never_pruned(pt: ModuleType, where: str) -> None:
+    wt = make_worktree(pt.PROJECT)
+    pair = wt / ".tmp" / "agy-jobs" if where == "direct" else wt / "runs" / ".tmp" / "agy-jobs"
+    pair.mkdir(parents=True)
+    assert pt.archive_remove([str(wt)]) == 1
+    assert pair.is_dir()
+
+
+def test_f3_an_empty_protected_tree_below_a_path_pair_is_never_pruned(pt: ModuleType) -> None:
+    """Review P3-3 (mutant MF): the prune walk never descends into a `PROTECTED_PAIRS` directory."""
+    wt = make_worktree(pt.PROJECT)
+    inside = [wt / "a" / ".tmp" / "audit" / "runs", wt / "b" / "agy-work" / "_results" / "runs",
+              wt / "c" / ".tmp" / "agy-jobs" / "pm-state", wt / "d" / ".tmp" / "tools" / "cli-jobs"]
+    for folder in inside:
+        (folder / "sub").mkdir(parents=True)
+    assert pt.archive_remove([str(wt)]) == 1
+    assert all((folder / "sub").is_dir() for folder in inside)
+
+
+def test_a_refused_worktree_keeps_its_empty_protected_trees(
+    pt: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review P3-2: the prune runs only when the strict gate would accept the worktree with the plan done."""
+    wt = make_worktree(pt.PROJECT)
+    (wt / "runs" / "sub").mkdir(parents=True)
+    (wt / "cli-jobs").mkdir()
+    (wt / "pm-state").mkdir()
+    (wt / "pm-state" / "ledger.md").write_text("ledger", encoding="utf-8")
+    for dry_run in (True, False):
+        assert pt.archive_remove([str(wt)], dry_run=dry_run) == 1
+        out = capsys.readouterr().out
+        assert "prune" not in out and "refused" in out
+        assert (wt / "runs" / "sub").is_dir() and (wt / "cli-jobs").is_dir()
+
+
+def test_a_planned_directory_swapped_for_a_link_before_its_rmdir_survives(
+    pt: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review P3-3 (mutant MA): the fresh no-follow check right before each `rmdir` stops at a directory that became
+    a link after the plan; the link and what it points at stay, and the worktree is refused."""
+    wt = make_worktree(pt.PROJECT)
+    planned = wt / "runs" / "sub"
+    planned.mkdir(parents=True)
+    outside = pt.PROJECT / ".tmp" / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep", encoding="utf-8")
+    real_plan = pt._only_directories
+    calls = itertools.count(1)
+
+    def plan_then_swap(top):  # type: ignore[no-untyped-def]
+        plan = real_plan(top)
+        if next(calls) == 2:  # the real prune's plan, after the dry plan that judged the worktree
+            planned.rmdir()
+            if os.name == "nt":
+                junction(planned, outside)
+            else:
+                os.symlink(outside, planned, target_is_directory=True)
+        return plan
+
+    monkeypatch.setattr(pt, "_only_directories", plan_then_swap)
+    assert pt.archive_remove([str(wt)]) == 1
+    assert os.path.lexists(planned) and (outside / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_f4_a_failed_no_follow_stat_below_a_protected_tree_fails_closed(
+    pt: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wt = make_worktree(pt.PROJECT)
+    child = wt / "runs" / "child"
+    child.mkdir(parents=True)
+    real_stat = os.stat
+
+    def denying_stat(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if os.path.normcase(os.fspath(path)) == os.path.normcase(str(child)):
+            raise PermissionError(errno.EACCES, "denied", os.fspath(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(pt.os, "stat", denying_stat)
+    assert pt.archive_remove([str(wt)]) == 1
+    monkeypatch.undo()
+    assert child.is_dir()
+
+
+def test_only_directories_fails_closed_on_a_link_a_file_or_a_listing_error(
+    pt: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tree = tmp_path / "tree"
+    (tree / "a").mkdir(parents=True)
+    plan = pt._only_directories(str(tree))
+    assert plan == [str(tree / "a"), str(tree)]  # deepest first
+    (tree / "a" / "f").write_text("x", encoding="utf-8")
+    assert pt._only_directories(str(tree)) is None
+    (tree / "a" / "f").unlink()
+    monkeypatch.setattr(pt, "_real_directory", lambda name, dir_fd=None: os.path.basename(name) != "a")
+    assert pt._only_directories(str(tree)) is None  # a link, a junction or a failed stat is never judged a directory
+    monkeypatch.undo()
+
+    def scandir_error(path=".", *args, **kwargs):  # type: ignore[no-untyped-def]
+        raise PermissionError(errno.EACCES, "denied")
+
+    monkeypatch.setattr(pt.os, "scandir", scandir_error)
+    assert pt._only_directories(str(tree)) is None
+
+
+def test_a_link_inside_an_empty_protected_tree_blocks_the_prune(pt: ModuleType) -> None:
+    """A junction (Windows) or a symbolic link (POSIX) to an empty directory is never judged a directory."""
+    wt = make_worktree(pt.PROJECT)
+    (wt / "runs").mkdir()
+    outside = pt.PROJECT / ".tmp" / "outside"
+    outside.mkdir()
+    if os.name == "nt":
+        junction(wt / "runs" / "link", outside)
+    else:
+        os.symlink(outside, wt / "runs" / "link", target_is_directory=True)
+    assert pt.archive_remove([str(wt)]) == 1
+    assert os.path.lexists(wt / "runs" / "link") and outside.is_dir()
+
+
+_TREE_NAMES = st.sampled_from(["runs", "pm-state", "cli-jobs", "RUNS", ".secrets", ".SeCrEtS", "plain", "sub"])
+_GUARDED = {"runs", "pm-state", "cli-jobs", ".secrets"}
+_COUNTER = itertools.count()
+
+
+def _expected_removable(top: Path) -> bool:
+    """Independent oracle: every top-most guarded directory below `top` must be a `.secrets` with no entry at all,
+    or another guarded name whose tree holds only directories and no `.secrets` anywhere below it."""
+    for folder, dirs, _files in os.walk(top):
+        for name in list(dirs):
+            if name.casefold() not in _GUARDED:
+                continue
+            dirs.remove(name)  # judged here as a whole tree
+            tree = Path(folder) / name
+            entries = list(tree.rglob("*"))
+            if name.casefold() == ".secrets":
+                if entries:
+                    return False
+            elif any(p.is_file() or p.name.casefold() == ".secrets" for p in entries):
+                return False
+    return True
+
+
+@settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(st.lists(st.tuples(st.lists(_TREE_NAMES, min_size=1, max_size=3), st.booleans()), min_size=1, max_size=6))
+def test_property_archive_remove_never_removes_a_file_of_a_protected_tree(
+    pt: ModuleType, layout: list[tuple[list[str], bool]]
+) -> None:
+    """Whatever mix of empty and non-empty protected-name and `.secrets` trees a worktree holds, no file inside one
+    is removed, and the worktree goes exactly when the independent oracle says nothing guarded is left."""
+    wt = make_worktree(pt.PROJECT, f"wt-{next(_COUNTER)}")
+    kept: list[Path] = []
+    for parts, with_file in layout:
+        folder = wt.joinpath("x", *parts)
+        if folder.exists() and not folder.is_dir():
+            continue
+        folder.mkdir(parents=True, exist_ok=True)
+        if with_file:
+            (folder / "evidence.json").write_text("{}", encoding="utf-8")
+            if any(p.casefold() in _GUARDED for p in parts):
+                kept.append(folder / "evidence.json")
+    removable = _expected_removable(wt / "x")
+    result = pt.archive_remove([str(wt)])
+    assert all(p.exists() for p in kept)
+    assert (result == 0 and not wt.exists()) if removable else (result == 1 and wt.exists())
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows handle open and its last error")
+def test_an_access_denied_directory_is_reported_as_such(
+    pt: ModuleType, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    top = pt.PROJECT / ".tmp" / "denied"
+    top.mkdir()
+    win = pt._win()
+
+    def denied(path, access, share):  # type: ignore[no-untyped-def]
+        win.last_error = pt._WIN_ERROR_ACCESS_DENIED
+        return None
+
+    monkeypatch.setattr(win, "open", denied)
+    pt._remove_tree_nt(str(top), str(pt.PROJECT / ".tmp"))
+    out = capsys.readouterr().out
+    assert out.strip().endswith(": access denied") and "ACL" not in out and top.is_dir()  # no claimed cause (F5)
+    for code in (2, 32):  # another open failure names its code and claims no cause (review P3-1)
+        monkeypatch.setattr(win, "open", lambda path, access, share, c=code: (setattr(win, "last_error", c), None)[1])
+        pt._remove_tree_nt(str(top), str(pt.PROJECT / ".tmp"))
+        out = capsys.readouterr().out
+        assert out.strip().endswith(f": open failed (winerror {code})") and "a link" not in out
+    monkeypatch.setattr(win, "open", lambda path, access, share: (setattr(win, "last_error", 0), None)[1])
+    pt._remove_tree_nt(str(top), str(pt.PROJECT / ".tmp"))
+    assert "a link or not a directory now" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows handle open and its last error")
+def test_win_open_records_the_last_error_and_clears_it_on_success(pt: ModuleType, tmp_path: Path) -> None:
+    win = pt._win()
+    assert win.open(str(tmp_path / "missing"), pt._WIN_LIST_DIRECTORY, pt._WIN_SHARE_READ_WRITE) is None
+    assert win.last_error != 0
+    opened = win.open(str(tmp_path), pt._WIN_LIST_DIRECTORY, pt._WIN_SHARE_READ_WRITE)
+    assert opened is not None and win.last_error == 0
+    win.close(opened[0])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows handle open and its last error")
+def test_f5_win_open_keeps_the_error_of_a_failed_attribute_query(
+    pt: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The attribute query fails after CreateFileW succeeded; CloseHandle then clears the thread's error. The error
+    kept is the query's, read before the close."""
+    win = pt._win()
+    real_close = win.close
+
+    def failing_query(*_args):  # type: ignore[no-untyped-def]
+        win.ctypes.set_last_error(pt._WIN_ERROR_ACCESS_DENIED)
+        return 0
+
+    def clearing_close(handle):  # type: ignore[no-untyped-def]
+        result = real_close(handle)
+        win.ctypes.set_last_error(0)
+        return result
+
+    monkeypatch.setattr(win, "get_info", failing_query)
+    monkeypatch.setattr(win, "close", clearing_close)
+    win.last_error = 0
+    assert win.open(str(tmp_path), pt._WIN_LIST_DIRECTORY, pt._WIN_SHARE_READ_WRITE) is None
+    assert win.last_error == pt._WIN_ERROR_ACCESS_DENIED
 
 
 def test_a_placeholder_directory_holding_a_subdirectory_is_not_a_placeholder(
@@ -1539,6 +1911,7 @@ def test_qa1_property_no_command_removes_an_owned_or_protected_path(
             (path / "sub").mkdir(parents=True, exist_ok=True)
             if nested_runs and name == "plain-1":
                 (path / "runs").mkdir()
+                (path / "runs" / "evidence.json").write_text("{}", encoding="utf-8")  # an empty one is not protected
             age(path, 1000)
         keep = [root / ".tmp" / "pm-state", busy]
         keep += [root / ".tmp" / "pm-archive"] if archived else []

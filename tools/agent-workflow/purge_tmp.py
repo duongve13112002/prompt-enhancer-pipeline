@@ -17,7 +17,11 @@ Never deletes a protected tree: ledgers, evidence, credentials, models and envir
 below a target, links excluded) and any path that is, contains or lies inside the `cwd` of a busy CLI worker; each
 refusal is reported. One waiver: `archive-remove` of a worker worktree (a direct child of `.tmp/worktrees` whose `.git`
 is a file) may delete that worktree's own `.tmp/pm-state` (test-slot counters, guard log and caches written by tools run
-inside it), after archiving its reports; every other protected name inside it still refuses. An unreadable worker registry refuses every deletion. Never reads file contents of any path under
+inside it), after archiving its reports; every other protected name inside it still refuses. A second waiver, also only
+for `archive-remove`: a nested protected-name tree that holds nothing but directories (an empty `runs` whose evidence
+moved) is removed with `rmdir` only, and only when the strict gate would accept the worktree with it gone; a directory
+that cannot be removed (in use, denied) still refuses at the real run even when the dry run listed it. An unreadable
+worker registry refuses every deletion. Never reads file contents of any path under
 a `.secrets` directory: only the entry names of a nested `.secrets` are counted (never printed) to tell the checked-out
 placeholder `README.md` from real credentials. Links (symlinks, junctions) are never followed; deleting one removes
 only the link. Every delete and archive copy acts inside a held chain of real directories from `.tmp` down
@@ -121,10 +125,12 @@ def _is_link(path: str | os.PathLike[str], dir_fd: int | None = None) -> bool:
 
 
 def _walk(top: str | os.PathLike[str]) -> Iterator[tuple[str, list[str], list[str]]]:
-    """`os.walk` that never descends into a link (junction included)."""
+    """`os.walk` that never descends into a link (junction included) nor into a directory whose name case-folds to
+    `.secrets`: the consumer still sees that name in `dirs` (so it can refuse it), but nothing below it is listed."""
     for root, dirs, files in os.walk(top):
         dirs[:] = [d for d in dirs if not _is_link(os.path.join(root, d))]
         yield root, dirs, files
+        dirs[:] = [d for d in dirs if d.casefold() != ".secrets"]
 
 
 def _inside_project(path: Path, allow_tmp_root: bool = False) -> Path:
@@ -199,6 +205,7 @@ _WIN_SHARE_ALL = 0x1 | 0x2 | 0x4
 _WIN_OPEN_EXISTING = 3
 _WIN_OPEN_ITSELF = 0x02000000 | 0x00200000  # FILE_FLAG_BACKUP_SEMANTICS (directories) | FILE_FLAG_OPEN_REPARSE_POINT
 _WIN_FILE_BASIC_INFO = 0  # FILE_INFO_BY_HANDLE_CLASS FileBasicInfo
+_WIN_ERROR_ACCESS_DENIED = 5  # winerror.h ERROR_ACCESS_DENIED
 _WIN_READONLY, _WIN_DIRECTORY, _WIN_NORMAL, _WIN_REPARSE_POINT = 0x1, 0x10, 0x80, 0x400
 
 
@@ -224,6 +231,7 @@ class _Win:
         self.close.argtypes = [handle]
         self.close.restype = ctypes.c_int
         self.invalid = ctypes.c_void_p(-1).value
+        self.last_error = 0  # Windows error of the failing call of the latest `open`, 0 after a full successful one
 
         class BasicInfo(ctypes.Structure):  # FILE_BASIC_INFO; a zero time is left unchanged when it is set
             _fields_ = [
@@ -241,11 +249,14 @@ class _Win:
         access |= _WIN_READ_ATTRIBUTES | _WIN_SYNCHRONIZE
         handle = self.create(path, access, share, None, _WIN_OPEN_EXISTING, _WIN_OPEN_ITSELF, None)
         if handle is None or handle == self.invalid:
+            self.last_error = self.ctypes.get_last_error()
             return None
         info = self.BasicInfo()
         if not self.get_info(handle, _WIN_FILE_BASIC_INFO, self.ctypes.byref(info), self.ctypes.sizeof(info)):
+            self.last_error = self.ctypes.get_last_error()  # read before CloseHandle can overwrite it
             self.close(handle)
             return None
+        self.last_error = 0
         return handle, info.FileAttributes
 
     def clear_read_only(self, handle: int, attributes: int) -> bool:
@@ -395,7 +406,13 @@ def _remove_tree_nt(top: str, root: str) -> None:
     def enter(path: str) -> None:
         handle = _hold_directory(path)
         if handle is None:
-            print(f"  could not remove {path}: a link or not a directory now")
+            code = _win().last_error
+            if code == _WIN_ERROR_ACCESS_DENIED:
+                print(f"  could not remove {path}: access denied")
+            elif code:  # another open failure (for example 32, in use): name the code, claim no cause
+                print(f"  could not remove {path}: open failed (winerror {code})")
+            else:  # the open succeeded but the attribute check refused it
+                print(f"  could not remove {path}: a link or not a directory now")
             return
         try:
             with os.scandir(path) as listing:
@@ -509,6 +526,82 @@ def _is_placeholder(path: str) -> bool:
         return False
 
 
+def _real_directory(name: str, dir_fd: int | None = None) -> bool:
+    """True only when a no-follow stat of `name` succeeds and shows a directory that is no link and no reparse point
+    (junction); a failed stat is never taken for a directory (fails closed)."""
+    try:
+        info = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except OSError:
+        return False
+    return stat.S_ISDIR(info.st_mode) and not getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+
+
+def _only_directories(top: str) -> list[str] | None:
+    """The directories of the tree at `top`, deepest first, when the tree holds nothing but real directories; None as
+    soon as anything else shows: a file, a link or junction, a failed stat or listing, or a name that is never entered
+    or judged (`.secrets`, case-folded, and a `PROTECTED_PAIRS` directory, empty or not). Names are listed, nothing
+    is opened, printed or removed. Used only to plan `_prune_empty_protected`; the removal itself never trusts it."""
+    order: list[str] = []
+    pending = [top]
+    while pending:
+        current = pending.pop()
+        if not _real_directory(current):
+            return None
+        try:
+            with os.scandir(current) as listing:
+                entries = list(listing)
+        except OSError:
+            return None
+        order.append(current)
+        for entry in entries:
+            folded = entry.name.casefold()
+            if folded == ".secrets" or (os.path.basename(current).casefold(), folded) in PROTECTED_PAIRS:
+                return None
+            if not _real_directory(entry.path):
+                return None
+            pending.append(entry.path)
+    return order[::-1]  # every directory after all of its descendants
+
+
+def _rmdir_each(directories: list[str]) -> bool:
+    """Remove each directory with `os.rmdir` only, in the given order (deepest first). `rmdir` removes an empty
+    directory and nothing else: the operating system refuses one that holds any entry at that moment, so a file or
+    link that appears after the plan is never removed (review F1). Each act runs inside `_held_way` from `.tmp`,
+    after a fresh no-follow check of the entry itself. Stops at the first refusal; what was removed before it was an
+    empty directory. True only when every directory is gone."""
+    root = str(PROJECT / ".tmp")
+    for directory in directories:
+        with _held_way(root, directory) as way:
+            if way is None or not _real_directory(way.name, way.dir_fd):
+                return False
+            try:
+                os.rmdir(way.name, dir_fd=way.dir_fd)
+            except OSError:
+                return False
+    return True
+
+
+def _prune_empty_protected(top: str, dry_run: bool) -> list[str]:
+    """Remove (dry run: only list) every nested protected-name tree below `top` that holds nothing but directories (an
+    empty `runs` left after its evidence moved), with `_rmdir_each`; return the trees removed (dry run: the ones a
+    real run would try). Never enters or removes `.secrets` (any case) or a `PROTECTED_PAIRS` directory, nor
+    anything below them; a protected tree that holds anything else is left for the strict gate to refuse."""
+    pruned: list[str] = []
+    for root, dirs, _files in _walk(top):
+        descend = []
+        for name in dirs:
+            nested = os.path.join(root, name)
+            folded = name.casefold()
+            if folded in PROTECTED_NAMES and folded != ".secrets":
+                plan = _only_directories(nested)
+                if plan is not None and (dry_run or _rmdir_each(plan)):
+                    pruned.append(nested)
+            elif not _protected_name(root, name):
+                descend.append(name)
+        dirs[:] = descend  # a protected tree, pruned or not, is never walked further here
+    return pruned
+
+
 def _protected_name(parent: str, name: str) -> bool:
     # Case-folded: NTFS is case-insensitive, so `PM-State` or `.Secrets` is the same directory (fail closed on POSIX).
     folded = name.casefold()
@@ -553,21 +646,31 @@ def _worker_state_dir(target: Path) -> Path | None:
 
 
 def _find_protected(
-    target: Path, exempt: Path | None = None, worker_state: bool = False
+    target: Path,
+    exempt: Path | None = None,
+    worker_state: bool = False,
+    pruned: frozenset[str] = frozenset(),
+    nested: bool = True,
 ) -> Path | None:
     """The first protected directory that deleting `target` would remove or touch: the target, an ancestor or a
     nested one. `worker_state` (only `archive-remove`, which archives the reports first) waives the protected name
-    of a worker worktree's own `.tmp/pm-state`; every other protected name inside it still refuses."""
+    of a worker worktree's own `.tmp/pm-state`; every other protected name inside it still refuses. `pruned` (only a
+    dry run, which removes nothing) holds the `os.path.normcase` paths `_prune_empty_protected` listed: they and
+    everything below them are judged as a real run would after pruning them. `nested` False (`Gate.prune`'s
+    precheck) keeps the ancestor and kept-container checks and skips only the walk for nested protected trees."""
     ancestor = _protected_ancestor(target, exempt)
     if ancestor is not None:
         return ancestor
     kept = _kept_container(target)
     if kept is not None:
         return kept
+    if not nested:
+        return None
     waived = _worker_state_dir(target) if worker_state else None
     for root, dirs, _files in _walk(target):
+        gone = {name for name in dirs if os.path.normcase(os.path.join(root, name)) in pruned}
         for name in dirs:
-            if not _protected_name(root, name):
+            if name in gone or not _protected_name(root, name):
                 continue
             nested = os.path.join(root, name)
             if name.casefold() in PLACEHOLDER_DIRS and _is_placeholder(nested):
@@ -576,6 +679,8 @@ def _find_protected(
                 if not _is_link(nested):
                     continue
             return Path(nested)
+        if gone:
+            dirs[:] = [name for name in dirs if name not in gone]
     return None
 
 
@@ -608,6 +713,8 @@ def _authorize(
     manifests: set[Path],
     deep: bool,
     worker_state: bool = False,
+    nested: bool = True,
+    pruned: frozenset[str] = frozenset(),
 ) -> tuple[str, str] | None:
     """(status, reason) when `target` must not be deleted, else None. Private: `Gate` supplies every input.
 
@@ -615,7 +722,9 @@ def _authorize(
     trees nested inside); ownership (unreadable or malformed state fails closed; a name in `## IN-FLIGHT` when
     `check_inflight`; an unfinished Antigravity job; a busy worker cwd); manifest-bound files. Status is `refused`,
     `unknown` (ownership unreadable) or `owned`. A link target is judged by name only: removing it touches nothing behind
-    it. `exempt` waives the protected name of that one parent directory."""
+    it. `exempt` waives the protected name of that one parent directory. `nested` False skips only the walk for
+    nested protected trees (`Gate.prune` asks every other check first, kept containers included); `pruned` and
+    `nested` are passed to `_find_protected`."""
     problem = _path_problem(target)
     if problem:
         return "refused", problem
@@ -627,9 +736,9 @@ def _authorize(
         return "unknown", own.problem
     is_link = _is_link(target)
     if not is_link and deep:
-        nested = _find_protected(target, exempt, worker_state)
-        if nested is not None:
-            return "refused", f"protected tree {nested}"
+        found = _find_protected(target, exempt, worker_state, pruned, nested)
+        if found is not None:
+            return "refused", f"protected tree {found}"
     owner = _owner(target, own, check_inflight, is_link)
     if owner:
         return "owned", owner
@@ -656,11 +765,13 @@ class Gate:
         strict: bool = False,
         deadline: float | None = None,
         worker_state: bool = False,
+        prune_empty: bool = False,
     ) -> None:
         self.check_inflight = check_inflight
         self.exempt = exempt
         self.deep = deep
         self.worker_state = worker_state
+        self.prune_empty = prune_empty
         self.own = load_ownership(deadline)
         if strict and self.own.problem:
             problem = self.own.problem
@@ -678,7 +789,9 @@ class Gate:
             found |= self._manifests[root]
         return found
 
-    def check(self, target: Path) -> tuple[str, str] | None:
+    def check(
+        self, target: Path, *, nested: bool = True, pruned: frozenset[str] = frozenset()
+    ) -> tuple[str, str] | None:
         problem = _path_problem(target)
         if problem:
             return "refused", problem
@@ -691,7 +804,22 @@ class Gate:
             manifests=self._manifests_for(absolute),
             deep=self.deep,
             worker_state=self.worker_state,
+            nested=nested,
+            pruned=pruned,
         )
+
+    def prune(self, target: Path, dry_run: bool = False) -> frozenset[str]:
+        """With `prune_empty` (only `archive-remove`): remove the nested protected-name trees of `target` that hold
+        nothing but directories (`_prune_empty_protected`), after every other check passed (containment, protected
+        ancestors, ownership, manifests); a dry run removes nothing and lists them. Returns their `os.path.normcase`
+        paths. The caller then runs the unchanged strict `check`: in a real run it refuses whatever protected tree is
+        still there; a dry run passes the returned paths as `pruned`."""
+        if not self.prune_empty or not self.deep or self.check(target, nested=False) is not None:
+            return frozenset()
+        absolute = os.path.abspath(target)
+        if _is_link(absolute) or not _real_directory(absolute):
+            return frozenset()
+        return frozenset(os.path.normcase(p) for p in _prune_empty_protected(absolute, dry_run))
 
     def remove(self, target: Path) -> bool:
         """Authorize again right before the delete, then delete (a link is removed as a link). True only when gone."""
@@ -858,11 +986,24 @@ def _refuse_linked_directory(parent: Path) -> None:
 def archive_remove(paths: list[str], dry_run: bool = False) -> int:
     """Archive reports, then delete each worktree; returns how many targets were refused. A dry run changes nothing."""
     # A worker worktree's own `.tmp/pm-state` may go: `_archive_reports` copies its reports before the delete.
-    gate = Gate(check_inflight=False, strict=True, worker_state=True)
+    # Empty nested protected-name trees (an empty `runs` whose evidence moved) are pruned with rmdir only, then the
+    # strict gate judges what is left (review F1 to F4).
+    gate = Gate(check_inflight=False, strict=True, worker_state=True, prune_empty=True)
     refused = 0
     for raw in paths:
         worktree = _inside_project(Path(raw))
-        verdict = gate.check(worktree)
+        # Plan first and judge the worktree as if the plan were done: a worktree refused for another reason keeps its
+        # empty trees (review P3-2). Only then prune for real, and judge again what is left.
+        planned = gate.prune(worktree, dry_run=True)
+        verdict = gate.check(worktree, pruned=planned)
+        if not verdict and planned:
+            if dry_run:
+                print(f"{worktree.name}: would prune {len(planned)} empty protected-name tree(s) "
+                      "(a directory in use or denied still refuses)")
+            else:
+                pruned = gate.prune(worktree)
+                print(f"{worktree.name}: pruned {len(pruned)} empty protected-name tree(s)")
+                verdict = gate.check(worktree)
         if verdict:
             print(f"{worktree.name}: refused, {verdict[1]}")
             refused += 1
