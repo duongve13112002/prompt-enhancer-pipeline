@@ -1,10 +1,15 @@
 # Dev-machine profile: extends the full profile and overrides only what differs. Documentation only; nothing is implemented.
 # Everything must work here first (R-020, decision 20). Dev results show that the code works; they never fit a sentinel
 # and never support a timing claim. The quantisation file below is a profile value: change it per run (experiment E15, N123).
-schema_version: 1
+schema_version: 2
 extends: enhancer.example.yaml
 status: template
 purpose: smoke
+
+validation:
+  verifier:
+    calibration_ref: fit_from_gt          # inherited contract; dev smoke never fits calibration
+    require_calibration: false
 
 aliases:
   languages: [vi, en, ja, zh]              # decision 135: explicit dev targets, passed to the prompt as data
@@ -16,6 +21,9 @@ knowledge:
   root: database                         # the dev machine's knowledge base (decision 61): Git-ignored, read only
 
 runtime:
+  request_deadline_s: fit_from_bench
+  trace: {retention_s: deploy_required, queue_limit: deploy_required, workers: deploy_required, drain_timeout_s: deploy_required}
+  monitoring: {queue_limit: deploy_required, workers: deploy_required, drain_timeout_s: deploy_required}
   intake_deadline_s: fit_from_bench        # No measured intake deadline yet
   gpus: [0]
   vram_budget_gb: 7                      # the user's dev GPU, decision 20: nvidia-smi reports 8151 MiB in total (T-018 P2), below 8 GiB, so 8 is refused at load

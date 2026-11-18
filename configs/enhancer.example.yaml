@@ -10,7 +10,7 @@
 #   design_required  decided by the implementing task with evidence
 #   ask_user         only for paid call budgets: the PM asks the user
 # [P] = PM proposal (not a user decision), [A] = assumption to verify.
-schema_version: 1
+schema_version: 2
 status: template
 purpose: production                      # production | smoke (dev results never fit a sentinel, R-020)
 
@@ -135,7 +135,7 @@ assembly:                                # S3
   fact_order: need_then_support          # IR need order, then support count, then value; position matters, N078, N116
 
 edit:
-  attach_kb_reference_images: false      # decision 14, R-011
+  attach_kb_reference_images: false      # enhancement requires false until snapshots retain image files
   max_kb_reference_images: fit_from_gt   # read only when attach_kb_reference_images is true
   source_entity_linking: false           # the source image is not linked to knowledge-base concepts by default
   default_preservation:                  # per edit kind (R-002); name what stays instead of describing it, N100
@@ -166,6 +166,8 @@ validation:                              # S5
       - ledger_entry_needs_meaning
     inline_for: [edit, identity_facts]
     sampled_fraction_for_rest: fit_from_pilot
+    calibration_ref: fit_from_gt          # S5: hash-bound human-checked evidence
+    require_calibration: deploy_required  # Required boolean for inline verification
   max_repairs: 1                         # user proposal v1.1
   fallbacks: [minimal_output_valid_for_contract, user_prompt_with_status_degraded, failed]   # tried in this order, docs/stages/S5-validate.md
 
@@ -376,6 +378,16 @@ vlm:                                     # R-018: rules name no model; models ar
       output: {format: json_schema, schema_id: eval_scenario.v0, strict: true, transport: response_format, validate_response: true}
 
 runtime:                                 # no fixed hardware (AGENTS.md section 8)
+  request_deadline_s: fit_from_bench       # whole request, asynchronous work cancelled on expiry
+  trace:
+    retention_s: deploy_required
+    queue_limit: deploy_required
+    workers: deploy_required
+    drain_timeout_s: deploy_required
+  monitoring:
+    queue_limit: deploy_required
+    workers: deploy_required
+    drain_timeout_s: deploy_required
   intake_deadline_s: fit_from_bench        # S0 checks elapsed time at stage boundaries; no synchronous-call preemption
   gpus: auto
   vram_budget_gb: deploy_required        # per GPU

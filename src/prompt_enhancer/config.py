@@ -1,6 +1,7 @@
 """Load explicitly configured pipeline and admin profiles."""
 
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 import codecs
 import errno
 import ipaddress
@@ -571,8 +572,8 @@ def _load_chain(path, root, stack, sources):
     if path in stack:
         raise ConfigurationError(f'{path}: extends: cycle')
     data = _read_yaml(path)
-    if type(data.get('schema_version')) is not int or data['schema_version'] != 1:
-        raise ConfigurationError(f'{path}: schema_version: expected 1')
+    if type(data.get('schema_version')) is not int or data['schema_version'] not in (1, 2):
+        raise ConfigurationError(f'{path}: schema_version: expected 1 or 2')
     if 'extends' in data and 'overlay_of' in data:
         raise ConfigurationError(f'{path}: extends: cannot combine with overlay_of')
     if 'overlay_of' in data:
@@ -588,6 +589,9 @@ def _load_chain(path, root, stack, sources):
             base = _load_chain(path.parent / ref, root, (*stack, path), sources)
         except ConfigurationError as error:
             raise ConfigurationError(f'{path}: {ref_key}: {error}') from error
+        if base['schema_version'] == 2 and own['schema_version'] == 1:
+            # A legacy partial overlay inherits the base's explicit new contract; no values are injected.
+            own['schema_version'] = 2
         data = _merge(base, own)
         _mark_sources(own, path, sources)
     else:
@@ -694,7 +698,10 @@ def _command_reads(command, config):
                 return tuple('embedding.' + name for name in config['embedding'] if name != 'query_text_template')
             return (key,)
         return tuple(part for key in keys for part in expand(key))
-    keys = (*keys, 'request_overrides')
+    keys = tuple(part for key in (*keys, 'request_overrides')
+                 for part in (VALIDATION_READS if key == 'validation' else _request_runtime_reads(config)
+                              if key == 'runtime' else (key,))
+                 if part != 'vlm.roles.verifier')
     if not isinstance(config['rag'], dict):
         return keys
     if config['rag']['enabled']:
@@ -792,7 +799,9 @@ def _validate_model_bindings(config, path):
             raise ConfigurationError(f'{path}: {key}.output.schema_id: json_schema requires a concrete schema')
         if isinstance(output, dict) and provider in ('anthropic', 'gemini'):
             fmt = output['format']
-            if fmt not in SENTINELS and fmt != 'none':
+            manifest_bound = (name == 'writer' and fmt == 'from_profile_manifest'
+                              and output['schema_id'] == 'from_profile_manifest')
+            if fmt not in SENTINELS and fmt != 'none' and not manifest_bound:
                 raise ConfigurationError(f'{path}: {key}.output.format: cloud structured output mapping is not verified')
         image = role['image']
         if isinstance(image, dict):
@@ -1546,8 +1555,8 @@ def load_config(path, command, *, overlay=None, project_root=None):
     if overlay is not None:
         overlay_path = _inside(overlay, root)
         data = _read_yaml(overlay_path)
-        if type(data.get('schema_version')) is not int or data['schema_version'] != 1:
-            raise ConfigurationError(f'{overlay_path}: schema_version: expected 1')
+        if type(data.get('schema_version')) is not int or data['schema_version'] not in (1, 2):
+            raise ConfigurationError(f'{overlay_path}: schema_version: expected 1 or 2')
         _overlay(data, overlay_path)
         ref = data.get('overlay_of')
         if not isinstance(ref, str) or not ref:
@@ -1562,6 +1571,8 @@ def load_config(path, command, *, overlay=None, project_root=None):
                 raise
             raise ConfigurationError(f'{overlay_path}: overlay_of: {error}') from error
         own = {k: v for k, v in data.items() if k != 'overlay_of'}
+        if config['schema_version'] == 2 and own['schema_version'] == 1:
+            own['schema_version'] = 2
         config = _merge(config, own)
         _mark_sources(own, overlay_path, sources)
     return _validate_loaded_config(config, command, root, path, sources)
@@ -1667,6 +1678,226 @@ def validate_planner_reads(config, path='configuration', sources=None, project_r
     return config['planner']
 
 
+WRITER_READS = ('writer', 'creativity', 'rag.enabled', 'vlm.roles.writer', 'vlm.default_backend')
+
+
+def validate_writer_reads(config, path='configuration', sources=None, project_root=None):
+    """S4's startup/direct-entry gate; no inferred policy or unresolved role setting."""
+    sources = {} if sources is None else sources
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    schema = _schema(root, 'enhancer_config.v0')
+    for key in WRITER_READS:
+        value = _get(config, key, path)
+        _sentinel(value, path, key, sources)
+        _validate(value, _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
+        _require_finite(value, path, key, sources)
+    for key, expected in (('writer.system_prompt_verbatim', True), ('writer.knowledge_block', 'delimited_data')):
+        if _get(config, key, path) != expected:
+            raise ConfigurationError(f'{path}: {key}: expected {expected}')
+    role = config['vlm']['roles']['writer']
+    _validate(role, _schema(root, 'vlm_role.v0'), path, 'vlm.roles.writer', sources)
+    if role['output']['validate_response'] is not True:
+        raise ConfigurationError(f'{path}: vlm.roles.writer.output.validate_response: expected true')
+    if role['output']['transport'] != 'response_format':
+        raise ConfigurationError(f'{path}: vlm.roles.writer.output.transport: only response_format is implemented')
+    if role['output']['format'] != 'from_profile_manifest' or role['output']['schema_id'] != 'from_profile_manifest':
+        raise ConfigurationError(f'{path}: vlm.roles.writer.output: expected paired from_profile_manifest')
+    reads = []
+    if config['rag']['enabled']:
+        reads.append('rag.evidence_mode')
+    if isinstance(role['image'], dict):
+        for field in ('source', 'max_side', 'format', 'quality', 'transport'):
+            _get(config, 'vlm.roles.writer.image.' + field, path)
+        if role['image']['transport'] != 'data_uri':
+            raise ConfigurationError(f'{path}: vlm.roles.writer.image.transport: expected data_uri')
+        if role['image']['source'] not in ('source_image', 'edit_source_only', 'edit_source_and_live_look'):
+            raise ConfigurationError(f'{path}: vlm.roles.writer.image.source: expected the request source image')
+        reads += ['vision.alpha_policy']
+        if role['image']['max_side'] == 'from_vision':
+            reads.append('vision.max_image_side')
+        if role['image']['format'] == 'from_vision':
+            reads.append('vision.format')
+    for name in sorted({role['backend'], config['vlm']['default_backend']}):
+        reads.append(f'vlm.backends.{name}')
+    for key in reads:
+        value = _get(config, key, path)
+        _sentinel(value, path, key, sources)
+        _validate(value, _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
+        _require_finite(value, path, key, sources)
+        if key.startswith('vlm.backends.'):
+            _configured_path(value['api_key_file'], root, path, key + '.api_key_file', secret=True)
+            # Safety-bound protocol fields: engine extras cannot replace R-004 bytes or R-018 identity.
+            for field in ('messages', 'system', 'systemInstruction', 'contents', 'model'):
+                if field in value.get('extra_body', {}):
+                    raise ConfigurationError(f'{path}: {key}.extra_body.{field}: cannot replace writer identity')
+    if config['rag']['enabled'] and config['rag']['evidence_mode'] != 'cards':
+        raise ConfigurationError(f'{path}: rag.evidence_mode: live modes are not implemented')
+    _validate_model_bindings(config, path)
+    return role
+
+
+VALIDATION_READS = ('validation.structural_checks', 'validation.verifier.gating_rules',
+                    'validation.verifier.inline_for', 'validation.verifier.sampled_fraction_for_rest',
+                    'validation.verifier.require_calibration',
+                    'validation.max_repairs', 'validation.fallbacks', 'resolution.random_seed')
+# Protocol-bound policy tags, never rules over natural-language input.
+VERIFIER_GATES = frozenset(('task_is_edit', 'identity_facts_supplied', 'profile_has_known_conflict',
+                            'ledger_entry_needs_meaning'))
+VERIFIER_INLINE = frozenset(('edit', 'identity_facts'))
+VALIDATION_FALLBACKS = frozenset(('minimal_output_valid_for_contract', 'user_prompt_with_status_degraded', 'failed'))
+
+
+def _configuration_schema(root, config):
+    """Expand the versioned config's local top-level references; `_schema` caching stays untouched."""
+    if not isinstance(config, dict):
+        raise ConfigurationError('configuration: expected an object')
+    version = config.get('schema_version')
+    if type(version) is not int or version not in (1, 2):
+        raise ConfigurationError('configuration: schema_version: expected 1 or 2')
+    base = _schema(root, 'enhancer_config.v0')
+    if version == 1:
+        return base
+    schema = deepcopy(_schema(root, 'enhancer_config.v1'))
+    for key, node in schema['properties'].items():
+        if '$ref' in node:
+            if node != {'$ref': 'enhancer_config.v0#/properties/' + key} or key not in base['properties']:
+                raise ConfigurationError('configuration: invalid local configuration schema reference')
+            schema['properties'][key] = deepcopy(base['properties'][key])
+    runtime = schema['properties']['runtime']['anyOf'][0]
+    extension = _schema(root, 'pipeline_runtime.v0')
+    runtime['properties'].update(deepcopy(extension['properties']))
+    runtime['required'].extend(extension['required'])
+    return schema
+
+
+PIPELINE_READS = ('runtime.request_deadline_s', 'runtime.trace.retention_s', 'runtime.trace.queue_limit',
+                  'runtime.trace.workers', 'runtime.trace.drain_timeout_s')
+MONITOR_READS = ('runtime.monitoring.queue_limit', 'runtime.monitoring.workers', 'runtime.monitoring.drain_timeout_s')
+
+
+class AttachmentRetentionUnavailable(ConfigurationError):
+    """A fixed request diagnostic with no configuration values or paths."""
+
+
+def _require_attachment_support(config, path, sources):
+    key = 'edit.attach_kb_reference_images'
+    value = _get(config, key, path)
+    _sentinel(value, path, key, sources)
+    if type(value) is not bool:
+        raise ConfigurationError(f'{path}: {key}: expected false')
+    if value:
+        raise AttachmentRetentionUnavailable(f'{key}: requires snapshot image retention')
+
+
+def _request_runtime_reads(config):
+    runtime = config.get('runtime')
+    if not isinstance(runtime, dict):
+        return ('runtime',)
+    fraction = config.get('validation', {}).get('verifier', {}).get('sampled_fraction_for_rest')
+    monitoring = MONITOR_READS if type(fraction) in (int, float) and fraction > 0 else ()
+    return (*('runtime.' + key for key in runtime if key not in ('request_deadline_s', 'trace', 'monitoring')),
+            *PIPELINE_READS, *monitoring)
+
+
+def validate_pipeline_reads(config, path='configuration', sources=None, project_root=None):
+    sources = {} if sources is None else sources
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    _require_validation_version(config, path)
+    _require_attachment_support(config, path, sources)
+    validate_validation_reads(config, path, sources, root)
+    schema = _schema(root, 'pipeline_runtime.v0')
+    fraction = config['validation']['verifier']['sampled_fraction_for_rest']
+    reads = (*PIPELINE_READS, *(MONITOR_READS if fraction > 0 else ()))
+    result = {}
+    for key in reads:
+        value = _get(config, key, path)
+        _sentinel(value, path, key, sources)
+        _require_finite(value, path, key, sources)
+        relative = key.removeprefix('runtime.')
+        _validate(value, _schema_at(schema, relative), path, key, sources, _EXACT_INTEGERS)
+        if isinstance(value, bool):
+            raise ConfigurationError(f'{path}: {key}: expected a positive number')
+        if relative.endswith(('_deadline_s', '_timeout_s', 'retention_s')):
+            _require_float_seconds(value, path, key, sources)
+        if relative == 'trace.retention_s':
+            try:
+                datetime.now(timezone.utc) + timedelta(seconds=value)
+            except OverflowError as error:
+                raise ConfigurationError(f'{path}: {key}: expiry is outside the datetime range') from error
+        parts = relative.split('.')
+        target = result if len(parts) == 1 else result.setdefault(parts[0], {})
+        target[parts[-1]] = deepcopy(value)
+    return result
+
+
+def _require_validation_version(config, path):
+    """Refuse legacy requests before any version-dependent field or schema read."""
+    if not isinstance(config, dict) or type(config.get('schema_version')) is not int or config['schema_version'] != 2:
+        raise ConfigurationError(f'{path}: schema_version: migrate S5 configuration to version 2 with verifier calibration policy')
+
+
+def validate_validation_reads(config, path='configuration', sources=None, project_root=None, *,
+                              require_verifier=False, require_calibration=True):
+    """S5 policy first; consume calibrated model bindings only on an eligible verification path."""
+    _require_validation_version(config, path)
+    sources = {} if sources is None else sources
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    schema = _configuration_schema(root, config)
+    _validate(_get(config, 'validation', path), _schema_at(schema, 'validation'), path, 'validation', sources,
+              _EXACT_INTEGERS)
+    for key in VALIDATION_READS:
+        value = _get(config, key, path)
+        _sentinel(value, path, key, sources)
+        _validate(value, _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
+        _require_finite(value, path, key, sources)
+    validation = config['validation']
+    if validation['structural_checks'] is not True:
+        raise ConfigurationError(f'{path}: validation.structural_checks: expected true')
+    if type(validation['max_repairs']) is not int or validation['max_repairs'] < 0:
+        raise ConfigurationError(f'{path}: validation.max_repairs: expected a nonnegative integer')
+    fraction = validation['verifier']['sampled_fraction_for_rest']
+    if type(fraction) not in (int, float) or not 0 <= fraction <= 1:
+        raise ConfigurationError(f'{path}: validation.verifier.sampled_fraction_for_rest: expected fraction in [0,1]')
+    for key, tags in (('validation.verifier.gating_rules', VERIFIER_GATES),
+                      ('validation.verifier.inline_for', VERIFIER_INLINE), ('validation.fallbacks', VALIDATION_FALLBACKS)):
+        value = _get(config, key, path)
+        if len(value) != len(set(value)) or not set(value) <= tags:
+            raise ConfigurationError(f'{path}: {key}: expected unique recognized policy names')
+    if not require_verifier:
+        return validation
+    reads = ['vlm.roles.verifier', 'vlm.default_backend']
+    if require_calibration:
+        reads.append('validation.verifier.calibration_ref')
+    role = _get(config, 'vlm.roles.verifier', path)
+    _validate(role, _schema(root, 'vlm_role.v0'), path, 'vlm.roles.verifier', sources, _EXACT_INTEGERS)
+    _sentinel(role, path, 'vlm.roles.verifier', sources)
+    default = _get(config, 'vlm.default_backend', path)
+    _sentinel(default, path, 'vlm.default_backend', sources)
+    _validate(default, _schema_at(schema, 'vlm.default_backend'), path, 'vlm.default_backend', sources)
+    reads += [f'vlm.backends.{name}' for name in sorted({role['backend'], default})]
+    for key in reads:
+        value = _get(config, key, path)
+        _sentinel(value, path, key, sources)
+        _validate(value, _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
+        _require_finite(value, path, key, sources)
+        if key.startswith('vlm.backends.'):
+            _configured_path(value['api_key_file'], root, path, key + '.api_key_file', secret=True)
+            if set(value.get('extra_body', {})) & {'messages', 'system', 'systemInstruction', 'contents', 'model'}:
+                raise ConfigurationError(f'{path}: {key}.extra_body: cannot replace verifier identity')
+    if require_calibration:
+        _configured_path(validation['verifier']['calibration_ref'], root, path, 'validation.verifier.calibration_ref')
+    if role['mode'] != 'generate' or role['image'] != 'none':
+        raise ConfigurationError(f'{path}: vlm.roles.verifier: expected a text-only generate role')
+    for key, expected in (('format', 'json_schema'), ('schema_id', 'verifier_result.v0'), ('strict', True),
+                          ('transport', 'response_format'), ('validate_response', True)):
+        if role['output'][key] != expected:
+            raise ConfigurationError(f'{path}: vlm.roles.verifier.output.{key}: expected {expected}')
+    load_id = role['prompt_id']
+    _filename(load_id, path, 'vlm.roles.verifier.prompt_id')
+    _validate_model_bindings(config, path)
+    return validation
+
+
 ASSEMBLY_READS = ('rag.evidence_mode', 'assembly.scope_matrix', 'assembly.default_outfit',
                   'assembly.max_facts_per_concept', 'assembly.max_facts_per_request', 'assembly.fact_order',
                   'resolution.on_variant_unspecified', 'resolution.random_seed', 'resolution.trace_choice',
@@ -1726,7 +1957,7 @@ def effective_request_config(config, overrides, *, project_root):
     """Apply only administrator-permitted, strictly typed overrides, then run request preflight."""
     root = Path(project_root).resolve()
     try:
-        schema = _schema(root, 'enhancer_config.v0')
+        schema = _configuration_schema(root, config)
     except ConfigurationError:
         raise ConfigurationError('configuration: invalid base configuration') from None
     allowed = _validate_request_base(config, schema)
@@ -1747,14 +1978,19 @@ def effective_request_config(config, overrides, *, project_root):
                 parent = parent[part]
             parent[parts[-1]] = deepcopy(value)
         return _validate_loaded_config(effective, 'enhance once', root, 'effective configuration', {})
+    except AttachmentRetentionUnavailable:
+        raise
     except ConfigurationError as error:
         # The request boundary must not expose validator values, permission keys or filesystem paths.
         raise ConfigurationError(f'request configuration validation failed ({type(error).__name__})') from None
 
 
 def _validate_loaded_config(config, command, root, path, sources):
+    if command in REQUEST_COMMANDS:
+        _require_validation_version(config, path)
+        _require_attachment_support(config, path, sources)
     try:
-        config_schema = _schema(root, 'enhancer_config.v0')
+        config_schema = _configuration_schema(root, config)
     except ConfigurationError as error:
         raise ConfigurationError(f'{path}: schema_version: {error}') from error
     _index_migration(config, path)
@@ -1821,6 +2057,9 @@ def _validate_loaded_config(config, command, root, path, sources):
     if command in REQUEST_COMMANDS:
         _require_float_seconds(config['runtime']['intake_deadline_s'], path, 'runtime.intake_deadline_s', sources)
         validate_planner_reads(config, path, sources, root)
+        validate_writer_reads(config, path, sources, root)
+        validate_validation_reads(config, path, sources, root)
+        validate_pipeline_reads(config, path, sources, root)
         if config['rag']['enabled']:
             validate_index_reads(config, path, sources, root)
             validate_candidates_reads(config, path, sources, root)

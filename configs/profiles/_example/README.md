@@ -16,3 +16,5 @@
 - The profile id is the folder name; a request names it, else the admin's default applies (decision 4).
 
 Procedure: [P-profiles](../../../docs/stages/P-profiles.md).
+
+T-015 P1 recognizes `single_line_minified_json` without parameters. The example's `top_level_keys_in_order_as_listed_in_the_prompt`, `word_caps_as_listed_in_the_prompt` and `bbox_range_0_to_1000_when_present` remain unresolved: the manifest supplies no structural selectors/order/caps. Profile check refuses them before model generation. No artifact is invented from the admin's prose or by interpreting a check's name as parameters; the admin must provide explicit structural artifacts and recheck the profile. This excluded draft example is not a runnable deployment profile.

@@ -664,6 +664,16 @@ class PinnedSnapshot:
     def read_file(self, relative):
         return self._entry('file', relative).read_bytes()
 
+    def read_image(self, image_id):
+        """Retained image bytes must be a listed file with that content hash, never a source-tree path."""
+        if not isinstance(image_id, str) or not image_id.startswith('sha256:'):
+            raise StorageError('invalid retained image identity')
+        matches = [name for (kind, name), entry in self._entries.items()
+                   if kind == 'file' and entry['sha256'] == image_id.removeprefix('sha256:')]
+        if not matches:
+            raise StorageError('image copy is not retained in this snapshot')
+        return self.read_file(sorted(matches)[0])
+
     def release(self):
         """End the pin, then remove the lease file under the store lock, as GC removes stale leases, so neither
         sees a lease half removed (round 2, decision 123). The lease lock is dropped first: if the store lock

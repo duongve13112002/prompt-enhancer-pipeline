@@ -13,9 +13,9 @@ Rules for every prompt:
 
 Role `planner`. [System text](planner_v0.txt) is loaded byte-for-byte. One JSON user-data object holds `task`, `prompt`, `quote_semantics` (manifest), `creativity` (configuration), `edit_default_preservation` (edit only) and `shortlist` (empty when retrieval is off): per entry its `position`, name, kind, description and the card's variant groups with local `group_position` and `variant_position`, never pipeline identifiers. All of it is untrusted data (R-026). Source image attached for `edit`. Asks for the plan with `resolved`, `family` or `no_match` per mention, context ratings of family candidates and variants, knowledge needs and the constraint ledger, with spans copied verbatim. Output schema: `planner_reply.v0`; code checks positions and spans and builds `intent_ir.v0` and `plan_result.v0`. CPU double tests establish containment and validation, not real-model quality. A change invalidates golden tests, the linking experiment E1 results and verifier calibration that used its ledgers.
 
-## `verifier_v0` (S5), status: not written
+## `verifier_v0` (S5), status: written (T-015 P2; live calibration pending)
 
-Role `verifier`. Placeholders: `{ledger_entries}` (only entries the risk rules send to the model), `{output_text}`, `{granted_facts}`. Delimited data: the output under test and the granted facts. Answers per constraint id with a verdict and a quoted span. Output schema: `verifier_result.v0`. A change invalidates the verifier calibration (`fit_from_gt`) and the gating results of E7.
+Role `verifier`. The system file is loaded verbatim; its user message is one JSON data object containing only requested obligations, the decoded candidate, original user evidence, kept granted facts, edit/preservation data and admin-confirmed conflict resolutions/addendum. There are no textual template substitutions. Answers per constraint id with a verdict and a quoted output span. Output schema: `verifier_result.v0`, followed by exact coverage/evidence checks. A change invalidates hash-bound verifier calibration (`fit_from_gt`) and the gating results of E7.
 
 ## `observer_v0` (K2), status: written
 
@@ -53,6 +53,8 @@ Not a role prompt: the header text of the runtime addendum, [runtime_addendum_v0
 
 Role `scenario_generator`. Placeholders: `{folder_declarations}`, `{kind}`, `{task}`. Delimited data: folder names and descriptions. The answer key comes from the declarations, not from the model (R-023). Output schema: `eval_scenario.v0`. A change invalidates generated scenarios and any value fitted on them.
 
-## `brief_v0` (S4), status: not written
+## `brief_v0` (S4), status: written (T-015 P1/P1b)
 
 Not a model-facing instruction set but the Enhancement Brief template, rendered per profile manifest into the writer's user message. Placeholders: the manifest's template variables, the raw prompt, `{knowledge_pack}`, `{constraints}`, and for edit `{delta}` and `{preserve}`. Delimited data: the knowledge facts, one per line bound to the entity they serve. Quote characters follow the manifest's quote semantics. No output schema: the output follows the profile. A change invalidates golden tests of every profile that renders it and E2, E6 and E8 results.
+
+The written template has exactly `{{data}}`: one JSON object with task, verbatim original prompt, Intent IR (ledger/literals/mentions/edit fields), configured creativity, output language and quote/edit semantics; with retrieval on it includes only kept S3 facts and image notes. The profile's sole input variable receives the rendered brief, while admin-confirmed fixed variables are substituted separately in one pass. All values remain data; placeholder-like user strings are never evaluated. The writer system message remains the admin's original bytes. CPU doubles verify containment and byte preservation, not model quality or resistance to prompt injection (R-004, R-026).

@@ -17,6 +17,7 @@ from .model_cloud import cloud_request
 from .model_mapping import openai_request
 from .config import image_media_type
 from .model_image import prepare_image
+from .model_json import strict_json
 
 
 # Artifact-bound pins for the identical one-line bundle in LF and CRLF checkouts.
@@ -188,7 +189,7 @@ def probe_verdict(response, provider, expected):
             return ProbeVerdict(False, 'PROBE_MALFORMED')
         if type(text) is not str:
             return ProbeVerdict(False, 'PROBE_MALFORMED')
-        value = json.loads(text)
+        value = strict_json(text)
         if type(value) is not dict or set(value) != {'value'} or type(value['value']) is not int:
             return ProbeVerdict(False, 'PROBE_MALFORMED')
         return ProbeVerdict(True) if value['value'] == expected else ProbeVerdict(False, 'PROBE_WRONG_ANSWER')

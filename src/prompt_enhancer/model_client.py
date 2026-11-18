@@ -12,6 +12,7 @@ from jsonschema.exceptions import ValidationError
 from .config import (ConfigurationError, NO_MEDIA_TYPE, _sentinel, image_media_type, resolve_backend_engine,
                      resolve_writer_format)
 from .model_cloud import cloud_headers, cloud_request
+from .model_json import strict_json
 from .model_mapping import openai_request
 from .model_image import configure_decode_backstop, prepare_image
 from .model_probe import (ProbeResult, probe_backend, probe_local_image_pair, probe_local_thinking_pair,
@@ -216,8 +217,16 @@ class ModelClientRun:
 
     async def close(self):
         try:
-            for transport in self.transports.values():
-                await transport.close()
+            closing = asyncio.gather(*(transport.close() for transport in self.transports.values()),
+                                     return_exceptions=True)
+            try:
+                results = await asyncio.shield(closing)
+            except asyncio.CancelledError:
+                await asyncio.shield(closing)
+                raise
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
         finally:
             self.client._cloud_headers.clear()
 
@@ -229,8 +238,10 @@ class BoundModelClient:
         self.run = run
         self.role_name = role_name
 
-    async def call(self, system_prompt, user_text, *, manifest=None, images=()):
-        return await self.run.client.call(self.role_name, system_prompt, user_text, manifest=manifest, images=images)
+    async def call(self, system_prompt, user_text, *, manifest=None, images=(), addendum=None):
+        options = {} if addendum is None else {'addendum': addendum}
+        return await self.run.client.call(self.role_name, system_prompt, user_text, manifest=manifest, images=images,
+                                          **options)
 
     async def for_role(self, role_name, *, require=()):
         validate_require(require)
@@ -250,8 +261,11 @@ async def compose_model_client(config, role_name, *, project_root, probe_cases=N
     run = ModelClientRun(config, project_root, probe_cases=probe_cases, local_probe_plans=local_probe_plans)
     try:
         return await run.for_role(role_name)
-    except BaseException:
-        await run.close()
+    except BaseException as error:
+        try:
+            await run.close()
+        except Exception as close_error:
+            error.add_note(f'model run cleanup failed ({type(close_error).__name__})')
         raise
 
 
@@ -610,9 +624,10 @@ class RoleClient:
         self.probes[backend_name] = result
         return await self._extend_multiple_images(backend_name, production_pair)
 
-    async def call(self, role_name, system_prompt, user_text, *, manifest=None, images=()):
+    async def call(self, role_name, system_prompt, user_text, *, manifest=None, images=(), addendum=None):
         try:
-            return await self._call(role_name, system_prompt, user_text, manifest=manifest, images=images)
+            return await self._call(role_name, system_prompt, user_text, manifest=manifest, images=images,
+                                    addendum=addendum)
         except ModelCallError as error:
             error.probe_evidence = safe_probe_events(self.probe_events)
             if error.__cause__ is not None or error.code != 'MODEL_CALL_FAILED':
@@ -635,7 +650,10 @@ class RoleClient:
         except Exception as error:
             raise ModelCallError('MODEL_CALL_FAILED: model call could not be completed') from error
 
-    async def _call(self, role_name, system_prompt, user_text, *, manifest=None, images=()):
+    async def _call(self, role_name, system_prompt, user_text, *, manifest=None, images=(), addendum=None):
+        if addendum is not None and not isinstance(addendum, bytes):
+            raise ValueError('addendum must be bytes or None')
+        addendum_text = None if addendum is None else addendum.decode('utf-8')
         role = deepcopy(self.config['vlm']['roles'][role_name])
         configured_output = deepcopy(role['output'])
         if role_name == 'writer':
@@ -656,6 +674,9 @@ class RoleClient:
             warnings = list(fallback_warnings)
             backend = self.config['vlm']['backends'][backend_name]
             provider = backend['provider']
+            if addendum is not None and set(backend.get('extra_body', {})) & {
+                    'messages', 'system', 'systemInstruction', 'contents', 'model'}:
+                raise ConfigurationError('engine extras cannot replace admin messages')
             headers = {}
             if images and role['image'] == 'none':
                 raise ModelCallError('text-only role cannot receive images')
@@ -757,11 +778,12 @@ class RoleClient:
             if provider == 'openai_compatible':
                 body, dropped = openai_request(backend, role, system_prompt.decode('utf-8'), user_text,
                                               schema=schema if output['format'] == 'json_schema' else None,
-                                              images=cloud_images, capabilities=capabilities, mapped=self._production)
+                                              images=cloud_images, capabilities=capabilities, mapped=self._production,
+                                              addendum=addendum_text)
                 warnings.extend(dropped)
             else:
                 body, cloud_warnings = cloud_request(provider, backend, role, system_prompt.decode('utf-8'), user_text,
-                                                     schema=cloud_schema, images=cloud_images)
+                                                     schema=cloud_schema, images=cloud_images, addendum=addendum_text)
                 warnings.extend(cloud_warnings)
             body_hash = _digest(body)
             image_config = role['image']
@@ -844,13 +866,13 @@ class RoleClient:
                     raise ValueError('response content is empty or not text')
                 value = text
                 if output['format'] != 'none':
-                    value = json.loads(text)
+                    value = strict_json(text)
                 if output['validate_response'] and schema_id != 'none':
                     self.schemas.validate(schema_id, value)
                 record['usage'] = _usage(payload, provider)
                 record['status'] = 'OK'
                 return value, record
-            except (KeyError, IndexError, TypeError, ValueError, ValidationError) as error:
+            except (KeyError, IndexError, TypeError, ValueError, ValidationError, RecursionError) as error:
                 record['status'] = 'SCHEMA_INVALID'
                 record['warnings'].append(('SCHEMA_INVALID', type(error).__name__))
                 return None, record

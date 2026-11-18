@@ -21,7 +21,7 @@ comparison and its atomic replace is lost; a check in the same window fails clos
 import ast
 import asyncio
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from importlib import metadata
 import json
@@ -36,10 +36,12 @@ import yaml
 from .config import (_AMBIGUOUS_BREAKS, ConfigurationError, _MetaLoader, _StrictSafeLoader, _filename, _inside,
                      _load_yaml, _parse_manifest, _schema, _schema_path, _sentinel, load_profile)
 from .model_client import ModelCallError, safe_model_code
+from .model_json import check_json_depth, strict_json
 from .profile_lint import (ADDENDUM_ID, DECISIONS, conflict_findings, input_variable, key_findings, render_addendum,
                            resolve_key, template_findings)
 from .profile_prompt import (ProfileError, load_prompt, parse_meta, parse_structure, placeholders, sha256_tag,
                              system_message, user_template)
+from .profile_validators import SCHEMA as VALIDATOR_SCHEMA, check_output, load_validators, output_format
 from .storage._anchored import atomic_write_bytes, lock_file, publish_new_bytes, remove_entry
 from .storage._fs import StorageError, check_segment
 from .storage.store import _settings as _storage_settings
@@ -57,7 +59,7 @@ CHECK_LOCK_FILE = 'check.lock'
 MANIFEST_SCHEMA = 'profile_manifest.v0'  # protocol-bound: the drafter's output contract
 GOLDEN_SCHEMA = 'golden_case.v0'
 ENVELOPE_SCHEMA = 'response_envelope.v0'
-CHECK_SCHEMAS = (MANIFEST_SCHEMA, GOLDEN_SCHEMA, ENVELOPE_SCHEMA)  # every schema a check verdict depends on (RT4)
+CHECK_SCHEMAS = (MANIFEST_SCHEMA, GOLDEN_SCHEMA, ENVELOPE_SCHEMA, VALIDATOR_SCHEMA)
 # Protocol-bound: the distributions whose behaviour the verdict depends on (YAML reading, schema validation).
 CHECK_LIBRARIES = ('PyYAML', 'jsonschema')
 HASH_PLACEHOLDER = 'computed_at_registration'  # contracts/README.md: retained for registration
@@ -152,10 +154,10 @@ def _code_fingerprint():
     """Hash of the code a verdict depends on: the normalized AST of `config.py`, the bytes of the other modules
     that run the check (as imported), and the versions of its libraries and of Python, whose Unicode tables decide
     `str.isidentifier` (RT4 class)."""
-    from . import config, profile_lint, profile_prompt
+    from . import config, model_json, profile_lint, profile_prompt, profile_validators
     entries = [[config.__name__, _ast_digest(config.__spec__.loader.get_data(config.__file__))]]
     entries += [[module.__name__, sha256_tag(module.__spec__.loader.get_data(module.__file__))]
-                for module in (profile_prompt, profile_lint, sys.modules[__name__])]
+                for module in (model_json, profile_prompt, profile_lint, profile_validators, sys.modules[__name__])]
     entries += [[name, metadata.version(name)] for name in CHECK_LIBRARIES]
     entries.append(['python', platform.python_version()])
     return sha256_tag(json.dumps(entries, separators=(',', ':')).encode('utf-8'))
@@ -414,9 +416,12 @@ class ProfileView:
     input_variable: str | None
     addendum: dict | None
     validator_checks: tuple
+    validator_artifacts: tuple
+    validator_hashes: dict
     supported_tasks: tuple
     has_known_conflict: bool
     activation: dict | None
+    writer_brief: tuple[str, bytes] | None = None
 
     def require_task(self, task):
         """Refuse a task the profile does not support; never reformat it (decision 5)."""
@@ -488,12 +493,15 @@ def _view(profile_id, manifest, manifest_raw, prompt, config, root, activation):
     if findings:
         raise ProfileError('PROFILE_TEMPLATE_INVALID', findings[0][1], findings=findings)
     addendum = render_addendum(manifest['conflicts'], config, load_prompt(root, ADDENDUM_ID))
+    artifacts, hashes = load_validators(_bundle(config, profile_id, root), manifest['validator']['checks'],
+                                      project_root=root)
     return ProfileView(
         profile_id=profile_id, manifest=deepcopy(manifest), system_prompt_sha256=sha256_tag(prompt),
         manifest_sha256=sha256_tag(manifest_raw), system_message=system_message(prompt, fmt, structure),
         user_template=template, template_variables=tuple(manifest['template_variables']),
         template_values=dict(manifest.get('template_values', {})), input_variable=input_variable(manifest),
         addendum=addendum, validator_checks=tuple(manifest['validator']['checks']),
+        validator_artifacts=artifacts, validator_hashes=hashes,
         supported_tasks=tuple(manifest['supported_tasks']), has_known_conflict=bool(manifest['conflicts']),
         activation=activation)
 
@@ -566,6 +574,20 @@ def _golden_fingerprint(inputs):
     return sha256_tag(json.dumps(entries, separators=(',', ':')).encode('utf-8'))
 
 
+def _writer_brief(config, root, code):
+    prompt_id = config['vlm']['roles']['writer']['prompt_id']
+    try:
+        return prompt_id, load_prompt(root, prompt_id)
+    except (ConfigurationError, ProfileError) as error:
+        raise ProfileError(code, 'the writer brief is unavailable; check its configured prompt') from error
+
+
+def _writer_binding(brief):
+    from .pipeline import GoldenAdapter
+
+    return {'id': brief[0], 'sha256': sha256_tag(brief[1]), 'runner_revision': GoldenAdapter.identity}
+
+
 async def check_profile(config, profile_id, runner, *, project_root):
     """Run conflict lint and golden tests; write `activation.json` only when everything passes.
 
@@ -607,7 +629,9 @@ async def _check_locked(config, profile_id, runner, bundle, root):
             name = {None: 'PROFILE_CONFLICT_INVALID', 'CONFLICT_UNDECIDED': 'PROFILE_CONFLICT_UNDECIDED',
                     'CONFLICT_BLOCKS': 'PROFILE_CONFLICT_BLOCKS'}[code]
             raise ProfileError(name, ', '.join(f'{cid}: {detail}' for _, cid, detail in selected), findings=selected)
-    view = _view(profile_id, manifest, manifest_raw, prompt, config, root, None)
+    brief = _writer_brief(config, root, 'PROFILE_GOLDEN_INVALID')
+    writer_binding = _writer_binding(brief)
+    view = replace(_view(profile_id, manifest, manifest_raw, prompt, config, root, None), writer_brief=brief)
     cases, golden_inputs_sha256 = _golden_cases(manifest, bundle, root, schemas[GOLDEN_SCHEMA][1])
     results = []
     for case, image in cases:
@@ -615,6 +639,7 @@ async def _check_locked(config, profile_id, runner, bundle, root):
         entry = {'id': case['id'], 'status': None, 'passed': False, 'envelope_sha256': None}
         try:
             envelope = await runner.run(view, request)
+            check_json_depth(envelope)
         except Exception as error:  # a runner failure fails the case; it never activates the profile
             entry['error'] = type(error).__name__
             results.append(entry)
@@ -625,7 +650,12 @@ async def _check_locked(config, profile_id, runner, bundle, root):
             entry['error'] = 'ENVELOPE_INVALID'
         else:
             entry['status'] = envelope['status']
-            entry['passed'] = envelope['status'] in case['expect']['status']
+            structural_failures = [] if envelope['output'] is None else check_output(
+                envelope['output'], view.validator_artifacts, project_root=root,
+                output_format=output_format(view.manifest, view.validator_artifacts))
+            entry['passed'] = envelope['status'] in case['expect']['status'] and not structural_failures
+            if structural_failures:
+                entry['validator_failures'] = structural_failures
             entry['envelope_sha256'] = sha256_tag(json.dumps(envelope, sort_keys=True, ensure_ascii=False,
                                                              allow_nan=False).encode('utf-8'))
         results.append(entry)
@@ -638,11 +668,13 @@ async def _check_locked(config, profile_id, runner, bundle, root):
     addendum = None if view.addendum is None else {'id': view.addendum['id'], 'sha256': view.addendum['sha256']}
     activation = {'profile_id': profile_id, 'system_prompt_sha256': view.system_prompt_sha256,
                   'manifest_sha256': view.manifest_sha256, 'addendum': addendum,
+                   'validator_hashes': dict(view.validator_hashes),
                   'config_keys_sha256': _config_fingerprint(manifest, config),
                   'golden_inputs_sha256': golden_inputs_sha256,  # the bytes the runner was given
                   'golden_results_sha256': sha256_tag(report_bytes),
                   'schemas_sha256': {schema_id: sha for schema_id, (sha, _) in schemas.items()},
                   'check_code_sha256': CHECK_CODE_SHA256, 'runner': str(runner.identity),
+                  'writer_brief': writer_binding,
                   'checked_at': datetime.now(timezone.utc).isoformat()}
     record = json.dumps(activation, indent=2).encode('utf-8') + b'\n'  # the bytes exist before the comparison
     # Every input must still be the one tested. A change after this comparison and before publication leaves
@@ -650,9 +682,12 @@ async def _check_locked(config, profile_id, runner, bundle, root):
     _, current_raw, current_prompt = _read_bundle(bundle, root)
     current_inputs = _golden_inputs(manifest['golden_tests'], bundle, root, 'PROFILE_CHANGED')
     current_addendum = render_addendum(manifest['conflicts'], config, load_prompt(root, ADDENDUM_ID))
+    _, current_validator_hashes = load_validators(bundle, manifest['validator']['checks'], project_root=root)
     if current_raw != manifest_raw or current_prompt != prompt \
+            or current_validator_hashes != view.validator_hashes \
             or _golden_fingerprint(current_inputs) != golden_inputs_sha256 \
             or _schema_hashes(root) != activation['schemas_sha256'] \
+            or _writer_binding(_writer_brief(config, root, 'PROFILE_CHANGED')) != writer_binding \
             or (current_addendum and current_addendum['sha256']) != (addendum and addendum['sha256']):
         raise ProfileError('PROFILE_CHANGED', 'the profile or an input of its check changed during the check; '
                            'run it again')
@@ -671,7 +706,7 @@ def resolve_profile(config, profile_id=None, *, project_root):
     if not path.exists():
         raise ProfileError('PROFILE_NOT_ACTIVE', f'{profile_id!r} has not passed profile check')
     try:
-        activation = json.loads(_read_bytes(_inside(path, root), 'PROFILE_NOT_ACTIVE'))
+        activation = strict_json(_read_bytes(_inside(path, root), 'PROFILE_NOT_ACTIVE'))
     except ValueError as error:
         raise ProfileError('PROFILE_NOT_ACTIVE', f'{ACTIVATION_FILE} is not valid JSON') from error
     manifest, manifest_raw, prompt = _read_bundle(bundle, root)
@@ -701,7 +736,13 @@ def resolve_profile(config, profile_id=None, *, project_root):
     if activation.get('golden_inputs_sha256') != _golden_fingerprint(inputs):
         raise ProfileError('PROFILE_NOT_CHECKED', 'a golden case file or image differs from the checked ones; '
                            'run profile check')
-    view = _view(profile_id, manifest, manifest_raw, prompt, config, root, activation)
+    brief = _writer_brief(config, root, 'PROFILE_NOT_CHECKED')
+    if activation.get('writer_brief') != _writer_binding(brief):
+        raise ProfileError('PROFILE_NOT_CHECKED', 'the writer brief or production runner differs from the checked one; '
+                           'run profile check')
+    view = replace(_view(profile_id, manifest, manifest_raw, prompt, config, root, activation), writer_brief=brief)
+    if activation.get('validator_hashes') != view.validator_hashes:
+        raise ProfileError('PROFILE_NOT_CHECKED', 'a validator artifact differs from the checked one; run profile check')
     expected = None if view.addendum is None else {'id': view.addendum['id'], 'sha256': view.addendum['sha256']}
     if activation.get('addendum') != expected:
         raise ProfileError('PROFILE_NOT_CHECKED', 'the runtime addendum differs from the checked one; run profile check')

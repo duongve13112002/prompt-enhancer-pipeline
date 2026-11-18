@@ -222,7 +222,16 @@ def test_example_profile_registers_with_known_conflicts(tmp_path, project_root):
     write_golden(folder, 'g1', ['c1', 'c2', 'c3', 'c4'], prompt='một quán phở')
     write_golden(folder, 'g2', [], task='edit')
     set_manifest(folder, golden_tests=['g1', 'g2'])
-    run(check_profile(check, '_example', RunnerDouble(), project_root=project_root))
+    # T-015: the example's prose-only key-order/word-cap/bbox names have no confirmed parameters.
+    runner = RunnerDouble()
+    with pytest.raises(ProfileError, match='PROFILE_VALIDATOR_INVALID'):
+        run(check_profile(check, '_example', runner, project_root=project_root))
+    assert runner.calls == []
+    # Explicit test-only, admin-confirmed subset for the existing template/addendum assertions below.
+    set_manifest(folder, validator={'checks': ['single_line_minified_json']})
+    raw = {'status': 'success', 'output': '{"text":"fixture"}', 'attachments': [], 'source_binding': None,
+           'retrieval': {'state': 'disabled', 'snapshot_id': None}, 'warnings': [], 'trace_id': 'test'}
+    run(check_profile(check, '_example', RunnerDouble(raw=raw), project_root=project_root))
     view = resolve_profile(check, '_example', project_root=project_root)
     assert view.input_variable == 'original_prompt' and view.template_values == {'aspect_ratio': 'auto'}
     assert b'[META]' not in view.system_message and view.has_known_conflict

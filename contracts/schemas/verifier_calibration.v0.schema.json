@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "verifier_calibration.v0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "human_checked",
+    "writer_models",
+    "verifier_models",
+    "writer_settings_hash",
+    "verifier_settings_hash",
+    "writer_prompt_hash",
+    "verifier_prompt_hash",
+    "system_prompt_hash",
+    "addendum_hash",
+    "ledger_schema_hash",
+    "evidence_ref",
+    "evidence_hash"
+  ],
+  "properties": {
+    "human_checked": {
+      "const": true
+    },
+    "writer_models": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider",
+          "model"
+        ],
+        "properties": {
+          "provider": {
+            "enum": [
+              "openai_compatible",
+              "anthropic",
+              "gemini"
+            ]
+          },
+          "model": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "revision",
+              "source",
+              "file",
+              "mmproj_file"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "mmproj_file": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "verifier_models": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider",
+          "model"
+        ],
+        "properties": {
+          "provider": {
+            "enum": [
+              "openai_compatible",
+              "anthropic",
+              "gemini"
+            ]
+          },
+          "model": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "revision",
+              "source",
+              "file",
+              "mmproj_file"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "mmproj_file": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "writer_settings_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "verifier_settings_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "writer_prompt_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "verifier_prompt_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "system_prompt_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "addendum_hash": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ledger_schema_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "evidence_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evidence_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

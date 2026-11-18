@@ -10,7 +10,7 @@ import uuid
 
 from PIL import Image
 
-from .config import ConfigurationError, _schema, _validate, effective_request_config
+from .config import AttachmentRetentionUnavailable, ConfigurationError, _schema, _validate, effective_request_config
 from .model_image import (
     ImageRejected, UndecodableImage, configure_decode_backstop, prepare_vision_image_with_info,
 )
@@ -103,7 +103,8 @@ def _refuse(payload, code, error):
         if error.stage in ('validation', 'profile start', 'profile end', 'image start', 'image end',
                            'snapshot start', 'snapshot end'):
             label += f' at {error.stage}'
-    payload['error'] = {'code': code, 'message': f'intake refused ({label})'}
+    message = str(error) if isinstance(error, AttachmentRetentionUnavailable) else f'intake refused ({label})'
+    payload['error'] = {'code': code, 'message': message}
     # These are schema-bound refusal fields, not model output or inferred retrieval success.
     state = 'disabled' if payload['retrieval']['state'] == 'disabled' else 'failed'
     payload['retrieval'] = {'state': state, 'snapshot_id': None}
@@ -117,7 +118,7 @@ def _refuse(payload, code, error):
     return IntakeResult(payload)
 
 
-def intake(request, config, *, project_root):
+def intake(request, config, *, project_root, profile_view=None):
     """Prepare S0 without model calls; every ordinary refusal returns a failed envelope.
 
     The supplied config may contain unresolved values repaired by permitted typed overrides.
@@ -152,7 +153,14 @@ def intake(request, config, *, project_root):
         boundary('validation')
 
         boundary('profile start')
-        profile = resolve_profile(effective, request.get('profile_id'), project_root=project_root)
+        if profile_view is None:
+            profile = resolve_profile(effective, request.get('profile_id'), project_root=project_root)
+        else:
+            # Only the profile-check adapter supplies the checked, not-yet-activated view.
+            from .profiles import ProfileView
+            if not isinstance(profile_view, ProfileView) or request.get('profile_id') != profile_view.profile_id:
+                raise ProfileError('PROFILE_INVALID', 'golden profile binding differs')
+            profile = profile_view
         payload['profile_id'] = profile.profile_id
         profile.require_task(request['task'])
         boundary('profile end')

@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "writer_result.v0",
+  "title": "S4 writer draft and diagnostics",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "state",
+    "output",
+    "calls",
+    "warnings",
+    "error",
+    "brief_hash",
+    "system_prompt_hash",
+    "addendum_hash"
+  ],
+  "properties": {
+    "state": {
+      "enum": [
+        "draft",
+        "failed"
+      ]
+    },
+    "output": {
+      "type": [
+        "string",
+        "object",
+        "array",
+        "null"
+      ]
+    },
+    "calls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "record_json"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "record_json": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "error": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "brief_hash": {
+      "type": "string"
+    },
+    "system_prompt_hash": {
+      "type": "string"
+    },
+    "addendum_hash": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

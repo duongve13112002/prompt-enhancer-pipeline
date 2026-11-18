@@ -9,11 +9,12 @@ import pytest
 import yaml
 
 from prompt_enhancer import ConfigurationError, load_config, load_profile
+from prompt_enhancer.config import _configuration_schema
 
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = yaml.safe_load((ROOT / 'configs/enhancer.example.yaml').read_bytes())
-SCHEMA = json.loads((ROOT / 'contracts/schemas/enhancer_config.v0.schema.json').read_bytes())
+SCHEMA = _configuration_schema(ROOT, EXAMPLE)
 VALIDATOR = Draft202012Validator(SCHEMA)
 
 

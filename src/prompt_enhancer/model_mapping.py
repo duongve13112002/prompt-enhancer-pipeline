@@ -44,7 +44,7 @@ def map_generation_fields(provider, role, capabilities=None, *, mapped=False, en
 
 
 def openai_request(backend, role, system_prompt, user_text, *, schema=None, images=(),
-                   capabilities=None, mapped=False):
+                   capabilities=None, mapped=False, addendum=None):
     """One body builder for challenges and real calls; acceptance is not semantic proof.
 
     `mapped` is the production construction policy, not a positive capability flag.
@@ -78,8 +78,11 @@ def openai_request(backend, role, system_prompt, user_text, *, schema=None, imag
                                               + base64.b64encode(data).decode('ascii')}}
             for mime, data in images]]
     body['model'] = backend['model']['id']
-    body['messages'] = ([] if system_prompt is None else [{'role': 'system', 'content': system_prompt}]) + [
-        {'role': 'user', 'content': content}]
+    body['messages'] = ([] if system_prompt is None else [{'role': 'system', 'content': system_prompt}])
+    if addendum is not None:
+        # T-015: the S4 addendum follows the admin's verbatim system prompt as its own system message (R-004).
+        body['messages'].append({'role': 'system', 'content': addendum})
+    body['messages'].append({'role': 'user', 'content': content})
     output = role['output']
     if output['format'] == 'json_object':
         body['response_format'] = {'type': 'json_object'}

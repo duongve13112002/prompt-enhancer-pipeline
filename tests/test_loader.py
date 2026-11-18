@@ -426,7 +426,7 @@ def test_overlay_thinking_type(config, tmp_path):
 
 
 def test_version_refused(config, tmp_path):
-    config['schema_version'] = 2
+    config['schema_version'] = 99
     with pytest.raises(ConfigurationError, match='schema_version'):
         load_config(save_config(tmp_path, config), 'kb status')
 

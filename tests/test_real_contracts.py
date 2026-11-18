@@ -6,6 +6,7 @@ import jsonschema
 import pytest
 import yaml
 from prompt_enhancer import ConfigurationError, load_config, load_profile, resolve_writer_format
+from prompt_enhancer.config import _configuration_schema
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,9 +35,9 @@ def test_real_example_contracts():
 
 
 def test_real_full_configuration_schema():
-    schema = json.loads((ROOT / 'contracts/schemas/enhancer_config.v0.schema.json').read_bytes())
-    jsonschema.Draft202012Validator.check_schema(schema)
     config = yaml.safe_load((ROOT / 'configs/enhancer.example.yaml').read_bytes())
+    schema = _configuration_schema(ROOT, config)
+    jsonschema.Draft202012Validator.check_schema(schema)
     def leaves(error):
         if not error.context:
             return [(list(error.absolute_path), error.message)]

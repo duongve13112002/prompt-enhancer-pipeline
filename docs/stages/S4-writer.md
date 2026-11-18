@@ -25,3 +25,7 @@
 **Experiments.** E6, E8, E10, E11, E12.
 
 **References.** N100, N101, N112, N131.
+
+**P1 implementation (T-015, partial).** `writer.write` accepts the checked intake/profile, S2 result and S3 result (absent with retrieval off), plus a writer-bound client. It makes one logical writer call and returns closed `writer_result.v0`; S5 owns repairs. Admin system bytes remain unchanged; `brief_v0` renders a JSON data block containing original text, IR, creativity and profile output semantics, plus only kept facts/image notes. Template replacement is single-pass. Edit passes the source image through the existing client's image preparation; the cards-only path sends no knowledge image to the writer. Client diagnostics are serialized as `calls[].record_json` beside the output, with a separate call status; they never enter output. S4 independently checks a declared output schema.
+
+S4 validates the profile checks, addendum, resolved output format and prepared message before writer binding can probe the backend. An operational binding failure enters the same S5 fallback path as a failed call. The prepared brief is reused in the trace. Attachments are excluded from writer brief data until the KB publisher retains the required image files. The bound client sends the byte-valued addendum as a separate OpenAI system message, Anthropic system text block or Gemini system-instruction part ahead of the user data. S5 sends repair context as data under the same admin system and addendum.

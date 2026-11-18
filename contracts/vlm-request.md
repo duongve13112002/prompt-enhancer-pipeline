@@ -60,6 +60,8 @@ Images are downscaled by the client before sending, because one visual token cov
 
 ## Stored with every call
 
+The role client accepts an optional `addendum` as UTF-8 bytes. The OpenAI mapping places it in a second system message after the unchanged admin system message; Anthropic uses a separate system text block and Gemini a separate system-instruction part. No addendum keeps the prior request shape. Message/model overrides through engine extras are refused for this path. These new native cloud shapes have CPU mapping tests; no live acceptance is claimed. Structured response decoding rejects duplicate object names and nonfinite/overflowed numbers before schema validation, without adding transport retries.
+
 Role, prompt id, `schema_id` and `schema_hash`, `request_hash` (role, prompt id, image settings, sampling, reasoning, output settings, engine and version, model revision), engine and engine version, model revision, warnings, latency. Online calls are stored in `request_traces`, offline calls in `sync_state` ([contracts/README.md](README.md#tables)), so an artifact or an audit can be replayed.
 
 ## Tests (planned)

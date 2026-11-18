@@ -1,6 +1,6 @@
-# User standing rules (injected whole at every PM session start)
+# User standing rules (injected at each PM session start)
 
-Only rules the user stated, one per line: `Sxx | rule | source | check`. `remembered only` = no mechanical gate yet. Decisions: `tasks/DECISIONS_INDEX.md`. Rules already in AGENTS.md are not repeated. "Seed rules" came from the user's earlier project; IDs are never reused.
+Only rules the user stated: `Sxx | rule | source | check`. `remembered only` = no mechanical gate yet. Decisions: `tasks/DECISIONS_INDEX.md`. Not repeated from AGENTS.md. "Seed rules": the user's earlier project; IDs never reused.
 
 S01 | Never assume: test on a real run first (decision 99); unclear means ask. Ask only what is the user's: new product meaning, overriding a decision, spend beyond budget | seed rules 2026-10-22 | remembered only
 S02 | Do every decidable next step yourself; the user must not chase; while away work every unblocked task until none is left (decision 95) | seed rules 2026-10-11 "đừng để tui giục" | remembered only
@@ -40,5 +40,6 @@ S41 | Codex image generation tests the flow; generate only what a test needs and
 S42 | Fix defects of existing agent tooling yourself, no task command needed; new tooling features stay in T-020 to T-026; report each fix, another family reviews it | user 2026-11-14 (decision 72) | remembered only
 S43 | Spread work by each CLI's strengths across Claude, Codex and Antigravity; where Codex and Claude fit equally, alternate or draw between them; no single agent does all the implementation | user 2026-11-14 (decision 83) | remembered only
 S44 | Pipeline code first, tooling second (workers, fixes) | user 2026-11-15 (decision 100) | remembered only
-S45 | Spare the shared SSD: no whole-tree copies, one fixed basetemp deleted after each run, focused tests, delete `.tmp` and worktrees at once, few workers (detail: footer rule 18) | user 2026-11-16 (decision 129) | brief footer rule 18
-S46 | Mandatory: keep model servers busy up to their configured capacity (concurrent requests, no stage-wide barrier); remove repeated work first; never trade accuracy for speed; back off only on real 429, overload or OOM; prove each faster path equal to the serial one (differential test); machine limits hold | user 2026-11-17 (decision 149) | remembered only (task RES-1)
+S45 | Spare the shared SSD: no whole-tree copies, one fixed basetemp deleted after each run, focused tests, delete `.tmp` and worktrees at once, few workers | user 2026-11-16 (decision 129) | brief footer rule 18
+S46 | Mandatory: model servers busy to configured capacity (concurrent requests, no stage-wide barrier); remove repeated work first; never trade accuracy for speed; back off only on real 429, overload or OOM; a differential test proves each faster path equal to the serial one; machine limits hold | user 2026-11-17 (decision 149) | remembered only (task RES-1)
+S47 | Lean process: 1 build, 1 review, max 1 fix round; diff-only retest; task file ~20 KB; 1 reviewer unless high-risk; no Step 0 stop once the cause is clear; PM measures quality | user 2026-11-18 (decision 164) | remembered only

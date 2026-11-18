@@ -136,7 +136,8 @@
           "TRUNCATED",
           "SNAPSHOT_MISSING",
           "PROFILE_CONFLICT",
-          "BUDGET_EXHAUSTED"
+          "BUDGET_EXHAUSTED",
+          "VERIFIER_UNCALIBRATED"
         ]
       }
     },

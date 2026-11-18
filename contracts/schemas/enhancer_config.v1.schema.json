@@ -1,0 +1,348 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "enhancer_config.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "purpose",
+    "knowledge",
+    "sync",
+    "embedding",
+    "observe",
+    "cards",
+    "aliases",
+    "index",
+    "rag",
+    "candidates",
+    "planner",
+    "resolution",
+    "clarification",
+    "assembly",
+    "edit",
+    "creativity",
+    "writer",
+    "validation",
+    "vision",
+    "request_overrides",
+    "profiles",
+    "vlm",
+    "runtime",
+    "storage",
+    "serving",
+    "evaluation"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "status": {
+      "$ref": "enhancer_config.v0#/properties/status"
+    },
+    "purpose": {
+      "$ref": "enhancer_config.v0#/properties/purpose"
+    },
+    "knowledge": {
+      "$ref": "enhancer_config.v0#/properties/knowledge"
+    },
+    "sync": {
+      "$ref": "enhancer_config.v0#/properties/sync"
+    },
+    "embedding": {
+      "$ref": "enhancer_config.v0#/properties/embedding"
+    },
+    "observe": {
+      "$ref": "enhancer_config.v0#/properties/observe"
+    },
+    "cards": {
+      "$ref": "enhancer_config.v0#/properties/cards"
+    },
+    "aliases": {
+      "$ref": "enhancer_config.v0#/properties/aliases"
+    },
+    "index": {
+      "$ref": "enhancer_config.v0#/properties/index"
+    },
+    "rag": {
+      "$ref": "enhancer_config.v0#/properties/rag"
+    },
+    "candidates": {
+      "$ref": "enhancer_config.v0#/properties/candidates"
+    },
+    "planner": {
+      "$ref": "enhancer_config.v0#/properties/planner"
+    },
+    "resolution": {
+      "$ref": "enhancer_config.v0#/properties/resolution"
+    },
+    "clarification": {
+      "$ref": "enhancer_config.v0#/properties/clarification"
+    },
+    "assembly": {
+      "$ref": "enhancer_config.v0#/properties/assembly"
+    },
+    "edit": {
+      "$ref": "enhancer_config.v0#/properties/edit"
+    },
+    "creativity": {
+      "$ref": "enhancer_config.v0#/properties/creativity"
+    },
+    "writer": {
+      "$ref": "enhancer_config.v0#/properties/writer"
+    },
+    "validation": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "structural_checks": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "verifier": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "gating_rules": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "inline_for": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "enum": [
+                                  "fit_from_gt",
+                                  "fit_from_bench",
+                                  "fit_from_pilot",
+                                  "pin_required",
+                                  "deploy_required",
+                                  "design_required",
+                                  "ask_user"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "sampled_fraction_for_rest": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    },
+                    "calibration_ref": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "require_calibration": {
+                      "anyOf": [
+                        {"type": "boolean"},
+                        {"const": "deploy_required"}
+                      ]
+                    }
+                  },
+                  "required": [
+                    "gating_rules",
+                    "inline_for",
+                    "sampled_fraction_for_rest",
+                    "calibration_ref",
+                    "require_calibration"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "max_repairs": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            },
+            "fallbacks": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "enum": [
+                          "fit_from_gt",
+                          "fit_from_bench",
+                          "fit_from_pilot",
+                          "pin_required",
+                          "deploy_required",
+                          "design_required",
+                          "ask_user"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "structural_checks",
+            "verifier",
+            "max_repairs",
+            "fallbacks"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "enum": [
+            "fit_from_gt",
+            "fit_from_bench",
+            "fit_from_pilot",
+            "pin_required",
+            "deploy_required",
+            "design_required",
+            "ask_user"
+          ]
+        }
+      ]
+    },
+    "vision": {
+      "$ref": "enhancer_config.v0#/properties/vision"
+    },
+    "request_overrides": {
+      "$ref": "enhancer_config.v0#/properties/request_overrides"
+    },
+    "profiles": {
+      "$ref": "enhancer_config.v0#/properties/profiles"
+    },
+    "vlm": {
+      "$ref": "enhancer_config.v0#/properties/vlm"
+    },
+    "runtime": {
+      "$ref": "enhancer_config.v0#/properties/runtime"
+    },
+    "storage": {
+      "$ref": "enhancer_config.v0#/properties/storage"
+    },
+    "serving": {
+      "$ref": "enhancer_config.v0#/properties/serving"
+    },
+    "evaluation": {
+      "$ref": "enhancer_config.v0#/properties/evaluation"
+    }
+  }
+}

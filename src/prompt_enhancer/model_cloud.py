@@ -28,7 +28,7 @@ def cloud_headers(provider, backend, project_root):
     raise ValueError('unsupported cloud provider')
 
 
-def cloud_request(provider, backend, role, system_prompt, user_text, *, schema=None, images=()):
+def cloud_request(provider, backend, role, system_prompt, user_text, *, schema=None, images=(), addendum=None):
     """Build text-only fragments; unverified required output capabilities fail closed."""
     if provider == 'anthropic' and role['reasoning']['mode'] == 'on':
         budget = role['reasoning']['budget_tokens']
@@ -41,6 +41,9 @@ def cloud_request(provider, backend, role, system_prompt, user_text, *, schema=N
     output = role['output']
     if output['format'] != 'none':
         raise ValueError('cloud structured output mapping is not yet verified')
+    if addendum is not None and (not isinstance(addendum, str) or set(backend.get('extra_body', {})) & {
+            'messages', 'system', 'systemInstruction', 'contents', 'model'}):
+        raise ValueError('invalid or overridden admin addendum')
     if provider == 'anthropic':
         content = user_text
         if images:
@@ -50,6 +53,8 @@ def cloud_request(provider, backend, role, system_prompt, user_text, *, schema=N
                                'data': base64.b64encode(data).decode('ascii')}})  # A: image source
         body = {'model': backend['model']['id'], 'system': system_prompt,
                 'messages': [{'role': 'user', 'content': content}], **fields, **reasoning}  # A
+        if addendum is not None:
+            body['system'] = [{'type': 'text', 'text': system_prompt}, {'type': 'text', 'text': addendum}]
     elif provider == 'gemini':
         if images:
             raise ValueError('Gemini image field members are not verified')
@@ -57,6 +62,8 @@ def cloud_request(provider, backend, role, system_prompt, user_text, *, schema=N
         body = {'systemInstruction': {'parts': [{'text': system_prompt}]},
                 'contents': [{'role': 'user', 'parts': [{'text': user_text}]}],
                 'generationConfig': fields}  # G
+        if addendum is not None:
+            body['systemInstruction']['parts'].append({'text': addendum})
     else:
         raise ValueError('unsupported cloud provider')
     body.update(deepcopy(backend.get('extra_body', {})))

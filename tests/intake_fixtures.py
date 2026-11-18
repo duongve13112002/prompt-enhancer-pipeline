@@ -16,6 +16,10 @@ def configuration(model_test_profile, tmp_path):
     config['rag']['enabled'] = False
     config['vision'].update(max_decode_pixels=10000, quality=80, format='png')
     config['runtime'].update(intake_deadline_s=60, vram_budget_gb=1)
+    # Explicit test-only lifecycle capacities/time budgets, never deployment defaults.
+    config['runtime'].update(request_deadline_s=60,
+        trace={'retention_s': 60, 'queue_limit': 2, 'workers': 1, 'drain_timeout_s': 2},
+        monitoring={'queue_limit': 2, 'workers': 1, 'drain_timeout_s': 2})
     config['storage'].update(kb_store=str(tmp_path / 'kb'), lock={'timeout_s': 1, 'poll_s': 0.01})
     config['index'].update(engine='numpy_exact', metric='cosine', build={'block_rows': 2},
                            lexical={'kind': 'char_ngram', 'ngram_size': 2})
@@ -29,6 +33,7 @@ def configuration(model_test_profile, tmp_path):
                               max_facts_per_request=4, fact_order='need_then_support')
     config['edit']['max_kb_reference_images'] = 0
     config['validation']['verifier']['sampled_fraction_for_rest'] = 0
+    config['validation']['verifier']['require_calibration'] = True
     for name in ('planner', 'writer', 'verifier', 'manifest_drafter'):
         role = config['vlm']['roles'][name]
         prototype = config['vlm']['roles']['observer']

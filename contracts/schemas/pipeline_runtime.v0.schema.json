@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pipeline_runtime.v0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request_deadline_s", "trace"],
+  "properties": {
+    "request_deadline_s": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "fit_from_bench"}]},
+    "trace": {
+      "type": "object", "additionalProperties": false,
+      "required": ["retention_s", "queue_limit", "workers", "drain_timeout_s"],
+      "properties": {
+        "retention_s": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "deploy_required"}]},
+        "queue_limit": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]},
+        "workers": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]},
+        "drain_timeout_s": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "deploy_required"}]}
+      }
+    },
+    "monitoring": {
+      "type": "object", "additionalProperties": false,
+      "required": ["queue_limit", "workers", "drain_timeout_s"],
+      "properties": {
+        "queue_limit": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]},
+        "workers": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "deploy_required"}]},
+        "drain_timeout_s": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "deploy_required"}]}
+      }
+    }
+  }
+}
