@@ -608,6 +608,15 @@
                 }
               ]
             },
+            "retained_images": {
+              "type": "object",
+              "properties": {
+                "max_image_bytes": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 9223372036854775807}, {"const": "deploy_required"}]},
+                "max_total_bytes": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 9223372036854775807}, {"const": "deploy_required"}]}
+              },
+              "required": ["max_image_bytes", "max_total_bytes"],
+              "additionalProperties": false
+            },
             "resume": {
               "anyOf": [
                 {
@@ -631,7 +640,8 @@
             "mass_deletion_guard",
             "snapshots",
             "gc",
-            "resume"
+            "resume",
+            "retained_images"
           ],
           "additionalProperties": false
         },

@@ -14,7 +14,7 @@ from .assembly import build_assembly
 from .candidates import build_candidates, query_embedder_settings
 from .config import ConfigurationError, effective_request_config, validate_pipeline_reads
 from .envelope import build_envelope, build_trace_row
-from .intake import intake
+from .intake import RETENTION_MESSAGE, AttachmentRetentionUnavailable, intake, refuse_attachments
 from .model_client import ModelCallError, compose_model_client
 from .model_json import strict_json
 from .planner import plan
@@ -59,6 +59,17 @@ async def monitor_output(s0, planned, assembled, checked, owner, *, project_root
         raise ValueError('monitor did not complete on a calibrated route')
     results = validate_verifier_reply(reply, [entry['id'] for entry in entries], output, project_root=project_root)
     return {'status': 'checked', 'results': results, 'calls': [record]}
+
+
+def require_attachment_copies(s0, assembled):
+    """Right after S3: the selected attach images must read back hash-checked, before S4 can name them."""
+    pack = None if assembled is None else assembled['pack']
+    for item in [] if pack is None else pack['images']:
+        if item['channel'] == 'attach':
+            try:
+                s0.snapshot.read_image(item['image_id'])
+            except (StorageError, OSError):
+                raise AttachmentRetentionUnavailable(RETENTION_MESSAGE) from None
 
 
 def retain_attachments(s0, assembled, expires_at):
@@ -222,6 +233,7 @@ class Pipeline:
                             else:
                                 if effective['rag']['enabled']:
                                     assembled = build_assembly(s0, planned, project_root=self.root)
+                                    require_attachment_copies(s0, assembled)
                                 prepared = prepare_write(s0, planned, assembled, project_root=self.root)
                                 brief = prepared.text
                                 binding_error = None
@@ -243,6 +255,10 @@ class Pipeline:
                                                                s0.payload['request_id'])
                                 except (StorageError, OSError, OverflowError):
                                     diagnostics.append('ATTACHMENT_UNAVAILABLE')
+            except AttachmentRetentionUnavailable as error:
+                # Same refusal intake gives; S4 never ran, so nothing promised an attachment.
+                refuse_attachments(s0, error)
+                shortlist = planned = assembled = None
             except (TimeoutError, ModelCallError, StorageError) as error:
                 if s0 is None:
                     raise

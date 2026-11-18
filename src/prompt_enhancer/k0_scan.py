@@ -186,7 +186,7 @@ def _read(path, parent_fd, name, *, text_encoding, cache=None):
         return record
 
 
-def read_source_file(root, parts):
+def read_source_file(root, parts, *, max_bytes=None):
     """Read one regular file at `root`/`parts` read-only, refusing a link on every component (R-014, K1 input).
 
     `root` is the already resolved knowledge root; `parts` are the relative components K0 recorded.
@@ -206,11 +206,17 @@ def read_source_file(root, parts):
         path = current / parts[-1]
         with _opened(path, parent, parts[-1], False) as fd:
             initial = os.fstat(fd)
+            if max_bytes is not None and initial.st_size > max_bytes:
+                raise ScanError(f'{path}: source exceeds byte limit')
             chunks = []
+            size = 0
             while True:
-                block = os.read(fd, _CHUNK_BYTES)
+                block = os.read(fd, _CHUNK_BYTES if max_bytes is None else min(_CHUNK_BYTES, max_bytes - size + 1))
                 if not block:
                     break
+                size += len(block)
+                if max_bytes is not None and size > max_bytes:
+                    raise ScanError(f'{path}: source exceeds byte limit')
                 chunks.append(block)
             final = os.fstat(fd)
             if (initial.st_size, initial.st_mtime_ns) != (final.st_size, final.st_mtime_ns):

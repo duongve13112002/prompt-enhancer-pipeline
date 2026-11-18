@@ -10,13 +10,21 @@ import uuid
 
 from PIL import Image
 
-from .config import AttachmentRetentionUnavailable, ConfigurationError, _schema, _validate, effective_request_config
+from .config import ConfigurationError, _schema, _validate, effective_request_config
 from .model_image import (
     ImageRejected, UndecodableImage, configure_decode_backstop, prepare_vision_image_with_info,
 )
 from .profile_prompt import ProfileError, sha256_tag
 from .profiles import resolve_profile
 from .storage import StorageError, open_knowledge_store
+from .storage.store import RetainedFileError
+
+
+RETENTION_MESSAGE = 'image copies unavailable; run kb sync to republish'  # protocol-bound operator hint
+
+
+class AttachmentRetentionUnavailable(StorageError):
+    """A fixed request diagnostic (store state, not configuration) with no values or paths."""
 
 
 class KnowledgeGateway:
@@ -118,6 +126,11 @@ def _refuse(payload, code, error):
     return IntakeResult(payload)
 
 
+def refuse_attachments(result, error):
+    """Turn a ready S0 result into the same refusal intake gives, for a failure found after S3 and before S4."""
+    _refuse(result.payload, 'KNOWLEDGE_FAILED', error)
+
+
 def intake(request, config, *, project_root, profile_view=None):
     """Prepare S0 without model calls; every ordinary refusal returns a failed envelope.
 
@@ -178,7 +191,18 @@ def intake(request, config, *, project_root, profile_view=None):
         boundary('snapshot start')
         if effective['rag']['enabled']:
             gateway = KnowledgeGateway(effective, project_root)
-            snapshot = gateway.pin()
+            try:
+                snapshot = gateway.pin()
+            except RetainedFileError:
+                if request['task'] != 'edit' or not effective['edit']['attach_kb_reference_images']:
+                    raise
+                raise AttachmentRetentionUnavailable(RETENTION_MESSAGE) from None
+            if snapshot is not None and request['task'] == 'edit' and effective['edit']['attach_kb_reference_images']:
+                # Manifest-only check (no image bytes read); no snapshot at all stays the degraded SNAPSHOT_MISSING path.
+                try:
+                    snapshot.check_retained_images(snapshot.read_rows('images'))
+                except (StorageError, OSError):
+                    raise AttachmentRetentionUnavailable(RETENTION_MESSAGE) from None
             if snapshot is None:
                 payload['outcome'] = 'degraded'
                 payload['warnings'].append('SNAPSHOT_MISSING')

@@ -418,6 +418,8 @@ def pin_reads_the_manifest(store, s, link):
 def pinned_read(store, s, link):
     with store.pin() as pinned:
         link(f'snapshots/{s.new}/index')
+        # KBS-F3: pinned reads use the no-follow source reader, which refuses every link alike, inside or outside.
+        link.message = 'is a link'
         with link.refused():
             pinned.read_file('index/names.txt')
 

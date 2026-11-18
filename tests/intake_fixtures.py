@@ -46,12 +46,13 @@ def configuration(model_test_profile, tmp_path):
     return config
 
 
-def activate(config, project_root, *, tasks=('generate', 'edit'), profile_id='p1'):
+def activate(config, project_root, *, tasks=('generate', 'edit'), profile_id='p1', renderer=None):
     """Use real registration/check logic with labelled drafter and pipeline-runner doubles."""
     install_prompts(project_root)
     folder = bundle(Path(config['profiles']['root']).parent, profile_id, SECTIONED)
+    extra = {} if renderer is None else {'renderer': renderer}
     value = draft(profile_id=profile_id, supported_tasks=list(tasks),
-                  edit_output_semantics='whole_edited_image' if 'edit' in tasks else None)
+                  edit_output_semantics='whole_edited_image' if 'edit' in tasks else None, **extra)
     asyncio.run(register_profile(config, profile_id, DrafterDouble(value), project_root=project_root))
     confirm_profile(config, profile_id, {'c1': 'profile_wins'}, project_root=project_root)
     write_golden(folder, 'g1', ['c1'])

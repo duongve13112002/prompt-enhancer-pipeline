@@ -17,6 +17,9 @@ aliases:
 observe:
   near_duplicate_cosine_distance: fit_from_gt   # E14; a smoke run never fits this value
 
+sync:
+  retained_images: {max_image_bytes: 16777216, max_total_bytes: 1073741824}  # dev-only smoke bounds (16 MiB, 1 GiB), not measured
+
 knowledge:
   root: database                         # the dev machine's knowledge base (decision 61): Git-ignored, read only
 

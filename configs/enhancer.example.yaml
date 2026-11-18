@@ -35,6 +35,7 @@ knowledge:                               # docs/stages/K0-sync.md, kb/README.md
   on_source_removed: remove              # decision 17
 
 sync:                                    # K0
+  retained_images: {max_image_bytes: deploy_required, max_total_bytes: deploy_required} # original bytes, unique images
   mass_deletion_guard: {max_removed_fraction: design_required}   # R-014: a sync that would remove more stops
   snapshots: {keep: design_required}     # retired snapshots kept besides CURRENT
   gc: {retention: design_required}       # e.g. 7d: age since first seen unreferenced
@@ -135,7 +136,7 @@ assembly:                                # S3
   fact_order: need_then_support          # IR need order, then support count, then value; position matters, N078, N116
 
 edit:
-  attach_kb_reference_images: false      # enhancement requires false until snapshots retain image files
+  attach_kb_reference_images: false      # true requires a snapshot republished with retained image copies
   max_kb_reference_images: fit_from_gt   # read only when attach_kb_reference_images is true
   source_entity_linking: false           # the source image is not linked to knowledge-base concepts by default
   default_preservation:                  # per edit kind (R-002); name what stays instead of describing it, N100

@@ -64,31 +64,18 @@ def test_unrepresentable_duration(model_test_profile, tmp_path, project_root, du
         validate_pipeline_reads(config, project_root=project_root)
 
 
-def test_attachment_configuration_refuses_before_access(model_test_profile, tmp_path, project_root, monkeypatch):
+def test_attachment_configuration_accepts_true(model_test_profile, tmp_path, project_root):
     import yaml
     from prompt_enhancer.config import effective_request_config, load_config
-    from prompt_enhancer.intake import intake
     from prompt_enhancer.pipeline import Pipeline
     config = configuration(model_test_profile, tmp_path)
     config['rag']['enabled'] = True
     config['edit']['attach_kb_reference_images'] = True
 
-    def forbidden(*args, **kwargs):
-        pytest.fail('preflight opened the KB')
-
-    monkeypatch.setattr('prompt_enhancer.storage.open_knowledge_store', forbidden)
-    monkeypatch.setattr('prompt_enhancer.intake.KnowledgeGateway', forbidden)
-    with pytest.raises(ConfigurationError, match='snapshot image retention'):
-        Pipeline(config, project_root=project_root)
+    assert Pipeline(config, project_root=project_root).config['edit']['attach_kb_reference_images'] is True
     target = tmp_path / 'no-retention.yaml'
     target.write_text(yaml.safe_dump(config), encoding='utf-8')
-    with pytest.raises(ConfigurationError, match='snapshot image retention'):
-        load_config(target, 'enhance once', project_root=project_root)
+    assert load_config(target, 'enhance once', project_root=project_root)['edit']['attach_kb_reference_images'] is True
     config['edit']['attach_kb_reference_images'] = False
     config['request_overrides']['allowed_keys'] = ['edit.attach_kb_reference_images']
-    with pytest.raises(ConfigurationError, match='snapshot image retention'):
-        effective_request_config(config, {'edit.attach_kb_reference_images': True}, project_root=project_root)
-    result = intake({'task': 'generate', 'prompt': 'test', 'overrides': {'edit.attach_kb_reference_images': True}},
-                    config, project_root=project_root)
-    assert result.payload['outcome'] == 'refused'
-    assert 'snapshot image retention' in result.payload['error']['message']
+    assert effective_request_config(config, {'edit.attach_kb_reference_images': True}, project_root=project_root)['edit']['attach_kb_reference_images'] is True

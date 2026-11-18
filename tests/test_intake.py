@@ -432,6 +432,20 @@ def test_missing_snapshot_is_degraded(env, project_root):
         assert payload['retrieval'] == {'state': 'failed', 'snapshot_id': None}
 
 
+def test_legacy_snapshot_refuses_edit_attachments_before_model_work(env, project_root):
+    config, _ = env
+    config['rag']['enabled'] = True
+    config['edit']['attach_kb_reference_images'] = True
+    config['edit']['max_kb_reference_images'] = 1
+    store = make_store(project_root, Path(config['storage']['kb_store']))
+    publish(store)
+    result = intake(request(task='edit', source_image=image()), config, project_root=project_root)
+    assert result.payload['outcome'] == 'refused'
+    assert 'kb sync' in result.payload['error']['message']
+    assert result.snapshot is None
+    assert not list((store.root / 'leases').glob('*/*.lease'))
+
+
 def test_pin_once_survives_publish(env, project_root, monkeypatch):
     config, _ = env
     config['rag']['enabled'] = True

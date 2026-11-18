@@ -86,6 +86,7 @@ _RETENTION = re.compile(r'([0-9]+)([smhd])')
 _UNIT_S = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}  # protocol-bound: units of the retention grammar
 RAG_COMMANDS = ('enhance once', 'enhance serve', 'eval run')
 _FORBIDDEN = ('.secrets', '.git', '.venv', 'models')  # same protected roots as config._configured_path
+RETAINED_IMAGE_MARKER = ('images/retention-v1', b'original-sha256-v1')  # artifact-bound: kb sync writes, intake checks
 HOLDABLE = ('published', 'retired')  # a trace may hold only a snapshot a reader could have pinned
 LIVE = ('validated', 'published', 'retired')  # states whose snapshot may still be published, pinned or rolled back
 HOLD_SCHEMA = pa.schema([pa.field('request_id', pa.large_string(), False),
@@ -176,6 +177,10 @@ def _admit(names, relative):
             raise StorageError(f'{relative!r} names the same file or folder as {known[0]!r}')
         names[identity_key(spelled)] = (spelled, is_dir)
     return relative
+
+
+class RetainedFileError(StorageError):
+    """A retained file listed in a snapshot manifest is missing or has the wrong size."""
 
 
 def _verify(path, size, sha256, *, fresh=False):
@@ -544,12 +549,13 @@ class KnowledgeStore:
                     tables[row['table']] = read_table_file(path)
                     self.catalog.validate(row['table'], tables[row['table']])
             else:
+                failure = RetainedFileError if row['kind'] == 'file' else StorageError
                 try:
                     size = path.stat().st_size
                 except OSError as error:
-                    raise StorageError(f'{path}: listed in the manifest but missing: {error}') from error
+                    raise failure(f'{path}: listed in the manifest but missing: {error}') from error
                 if size != row['size_bytes']:
-                    raise StorageError(f'{path}: size {size} differs from the manifest ({row["size_bytes"]})')
+                    raise failure(f'{path}: size {size} differs from the manifest ({row["size_bytes"]})')
         if full:
             missing = [name for name in SNAPSHOT_TABLES if name not in tables]
             if missing:
@@ -662,17 +668,45 @@ class PinnedSnapshot:
         return self.store.catalog.rows(name, self.read_table(name))
 
     def read_file(self, relative):
-        return self._entry('file', relative).read_bytes()
+        from ..k0_scan import LinkRefused, read_source_file
+        if not self._lease.held:
+            raise StorageError(f'snapshot {self.snapshot_id}: pin already released')
+        entry = self._entries.get(('file', relative))
+        if entry is None:
+            raise StorageError(f'snapshot {self.snapshot_id}: {relative!r} is not listed in the manifest')
+        try:
+            data = read_source_file(self.store.root, (self._directory + '/' + entry['path']).split('/'),
+                                    max_bytes=entry['size_bytes'])
+        except LinkRefused as error:
+            # Same wording as every other store path refusal, without the machine path.
+            raise StorageError(f'snapshot {self.snapshot_id}: {relative!r} is a link: refused') from error
+        except OSError as error:
+            raise StorageError(f'snapshot {self.snapshot_id}: retained file unavailable') from error
+        if len(data) != entry['size_bytes'] or hashlib.sha256(data).hexdigest() != entry['sha256']:
+            raise StorageError(f'snapshot {self.snapshot_id}: file changed during read')
+        return data
+
+    def retained_image_entry(self, image_id):
+        """Manifest row of a retained copy: a listed file named by the image id whose hash is that id."""
+        if (not isinstance(image_id, str) or re.fullmatch(r'sha256:[0-9a-f]{64}', image_id) is None):
+            raise StorageError('invalid retained image identity')
+        entry = self._entries.get(('file', 'images/' + image_id[7:]))
+        if entry is None or entry['sha256'] != image_id[7:]:
+            raise StorageError('image copy is not retained in this snapshot; run kb sync to republish')
+        return entry
+
+    def check_retained_images(self, rows):
+        """Layout marker plus one listed copy of the row's size per `images` row, without reading image bytes."""
+        if self.read_file(RETAINED_IMAGE_MARKER[0]) != RETAINED_IMAGE_MARKER[1]:
+            raise StorageError('retained image layout is invalid')
+        for row in rows:
+            if self.retained_image_entry(row['image_id'])['size_bytes'] != row['size_bytes']:
+                raise StorageError('retained image size differs from image table')
 
     def read_image(self, image_id):
         """Retained image bytes must be a listed file with that content hash, never a source-tree path."""
-        if not isinstance(image_id, str) or not image_id.startswith('sha256:'):
-            raise StorageError('invalid retained image identity')
-        matches = [name for (kind, name), entry in self._entries.items()
-                   if kind == 'file' and entry['sha256'] == image_id.removeprefix('sha256:')]
-        if not matches:
-            raise StorageError('image copy is not retained in this snapshot')
-        return self.read_file(sorted(matches)[0])
+        self.retained_image_entry(image_id)
+        return self.read_file('images/' + image_id[7:])
 
     def release(self):
         """End the pin, then remove the lease file under the store lock, as GC removes stale leases, so neither

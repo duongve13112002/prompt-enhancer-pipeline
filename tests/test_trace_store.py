@@ -37,7 +37,7 @@ def test_snapshot_image_is_manifest_copy_and_hold_precedes_release(tmp_path, pro
         builder = writer.begin_snapshot()
         for name, rows in dataset().items():
             builder.write_table(name, rows, dim=4 if name.endswith('embeddings') else None)
-        builder.add_file('references/image.bin', raw)  # Test-only retained copy; publication does not supply it.
+        builder.add_file('images/' + image_id.removeprefix('sha256:'), raw)  # Labelled synthetic retained copy.
         snapshot_id = builder.finish()
         writer.publish(snapshot_id)
     pin = store.pin()

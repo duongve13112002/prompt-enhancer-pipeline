@@ -153,3 +153,127 @@ def test_production_s0_s6_retrieval_off_without_kb(model_test_profile, tmp_path,
     assert envelope['status'] == ('success' if retrieval == 'warning' else 'degraded')
     assert envelope['output'] is not None
     assert ('VERIFIER_UNCALIBRATED' in envelope['warnings']) == (retrieval == 'warning')
+
+
+@pytest.mark.parametrize('corrupt', [False, True])
+def test_published_image_attaches_after_source_removed_and_corrupt_copy_refuses_before_s4(
+        k2_env, model_test_profile, tmp_path, project_root, monkeypatch, corrupt):
+    """Real kb sync publish, source deleted, edit request with attachments on through the production Pipeline.
+
+    Labelled doubles: the loopback model server, the S2 plan (fixed concept links) and the K3 card stability of a
+    two-image fixture. Publish, intake, S3 selection, the pre-S4 byte check, S6 read and the hold are production code.
+    """
+    import hashlib
+    import shutil
+    from assembly_fixtures import entity, ir, link, plan as fixed_plan
+    from k2_fixtures import folder
+    from kb_sync_fixtures import SyncServer, invoke
+    import prompt_enhancer.pipeline as pipeline_module
+
+    source = folder(k2_env, 'f', 'Name\ndescription', count=2)
+    originals = {path.name: path.read_bytes() for path in source.glob('*.png')}
+    invoke(k2_env, SyncServer())
+    shutil.rmtree(source)  # the original images exist only as snapshot copies from here on
+    with k2_env.store.pin() as pin:
+        concept = pin.read_rows('concepts')[0]['concept_id']
+        sid, directory = pin.snapshot_id, pin._directory
+        ids = {row['image_id'] for row in pin.read_rows('images')}
+        if corrupt:  # same-size damage: only a byte check can see it
+            for image_id in ids:
+                path = k2_env.store.path(f'{directory}/images/{image_id[7:]}')
+                data = path.read_bytes()
+                path.write_bytes(bytes([data[0] ^ 1]) + data[1:])
+    assert ids == {'sha256:' + hashlib.sha256(data).hexdigest() for data in originals.values()}
+
+    seen, answers = [], []
+    handler = type('Handler', (FullServerDouble,), {'seen': seen, 'answers': answers})
+    server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    config = assembly_config(model_test_profile, tmp_path)
+    config['runtime'].update(runtime())
+    config['runtime']['trace']['retention_s'] = 2
+    config['storage']['data_root'] = str(tmp_path / 'data')
+    config['storage']['kb_store'] = str(k2_env.store.root)
+    config['resolution']['random_seed'] = 7
+    config['edit'].update(attach_kb_reference_images=True, max_kb_reference_images=2)
+    config['assembly']['default_outfit'] = 'include'
+    config['validation']['verifier']['require_calibration'] = False
+    backend = config['vlm']['backends']['main']
+    backend.update(base_urls=[f'http://127.0.0.1:{server.server_port}'], probe={'max_requests': 12, 'timeout_s': 2})
+    backend['image']['max_decode_pixels'] = 20_000_000
+    config['vlm']['backends']['embedder']['base_urls'] = backend['base_urls']
+    activate(config, project_root, renderer={'accepts_reference_images': True, 'image_reference_syntax': 'none'})
+    handler.writer_system = resolve_profile(config, project_root=project_root).system_message.decode('utf-8')
+    handler.verifier_system = (project_root / 'prompts/verifier_v0.txt').read_bytes().decode('utf-8')
+
+    async def labelled_plan(s0, shortlist, owner, **kwargs):
+        return fixed_plan(ir([link(concept, 'subject_identity', 'e1')], [(concept, ['apparel.color'])],
+                              [entity('e1', 'Name')], task='edit'))
+
+    real_assembly = pipeline_module.build_assembly
+
+    def labelled_stable_assembly(s0, planned, **kwargs):
+        read_rows = s0.snapshot.read_rows
+
+        def stable_cards(name):
+            rows = read_rows(name)
+            if name == 'cards':
+                for row in rows:
+                    for facet in row['facets']:
+                        facet['stability'] = 'stable'
+            return rows
+
+        s0.snapshot.read_rows = stable_cards
+        return real_assembly(s0, planned, **kwargs)
+
+    monkeypatch.setattr(pipeline_module, 'plan', labelled_plan)
+    monkeypatch.setattr(pipeline_module, 'build_assembly', labelled_stable_assembly)
+    request = {'prompt': 'original intent', 'task': 'edit', 'source_image': base64.b64encode(png()).decode()}
+    holds = k2_env.store.root / 'holds' / sid
+    outcome = {}
+
+    def hold_files():
+        return sorted(holds.glob('*.parquet')) if holds.exists() else []
+
+    async def run():
+        async with Pipeline(config, project_root=project_root) as pipeline:
+            response = await pipeline.enhance(request)
+            outcome['holds_at_delivery'] = hold_files()
+            outcome['leases_at_delivery'] = list((k2_env.store.root / 'leases').glob('*/*.lease'))
+            await response.after_delivery()
+            outcome['holds_after_delivery'] = hold_files()
+            if not corrupt:  # the refusal variant keeps its trace row to read; the 2 s retention is not awaited
+                await asyncio.sleep(2.2)  # retention passes; closing expires the trace and releases its hold
+        outcome['holds_after_expiry'] = hold_files()
+        return response
+
+    try:
+        response = asyncio.run(run())
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+    envelope = response.envelope
+    writer_calls = [body for body in seen if body['messages'][0]['content'] == handler.writer_system]
+    assert outcome['leases_at_delivery'] == []  # the request lease is released in both variants
+    if corrupt:
+        rows = open_data_store(config, 'enhance once', project_root=project_root).read_rows('request_traces')
+        assert envelope['status'] == 'failed' and envelope['output'] is None and envelope['attachments'] == []
+        assert response.attachment_bytes == {}
+        assert not writer_calls  # refused after S3 and before S4: the writer was never called
+        assert rows[0]['body']['intake_error'] == {'code': 'KNOWLEDGE_FAILED',
+                                                   'message': 'image copies unavailable; run kb sync to republish'}
+        assert outcome['holds_at_delivery'] == []
+        return
+    assert writer_calls
+    attached = {item['image_id'] for item in envelope['attachments']}
+    assert attached and attached <= ids
+    assert all(item['role'] == 'knowledge_reference' for item in envelope['attachments'])
+    assert set(response.attachment_bytes) == attached
+    assert all(data in originals.values() and 'sha256:' + hashlib.sha256(data).hexdigest() == image_id
+               for image_id, data in response.attachment_bytes.items())  # the original bytes, hash-equal to the id
+    assert len(outcome['holds_at_delivery']) == 1  # taken before the request lease was released
+    assert len(outcome['holds_after_delivery']) == 1  # the hold protects the snapshot while the trace is retained
+    assert outcome['holds_after_expiry'] == []  # released when the trace expires, not before

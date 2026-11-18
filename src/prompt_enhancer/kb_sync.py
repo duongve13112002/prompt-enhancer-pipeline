@@ -3,9 +3,11 @@
 from pathlib import Path
 from collections import Counter
 from contextlib import AsyncExitStack
+import hashlib
 
 from .config import COMMAND_READS, _get, _schema, validate_sync_config
 from .k0 import guard_removals
+from .k0_scan import read_source_file
 from .k0_checkpoint import _REVISION, _VERSION, _bytes, _key, _matching
 from .k0_sync import _previous_for_plan, sync
 from .k1_embed import (MODEL_TOOL_MODULES, ConceptText, embed_concept_texts, embed_images, image_key, text_key,
@@ -18,12 +20,47 @@ from .k5_index import ServingIndex, _tools, build_index
 from .profile_prompt import load_prompt
 from .model_client import ModelClientRun, MODEL_CODES
 from .storage import StorageError, open_knowledge_store
+from .storage.store import RETAINED_IMAGE_MARKER
 from .storage.tables import SNAPSHOT_TABLES
 
 
 # Artifact-bound completion identity in the existing scan-summary metadata.
-LAYOUT = 'kb-sync-v1'
+LAYOUT = 'kb-sync-v2-retained-images'
 ROLES = ('info_assessor', 'folder_namer', 'observer', 'card_builder', 'alias_generator')
+
+
+def retain_images(builder, source, rows, limits):
+    """Copy each distinct scanned image once, checking the bytes actually stored; returns the retained ids."""
+    locations = {}
+    for membership in rows['folder_images']:
+        locations.setdefault(membership['image_id'], []).append(membership)
+    total = 0
+    seen = set()
+    for row in sorted(rows['images'], key=lambda item: item['image_id']):
+        image_id, size = row['image_id'], row['size_bytes']
+        if (not isinstance(image_id, str) or len(image_id) != 71 or not image_id.startswith('sha256:')
+                or any(c not in '0123456789abcdef' for c in image_id[7:]) or image_id in seen
+                or type(size) is not int or size < 0):
+            raise StorageError('retained images: invalid scan identity or size')
+        seen.add(image_id)
+        total += size
+        if size > limits['max_image_bytes'] or total > limits['max_total_bytes']:
+            raise StorageError('retained images: byte limit exceeded')
+        data = None
+        for member in sorted(locations.get(image_id, []), key=lambda m: (m['folder_id'], m['relative_path'])):
+            try:
+                candidate = read_source_file(source, member['folder_id'].split('/') + member['relative_path'].split('/'),
+                                             max_bytes=limits['max_image_bytes'])
+            except OSError:
+                continue
+            if len(candidate) == size and hashlib.sha256(candidate).hexdigest() == image_id[7:]:
+                data = candidate
+                break
+        if data is None:
+            raise StorageError('retained images: source missing, changed, or unsafe')
+        builder.add_file('images/' + image_id[7:], data)
+    builder.add_file(*RETAINED_IMAGE_MARKER)
+    return seen
 
 
 def require_success(stage, result):
@@ -50,10 +87,13 @@ def sync_identity(config, scanned, overrides, store):
     """Source identity excludes downstream metadata copied into subsequent K0 rows."""
     source = {
         'folders': [{key: row[key] for key in ('folder_id', 'info_file_hash', 'declared_names',
-                                              'declared_descriptions', 'error')} for row in scanned['rows']['folders']],
-        'images': [{key: row[key] for key in ('image_id', 'size_bytes')} for row in scanned['rows']['images']],
+                                              'declared_descriptions', 'error')}
+                    for row in sorted(scanned['rows']['folders'], key=lambda row: row['folder_id'])],
+        'images': [{key: row[key] for key in ('image_id', 'size_bytes')}
+                   for row in sorted(scanned['rows']['images'], key=lambda row: row['image_id'])],
         'memberships': [{key: row[key] for key in ('folder_id', 'relative_path', 'image_id')}
-                        for row in scanned['rows']['folder_images']],
+                        for row in sorted(scanned['rows']['folder_images'],
+                                          key=lambda row: (row['folder_id'], row['relative_path'], row['image_id']))],
         'overrides': overrides,
     }
     reads = {key: _get(config, key, 'configuration') for key in COMMAND_READS['kb sync']}
@@ -135,6 +175,7 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
             cleanup.push_async_callback(client.close)
         artifacts = {_checkpoint(writer, scanned, knowledge)}
         builder = writer.begin_snapshot(parent=current[0] if current else None)
+        retained = retain_images(builder, source.resolve(), scanned['rows'], config['sync']['retained_images'])
         reports = {}
 
         def accept(stage, result):
@@ -145,6 +186,8 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
 
         image = accept('k1_image', await embed_images(store, config, scanned['handoff']['k1'],
                        knowledge_root=source, transport=transport, writer=writer))
+        if {row['image_id'] for row in image['images']} != retained:  # the published table promises exactly the copies
+            raise StorageError('retained images: table differs from retained copies')
         rows = dict(scanned['rows'], images=image['images'], image_embeddings=image['image_embeddings'])
         named = accept('k2_naming', await name_folders(store, config, scanned['handoff']['k2'],
                        images=rows['images'], folder_images=rows['folder_images'], knowledge_root=source,

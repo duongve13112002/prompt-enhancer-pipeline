@@ -20,6 +20,7 @@ from prompt_enhancer import load_config, load_profile
 def model_test_profile():
     """Example profile with synthetic model settings for command-loader tests."""
     profile = yaml.safe_load((Path(__file__).resolve().parents[1] / 'configs/enhancer.example.yaml').read_bytes())
+    profile['sync']['retained_images'] = {'max_image_bytes': 1048576, 'max_total_bytes': 10485760}  # test-only
     backend = profile['vlm']['backends']['main']
     backend.update(engine={'name': 'llama_cpp', 'version': 'test-version'},
                    base_urls=['http://127.0.0.1:8080'], endpoints={'chat': 'chat', 'health': 'health'},

@@ -1779,18 +1779,12 @@ PIPELINE_READS = ('runtime.request_deadline_s', 'runtime.trace.retention_s', 'ru
 MONITOR_READS = ('runtime.monitoring.queue_limit', 'runtime.monitoring.workers', 'runtime.monitoring.drain_timeout_s')
 
 
-class AttachmentRetentionUnavailable(ConfigurationError):
-    """A fixed request diagnostic with no configuration values or paths."""
-
-
 def _require_attachment_support(config, path, sources):
     key = 'edit.attach_kb_reference_images'
     value = _get(config, key, path)
     _sentinel(value, path, key, sources)
     if type(value) is not bool:
-        raise ConfigurationError(f'{path}: {key}: expected false')
-    if value:
-        raise AttachmentRetentionUnavailable(f'{key}: requires snapshot image retention')
+        raise ConfigurationError(f'{path}: {key}: expected boolean')
 
 
 def _request_runtime_reads(config):
@@ -1982,8 +1976,6 @@ def effective_request_config(config, overrides, *, project_root):
                 parent = parent[part]
             parent[parts[-1]] = deepcopy(value)
         return _validate_loaded_config(effective, 'enhance once', root, 'effective configuration', {})
-    except AttachmentRetentionUnavailable:
-        raise
     except ConfigurationError as error:
         # The request boundary must not expose validator values, permission keys or filesystem paths.
         raise ConfigurationError(f'request configuration validation failed ({type(error).__name__})') from None
@@ -2070,6 +2062,12 @@ def _validate_loaded_config(config, command, root, path, sources):
             validate_assembly_reads(config, path, sources, root)
     if command == 'kb sync':
         _validate_store_reads(config, command, root, path, sources)
+        for key in ('sync.retained_images.max_image_bytes', 'sync.retained_images.max_total_bytes'):
+            value = _get(config, key, path)
+            _sentinel(value, path, key, sources)
+            _validate(value, _schema_at(config_schema, key), path, key, sources, _EXACT_INTEGERS)
+            if type(value) is not int or value <= 0 or value > sys.maxsize:
+                raise ConfigurationError(f'{path}: {key}: expected positive native integer')
         validate_index_reads(config, path, sources, root)
         validate_embedder_reads(config, path, sources, root)  # K1 is part of kb sync; the same check K1 runs
         validate_naming_reads(config, path, sources, root)
