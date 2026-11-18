@@ -24,6 +24,8 @@ def map_generation_fields(provider, role, capabilities=None, *, mapped=False, en
     mapping = dict(SAMPLING[provider])
     capabilities = capabilities or {}
     if provider == 'openai_compatible':
+        if mapped and engine in ('llama_cpp', 'vllm'):
+            mapping['repetition_penalty'] = 'repeat_penalty' if engine == 'llama_cpp' else 'repetition_penalty'
         # L and V agree on these spellings; send only after a verified probe.
         for name in ('top_k', 'min_p'):
             if capabilities.get('sampling.' + name) is True or (mapped and engine in ('llama_cpp', 'vllm')):

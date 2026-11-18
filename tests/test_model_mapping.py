@@ -1,6 +1,21 @@
 from prompt_enhancer.model_mapping import map_cloud_reasoning, map_generation_fields
 
 
+def test_repetition_penalty_local_mappings_and_unknown_backend():
+    role = {'max_tokens': 64, 'sampling': {'repetition_penalty': 1.37}}
+    for engine, field in [('llama_cpp', 'repeat_penalty'), ('vllm', 'repetition_penalty')]:
+        body, warnings = map_generation_fields('openai_compatible', role, mapped=True, engine=engine)
+        assert body[field] == 1.37 and warnings == []
+    body, warnings = map_generation_fields('openai_compatible', role, mapped=True, engine='unknown')
+    assert 'repetition_penalty' not in body and warnings == [('PARAM_UNSUPPORTED', 'sampling.repetition_penalty')]
+    body, warnings = map_generation_fields('openai_compatible', role, mapped=False, engine='llama_cpp')
+    assert 'repeat_penalty' not in body and warnings == [('PARAM_UNSUPPORTED', 'sampling.repetition_penalty')]
+    # Injected capability evidence without an engine mapping keeps the old warning and drop behaviour.
+    evidence = {'sampling.repetition_penalty': True}
+    body, warnings = map_generation_fields('openai_compatible', role, evidence, mapped=False, engine='llama_cpp')
+    assert body == {'max_tokens': 64} and warnings == [('PARAM_UNSUPPORTED', 'sampling.repetition_penalty')]
+
+
 def test_undocumented_fields_warn_and_none_is_omitted():
     role = {'max_tokens': 64, 'sampling': {'temperature': 0.4, 'stop': 'none', 'top_k': 8}}
     body, warnings = map_generation_fields('anthropic', role)

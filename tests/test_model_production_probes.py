@@ -195,7 +195,8 @@ def test_composition_without_injected_probes_and_optional_warnings(production_en
             value, record = await client.call(b'unchanged', '{"folder_name":"synthetic"}')
             assert value['usable'] is True and record['status'] == 'OK'
             assert record['probe_evidence']
-            assert ('PARAM_UNSUPPORTED', 'sampling.repetition_penalty') in record['warnings']
+            assert ('PARAM_UNSUPPORTED', 'sampling.repetition_penalty') not in record['warnings']
+            assert double.requests[-1]['repeat_penalty'] == env.config['vlm']['roles']['info_assessor']['sampling']['repetition_penalty']
             assert 'reasoning.mode' not in client.run.probes['main'].capabilities  # Acceptance is not semantic proof.
             assert double.requests[-1]['temperature'] == env.config['vlm']['roles']['info_assessor']['sampling']['temperature']
             assert double.requests[-1]['chat_template_kwargs'] == {'enable_thinking': False}

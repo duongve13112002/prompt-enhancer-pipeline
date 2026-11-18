@@ -62,7 +62,7 @@ def test_generate_without_retrieval_sends_text_only_and_builds_ir(env):
     assert result['state'] == 'ready' and result['error'] is None and result['warnings'] == []
     ir_validator(env.root).validate('intent_ir.v0', result['intent_ir'])
     assert len(client.calls) == 1 and client.calls[0]['images'] == []
-    assert client.calls[0]['system'] == (ROOT / 'prompts' / 'planner_v0.txt').read_bytes()
+    assert client.calls[0]['system'] == (ROOT / 'prompts' / 'planner_v1.txt').read_bytes()
     data = json.loads(client.calls[0]['text'])
     assert data['prompt'] == PROMPT and data['shortlist'] == [] and data['task'] == 'generate'
     assert data['creativity'] == env.config['creativity'] and 'edit_default_preservation' not in data
@@ -253,7 +253,7 @@ def test_knowledge_text_stays_in_the_data_message(env):
     data = json.loads(text)
     assert data['shortlist'][0]['description'] == hostile
     assert data['shortlist'][0]['variant_groups'][0]['variants'][0]['value'] == hostile
-    assert hostile.encode() not in (ROOT / 'prompts' / 'planner_v0.txt').read_bytes()
+    assert hostile.encode() not in (ROOT / 'prompts' / 'planner_v1.txt').read_bytes()
 
 
 def test_retrieval_off_from_intake_to_plan_touches_no_knowledge(model_test_profile, tmp_path, project_root,

@@ -11,6 +11,21 @@ from prompt_enhancer.storage.store import Checkpoints
 from k2_fixtures import FixedDraw, NamingServer, assessment, folder, invoke, naming, scan, source_tree
 
 
+def test_separator_override_changes_namer_request_and_checkpoint(k2_env):
+    env = k2_env
+    folder(env, 'f')
+    server = NamingServer()
+    assert not invoke(env, server)['report']['failed']
+    with env.store.writer() as writer:
+        first = {key for key, row in writer._state_rows().items() if row['stage'] == 'k2_naming'}
+    env.config['knowledge']['concept_separator'] = '::'
+    assert not invoke(env, server)['report']['failed']
+    with env.store.writer() as writer:
+        second = {key for key, row in writer._state_rows().items() if row['stage'] == 'k2_naming'}
+    assert json.loads(server.requests[-1]['messages'][1]['content'][0]['text'])['concept_separator'] == '::'
+    assert second - first
+
+
 def test_six_folder_kinds_end_to_end_with_transport_double(k2_env):
     env = k2_env
     folder(env, 'no-info', count=3)
@@ -31,6 +46,9 @@ def test_six_folder_kinds_end_to_end_with_transport_double(k2_env):
     result = invoke(env, server)
     assert source_tree(env.source) == before
     assert len(server.requests) == 6  # four assessments and two naming requests
+    image_requests = [request for request in server.requests if isinstance(request['messages'][1]['content'], list)]
+    assert all(json.loads(request['messages'][1]['content'][0]['text'])['concept_separator'] ==
+               env.config['knowledge']['concept_separator'] for request in image_requests)
     folders = {row['folder_id']: row for row in result['rows']['folders']}
     assert folders['no-info']['name_source'] == 'folder_name'
     assert folders['unclear']['name_source'] == 'model' and folders['unclear']['declared_names'] == ['Old']

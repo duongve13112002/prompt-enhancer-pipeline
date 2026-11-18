@@ -27,7 +27,8 @@ def test_info_folder_and_generated_payloads_stay_json_data(k2_env):
         role = 'folder_namer' if isinstance(content, list) else 'info_assessor'
         data = json.loads(content[0]['text'] if isinstance(content, list) else content)
         assert data['folder_name'] == hint and data['info_file_text'] == f'Old\n{payload}'
-        assert body['messages'][0]['content'].encode() == (env.root / 'prompts' / f'{role}_v0.txt').read_bytes()
+        prompt_id = env.config['vlm']['roles'][role]['prompt_id']
+        assert body['messages'][0]['content'].encode() == (env.root / 'prompts' / f'{prompt_id}.txt').read_bytes()
         assert payload not in body['messages'][0]['content']
     assert not result['report']['failed']
     assert result['rows']['concepts'][0]['display_name'] == generated_name

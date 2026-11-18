@@ -144,13 +144,15 @@ OFFLINE_ROLES = ('observer', 'folder_namer', 'info_assessor', 'card_builder', 'a
 #   git show 637611f:src/prompt_enhancer/model_client.py > <scratch>/old_model_client.py
 # and the profile built by `example_profile` below. The full K2/K3/K4 checkpoint keys also hash tool source revisions
 # and change when a hashed module changes (R-017); this pins only the model-settings component of the key.
+# EKS-5 changed the observer's reply schema id to `observer_reply.v1` on purpose (old observation checkpoints must not be
+# reused), so the two observer digests are recomputed from the EKS-5 profiles; the other roles keep the base digests.
 BASE_DIGESTS = {
-    ('enhancer.example.yaml', 'observer'): '3707a33ad71ea9daaa2f084001f214b20c5ab65c009af54ccbaf2118c650e30a',
+    ('enhancer.example.yaml', 'observer'): 'a36e55ed7904968ee2b2922ce53ce7a5fee96506754fb52f3ef236a04841a32f',
     ('enhancer.example.yaml', 'folder_namer'): '9baaea7e8e14dd3e36efda80b4b529edabbe7e16b9f6c1f4053b3801c4602009',
     ('enhancer.example.yaml', 'info_assessor'): 'afdcd0ee4ee0f93719bb2481087fdd8684063a539800c7025bbbe00e51241c09',
     ('enhancer.example.yaml', 'card_builder'): 'c897839be6e522c78d7cd014c14c8a509486a75a4b9dc2b61620eb46d371f81b',
     ('enhancer.example.yaml', 'alias_generator'): '814ce074d4162e072565225af6714c7a1f29917d2f946f4abf7aae8f37ec8778',
-    ('enhancer.dev.example.yaml', 'observer'): 'bd5e408066c800c58694024e02845ab0cfad573e7bb0c0a6a931e947011d02af',
+    ('enhancer.dev.example.yaml', 'observer'): '34722491f3ef6bcbb0671d34c4fc7b3b395e697cce1343befd5cbc9c517c0388',
     ('enhancer.dev.example.yaml', 'folder_namer'): 'f89eea79fecc66be4727f7ff0dc60b979c7e8db7858a07e9b1000c95c4d75843',
     ('enhancer.dev.example.yaml', 'info_assessor'): 'e6921e00e6dd05ca7d8bbf8ef67e55c9002dc7c43593e8086475157d315a46f1',
     ('enhancer.dev.example.yaml', 'card_builder'): '939b80fb51af261b39c3a9331cdb7bedd081939fe6b885baaa4aea63954ed847',

@@ -1,0 +1,78 @@
+[
+    {
+        "view":  "full",
+        "quality":  0.95,
+        "observations":  [
+                             {
+                                 "concept_position":  0,
+                                 "facet_group":  "text_in_image",
+                                 "facet":  "text_in_image",
+                                 "value":  "Nón quai thao",
+                                 "visibility":  "clear",
+                                 "region":  null
+                             },
+                             {
+                                 "concept_position":  1,
+                                 "facet_group":  "text_in_image",
+                                 "facet":  "text_in_image",
+                                 "value":  "Áo giao lĩnh",
+                                 "visibility":  "clear",
+                                 "region":  null
+                             }
+                         ]
+    },
+    {
+        "view":  "full",
+        "quality":  1,
+        "observations":  [
+                             {
+                                 "concept_position":  0,
+                                 "facet_group":  "text_in_image",
+                                 "facet":  "text",
+                                 "value":  "Nón quai thao",
+                                 "visibility":  "not_shown",
+                                 "region":  null
+                             },
+                             {
+                                 "concept_position":  1,
+                                 "facet_group":  "text_in_image",
+                                 "facet":  "text",
+                                 "value":  "Áo giao lĩnh",
+                                 "visibility":  "not_shown",
+                                 "region":  null
+                             }
+                         ]
+    },
+    {
+        "view":  "full",
+        "quality":  0.95,
+        "observations":  [
+                             {
+                                 "concept_position":  0,
+                                 "facet_group":  "apparel",
+                                 "facet":  "identity",
+                                 "value":  "Áo giao lĩnh",
+                                 "visibility":  "clear",
+                                 "region":  {
+                                                "x":  0.2,
+                                                "y":  0.45,
+                                                "width":  0.6,
+                                                "height":  0.55
+                                            }
+                             },
+                             {
+                                 "concept_position":  1,
+                                 "facet_group":  "apparel",
+                                 "facet":  "identity",
+                                 "value":  "Nón quai thao",
+                                 "visibility":  "clear",
+                                 "region":  {
+                                                "x":  0.25,
+                                                "y":  0.25,
+                                                "width":  0.5,
+                                                "height":  0.2
+                                            }
+                             }
+                         ]
+    }
+]

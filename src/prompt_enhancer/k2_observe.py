@@ -26,7 +26,7 @@ STAGE = 'k2_observation'
 LAYOUT = 1
 GROUPING = 'cosine-components-v1'
 STORED_SCHEMA = 'image_observation.v0'
-REPLY_SCHEMA = 'observer_reply.v0'
+REPLY_SCHEMA = 'observer_reply.v1'
 
 
 def group_images(images, vectors, distance, *, revision, dim):
@@ -102,7 +102,7 @@ def parse_observation(value, *, image_id, concepts, context_key, model_revision,
     try:
         canonical_json(value).encode('utf-8')  # refuse NaN/Infinity and unencodable strings before any commit
     except (StorageError, UnicodeError) as error:
-        raise ValueError('SCHEMA_INVALID: observer_reply.v0: invalid JSON') from None
+        raise ValueError('SCHEMA_INVALID: observer_reply.v1: invalid JSON') from None
     check_artifact_key(context_key)
     try:
         finite_quality = math.isfinite(value['quality'])
@@ -116,14 +116,16 @@ def parse_observation(value, *, image_id, concepts, context_key, model_revision,
         if type(position) is not int or not 0 <= position < len(concepts):
             raise ValueError('concept_position is outside the supplied positions')
         identity = concepts[position]['concept_id']
-        key = (identity, item['facet'])
+        facet = item['facet']
+        if not facet.strip() or '.' in facet:
+            raise ValueError('SCHEMA_INVALID: facet must be a nonblank name without dots')
+        qualified = item['facet_group'] + '.' + facet
+        key = (identity, qualified)
         if key in seen:
             raise ValueError('duplicate facet for one concept')
         seen.add(key)
-        if not item['facet'].startswith(item['facet_group'] + '.') or item['facet'] == item['facet_group'] + '.':
-            raise ValueError('facet must be <facet_group>.<facet>')
         observations.append({**{k: deepcopy(v) for k, v in item.items() if k != 'concept_position'},
-                             'concept_id': identity})
+                             'concept_id': identity, 'facet': qualified})
     document = {'context_key': context_key, 'image_id': image_id, 'view': value['view'],
                 'quality': value['quality'], 'origin': {'origin': 'generated', 'model_revision': model_revision,
                 'prompt_id': prompt_id, 'facet_schema_version': facet_schema_version}, 'observations': observations}

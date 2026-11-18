@@ -16,10 +16,12 @@ from prompt_enhancer.k2_observe import observe_images
 
 
 PREFIX = 'vlm.roles.observer.'
-OVERRIDES = {**ROLE_OVERRIDES, **IMAGE_OVERRIDES}
+OVERRIDES = {key: value for key, value in {**ROLE_OVERRIDES, **IMAGE_OVERRIDES}.items()
+             if key not in ('prompt_id', 'output.schema_id')}
 SINGLETONS = {'observe.one_image_per_call': True, 'observe.lazy_observation_of_rest': True,
               'observe.region_output': 'optional', 'observe.facet_schema_version': 'image_observation.v0',
               PREFIX + 'mode': 'generate', PREFIX + 'image.source': 'knowledge_reference',
+              PREFIX + 'prompt_id': 'observer_v1', PREFIX + 'output.schema_id': 'observer_reply.v1',
               PREFIX + 'image.transport': 'data_uri', PREFIX + 'output.transport': 'response_format',
               PREFIX + 'output.validate_response': True}
 READ_KEYS = [*SINGLETONS, 'observe.representatives_per_folder', 'observe.near_duplicate_cosine_distance',
@@ -30,6 +32,29 @@ def refused_stage(env, config):
     return asyncio.run(observe_images(env.store, config, {'folders': [], 'concepts': [], 'folder_concepts': []},
         images=[], folder_images=[], image_embeddings=[], embedder_revision='labelled-k1', dim=2,
         knowledge_root=env.source))
+
+
+@pytest.mark.parametrize(('field', 'old', 'expected'), [
+    ('prompt_id', 'observer_v0', 'observer_v1'),
+    ('output.schema_id', 'observer_reply.v0', 'observer_reply.v1'),
+])
+def test_observer_old_contract_refused_at_start(k2_env, field, old, expected):
+    config = deepcopy(k2_env.config)
+    set_key(config, PREFIX + field, old)
+    with pytest.raises(ConfigurationError, match=expected.replace('.', r'\.')):
+        refused_stage(k2_env, config)
+    profile = k2_env.root / 'old-observer.yaml'
+    profile.write_text(yaml.safe_dump(config), encoding='utf-8')
+    with pytest.raises(ConfigurationError, match=expected.replace('.', r'\.')):
+        load_config(profile, 'kb sync', project_root=k2_env.root)
+
+
+@pytest.mark.parametrize('value', [0, -1, 'bad', 'design_required', None])
+def test_repetition_penalty_invalid_values_refused(k2_env, value):
+    config = deepcopy(k2_env.config)
+    config['vlm']['roles']['observer']['sampling']['repetition_penalty'] = value
+    with pytest.raises(ConfigurationError):
+        refused_stage(k2_env, config)
 
 
 @pytest.mark.parametrize(('field', 'value'), OVERRIDES.items())
@@ -43,9 +68,9 @@ def test_observer_role_leaf_override(k2_env, field, value):
         env.config['vlm']['backends']['alternate'] = deepcopy(env.config['vlm']['backends']['main'])
         env.config['vlm']['backends']['alternate']['model']['id'] = 'alternate-model'
     if field == 'prompt_id':
-        (env.root / 'prompts/alternate_prompt.txt').write_bytes((env.root / 'prompts/observer_v0.txt').read_bytes() + b'\nTest revision.\n')
+        (env.root / 'prompts/alternate_prompt.txt').write_bytes((env.root / 'prompts/observer_v1.txt').read_bytes() + b'\nTest revision.\n')
     if field == 'output.schema_id':
-        schema = json.loads((env.root / 'contracts/schemas/observer_reply.v0.schema.json').read_bytes())
+        schema = json.loads((env.root / 'contracts/schemas/observer_reply.v1.schema.json').read_bytes())
         schema['$id'] = value
         (env.root / f'contracts/schemas/{value}.schema.json').write_text(json.dumps(schema), encoding='utf-8')
     set_key(env.config, PREFIX + field, value)

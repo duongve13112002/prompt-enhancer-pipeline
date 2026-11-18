@@ -127,12 +127,12 @@ def test_observe_cache_context_matrix(k2_env, change):
     elif change == 'model':
         env.config['vlm']['backends']['main']['model']['revision'] = 'test-revision-2'
     elif change == 'prompt':
-        prompt = env.root / 'prompts/observer_v0.txt'
+        prompt = env.root / 'prompts/observer_v1.txt'
         prompt.write_bytes(prompt.read_bytes() + b'\nTest-only revision.\n')
     elif change == 'sampling':
         env.config['vlm']['roles']['observer']['sampling']['temperature'] = 0.65
     else:
-        schema = env.root / 'contracts/schemas/observer_reply.v0.schema.json'
+        schema = env.root / 'contracts/schemas/observer_reply.v1.schema.json'
         document = json.loads(schema.read_text(encoding='utf-8'))
         document['$comment'] = 'Test-only changed schema revision'
         schema.write_text(json.dumps(document), encoding='utf-8')
@@ -164,7 +164,7 @@ def test_planted_image_text_and_names_stay_data(k2_env):
     inputs['handoff']['concepts'][0].update(concept_id=concept_id(planted), normalised_name=planted.casefold(), display_name=planted)
     inputs['handoff']['folder_concepts'][0].update(concept_id=concept_id(planted), name_as_written=planted)
     server = ObserverServer(observation(text=planted, facet='text_in_image.verbatim'))
-    before = (env.root / 'prompts/observer_v0.txt').read_bytes()
+    before = (env.root / 'prompts/observer_v1.txt').read_bytes()
     result = invoke_observer(env, server, inputs=inputs)
     body = server.requests[0]
     assert body['messages'][0]['content'].encode() == before
@@ -256,7 +256,7 @@ def test_representative_choice_property(labels, quota):
     assert len({groups[identity] for identity in selected}) == min(quota, len(set(labels)))
 
 
-@given(st.text(min_size=1).filter(lambda s: all(not 0xD800 <= ord(c) <= 0xDFFF for c in s)),
+@given(st.text(min_size=1).filter(lambda s: s.strip() and '.' not in s and all(not 0xD800 <= ord(c) <= 0xDFFF for c in s)),
        st.text().filter(lambda s: all(not 0xD800 <= ord(c) <= 0xDFFF for c in s)))
 @settings(max_examples=35, deadline=None)
 def test_observation_parser_preserves_arbitrary_facet_and_value(project_root, facet, value):

@@ -266,7 +266,7 @@ vlm:                                     # R-018: rules name no model; models ar
     planner:
       backend: main
       mode: generate
-      prompt_id: planner_v0
+      prompt_id: planner_v1
       image: {source: edit_source_only, max_side: from_vision, format: from_vision, quality: design_required, transport: data_uri}   # the planner sees the source image for edit (S2)
       max_tokens: design_required
       sampling: &sampling_default
@@ -316,12 +316,12 @@ vlm:                                     # R-018: rules name no model; models ar
     observer:                            # K2, offline: thinking may be on; decided by the implementing task
       backend: main
       mode: generate
-      prompt_id: observer_v0
+      prompt_id: observer_v1
       image: {source: design_required, max_side: from_vision, format: jpeg, quality: design_required, transport: data_uri}
       max_tokens: design_required
       sampling: *sampling_default
       reasoning: {mode: design_required, effort: design_required, budget_tokens: design_required, template_kwargs_key: enable_thinking}
-      output: {format: json_schema, schema_id: observer_reply.v0, strict: true, transport: response_format, validate_response: true}
+      output: {format: json_schema, schema_id: observer_reply.v1, strict: true, transport: response_format, validate_response: true}
     info_assessor:                       # K2 first step, offline, text only: is this info file usable? (decision 40)
       backend: main
       mode: generate
@@ -334,7 +334,7 @@ vlm:                                     # R-018: rules name no model; models ar
     folder_namer:                        # K2 first step, offline: names a folder with no usable info file from images drawn at random (decisions 30, 39)
       backend: main
       mode: generate
-      prompt_id: folder_namer_v0
+      prompt_id: folder_namer_v1
       image: {source: design_required, max_side: from_vision, format: jpeg, quality: design_required, transport: data_uri}
       max_tokens: design_required
       sampling: *sampling_default

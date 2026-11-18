@@ -190,8 +190,8 @@ def test_ordered_pair_uses_role_builder_and_extra_body(production_env):
             ordinary, ordered = record['probe_evidence'][0], record['probe_evidence'][-1]
             assert ordered['capability'] == 'multiple_images'
             assert ordered['context_hash'] == ordinary['context_hash'] == run.client._proof_key('main', role)[1]
-            assert ordered['warnings'] == ordinary['warnings'] == [
-                ('PARAM_UNSUPPORTED', 'sampling.repetition_penalty'), ('PARAM_UNSUPPORTED', 'reasoning.budget_tokens')]
+            assert ordered['warnings'] == ordinary['warnings'] == [('PARAM_UNSUPPORTED', 'reasoning.budget_tokens')]
+            assert all(body['repeat_penalty'] == 1.2 for body in double.probe_requests[-2:])
         finally:
             await run.close()
 
@@ -623,8 +623,10 @@ def test_loaded_nondefault_control_override_in_probe(production_env, path, value
                     key: val for key, val in expected.items() if key not in ('messages', 'response_format')}
                 # Observe the configured override directly as well as checking the shared builder.
                 leaf = path.rsplit('.', 1)[-1]
-                if leaf in ('budget_tokens', 'repetition_penalty'):
+                if leaf == 'budget_tokens':
                     assert ('PARAM_UNSUPPORTED', path.removeprefix('role.')) in warnings
+                elif leaf == 'repetition_penalty':
+                    assert body['repeat_penalty'] == value
                 elif leaf == 'mode':
                     switch = loaded['vlm']['roles']['info_assessor']['reasoning']['template_kwargs_key']
                     assert body['chat_template_kwargs'][switch] is (value == 'on')

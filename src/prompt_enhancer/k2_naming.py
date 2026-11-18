@@ -647,6 +647,7 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
                     turns.release(index)
                     stage = 'k2_naming'
                     context['sampled_image_ids'] = draw['sampled_image_ids']
+                    context['concept_separator'] = knowledge['concept_separator']
                     key = _naming_key(stage, context, revisions['folder_namer'])
                     checkpoints = writer.checkpoints(stage)
                     # A completed result needs no image read. New calls verify the exact persisted draw, never replace it.

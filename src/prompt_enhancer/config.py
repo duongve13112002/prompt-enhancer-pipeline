@@ -1282,6 +1282,10 @@ def validate_observation_reads(config, path='configuration', sources=None, proje
     default = checked('vlm.default_backend')
     key = 'vlm.roles.observer'
     role = checked(key, _schema(root, 'vlm_role.v0'))
+    if role['prompt_id'] != 'observer_v1':
+        refuse(key + '.prompt_id', 'expected observer_v1')
+    if role['output']['schema_id'] != 'observer_reply.v1':
+        refuse(key + '.output.schema_id', 'expected observer_reply.v1')
     image, output = role['image'], role['output']
     if not isinstance(image, dict) or image['source'] != 'knowledge_reference':
         refuse(key + '.image.source', 'observer requires knowledge_reference images')

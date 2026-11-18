@@ -163,7 +163,7 @@ def test_sync_refuses_k4_failure_with_partial_aliases(partial):
         require_success('k4', result)
 
 
-@pytest.mark.parametrize('schema', ['info_assessment.v0', 'folder_naming.v0', 'observer_reply.v0',
+@pytest.mark.parametrize('schema', ['info_assessment.v0', 'folder_naming.v0', 'observer_reply.v1',
                                    'card_builder_reply.v0', 'alias_generator_reply.v0'])
 def test_model_boundary_errors_are_structural(project_root, schema):
     from k2_fixtures import assessment, naming
@@ -171,7 +171,7 @@ def test_model_boundary_errors_are_structural(project_root, schema):
     from k3_fixtures import reply_for
     marker = 'MODEL_TEXT_MUST_NEVER_ENTER_DIAGNOSTICS'
     replies = {'info_assessment.v0': assessment(), 'folder_naming.v0': naming(),
-               'observer_reply.v0': observation(), 'alias_generator_reply.v0': {'aliases': []},
+               'observer_reply.v1': observation(), 'alias_generator_reply.v0': {'aliases': []},
                'card_builder_reply.v0': reply_for({'facets': [], 'observations': [], 'curated_statements': []})}
     value = replies[schema]
     _validate_reply(project_root, schema, value)

@@ -63,7 +63,7 @@ def sync_identity(config, scanned, overrides, store):
     root = store.catalog.root
     prompts = {role: load_prompt(root, config['vlm']['roles'][role]['prompt_id']).hex() for role in ROLES}
     schemas = {name: _schema(root, name) for name in (
-        'info_assessment.v0', 'folder_naming.v0', 'observer_reply.v0', 'image_observation.v0',
+        'info_assessment.v0', 'folder_naming.v0', 'observer_reply.v1', 'image_observation.v0',
         'card_builder_reply.v0', 'concept_card.v0', 'alias_generator_reply.v0', 'alias_set.v0', 'kb_overrides.v0')}
     schemas.update({config['vlm']['roles'][role]['output']['schema_id']:
                     _schema(root, config['vlm']['roles'][role]['output']['schema_id']) for role in ROLES})

@@ -231,7 +231,7 @@ def test_referenced_old_format_key_is_never_read_or_rewritten(k2_env, monkeypatc
     model = _digest({'role': role, 'backends': {name: backends[name]
                      for name in {role['backend'], config['vlm']['default_backend']}}})
     reply_schema = {'k2_assessment': 'info_assessment.v0', 'k2_naming': 'folder_naming.v0',
-                    'k2_observation': 'observer_reply.v0', 'k3_grouping': 'card_builder_reply.v0'}[stage]
+                    'k2_observation': 'observer_reply.v1', 'k3_grouping': 'card_builder_reply.v0'}[stage]
     schema = {'layout': 1, 'configured': _schema(root, role['output']['schema_id'])}
     prompt_revision = {'id': role['prompt_id']}
     if stage in ('k2_assessment', 'k2_naming'):

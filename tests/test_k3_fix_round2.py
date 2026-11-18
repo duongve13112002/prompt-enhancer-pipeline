@@ -76,14 +76,16 @@ def test_separator_refusal_keeps_raw_reply_and_revert_reuses_without_call(k2_env
     invoke(k2_env, server, result=raw, rng=Random(1))
     before = state(k2_env, 'k2_naming')
     assert len(before) == 1
+    # EKS-5: the separator is request data and part of the naming key, so a new separator asks the namer once.
     k2_env.config['knowledge']['concept_separator'] = '+'
     refused = invoke(k2_env, server, result=raw, rng=Random(1))
     assert refused['report']['failed']['f'] == 'SCHEMA_INVALID'
-    assert len(server.requests) == 1
-    assert state(k2_env, 'k2_naming') == before
+    assert len(server.requests) == 2
+    after = state(k2_env, 'k2_naming')
+    assert {key: after[key] for key in before} == before
     k2_env.config['knowledge']['concept_separator'] = '|'
     assert not invoke(k2_env, server, result=raw, rng=Random(1))['report']['failed']
-    assert len(server.requests) == 1
+    assert len(server.requests) == 2
 
 
 @pytest.mark.parametrize('invalid', [None, '', 'design_required', 7])

@@ -13,7 +13,7 @@ from prompt_enhancer.model_client import BoundModelClient
 
 def observation(positions=(0,), *, text='visible attribute', facet='apparel.color'):
     return {'view': 'front', 'quality': 1.75, 'observations': [
-        {'concept_position': index, 'facet_group': facet.split('.')[0], 'facet': facet, 'value': text,
+        {'concept_position': index, 'facet_group': facet.split('.')[0], 'facet': facet.split('.', 1)[1], 'value': text,
          'visibility': 'clear', 'region': None} for index in positions]}
 
 
