@@ -462,12 +462,15 @@ def test_f1_a_file_written_into_the_empty_tree_after_the_last_check_survives(
     late = wt / "runs" / "sub" / "late-evidence.json"
 
     def racing_rmdir(path, *args, **kwargs):  # type: ignore[no-untyped-def]
-        if not late.exists() and os.path.normcase(str(path)).endswith(os.path.normcase(os.path.join("runs", "sub"))):
+        # POSIX passes the bare name with `dir_fd`, Windows a full path: match the final name, the only `sub` here.
+        if not late.exists() and os.path.basename(os.path.normpath(os.fsdecode(path))) == "sub":
             late.write_text("{}", encoding="utf-8")
         return real_rmdir(path, *args, **kwargs)
 
     monkeypatch.setattr(pt.os, "rmdir", racing_rmdir)
-    assert pt.archive_remove([str(wt)]) == 1
+    code = pt.archive_remove([str(wt)])
+    assert late.exists(), "the racing rmdir hook never fired"
+    assert code == 1
     assert late.read_text(encoding="utf-8") == "{}"
     out = capsys.readouterr().out  # the strict gate judges what the failed prune left, before any archive or removal
     assert "refused, protected tree" in out and "archived" not in out
