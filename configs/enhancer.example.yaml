@@ -407,6 +407,7 @@ serving:                                 # docs/serving.md, R-019, decision 21
   queue_limit: design_required
   total_deadline_s: fit_from_bench       # measured on the deployment, never claimed from estimates
   prefix_cache: true                     # the admin's system prompt stays first in the message so a backend can reuse its cache
+  http: {max_request_bytes: deploy_required}   # largest request: a `enhance once` request file and (T-016 P3) one HTTP body, in bytes
 
 evaluation:                              # G-evaluation, R-023, decision 22
   scenario_kinds: [single_concept, multi_concept, family_mention, variant_unspecified, no_match, negation, literal_text, edit_local, edit_global, edit_recompose, rag_off]

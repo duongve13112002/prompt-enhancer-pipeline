@@ -36,3 +36,4 @@ serving:
   max_concurrency: fit_from_bench
   queue_limit: design_required
   total_deadline_s: fit_from_bench
+  http: {max_request_bytes: deploy_required}   # set per deployment: the largest source image as base64 plus the prompt

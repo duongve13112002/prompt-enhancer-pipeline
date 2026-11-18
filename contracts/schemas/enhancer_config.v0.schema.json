@@ -5292,13 +5292,57 @@
                   ]
                 }
               ]
+            },
+            "http": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "max_request_bytes": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        {
+                          "enum": [
+                            "fit_from_gt",
+                            "fit_from_bench",
+                            "fit_from_pilot",
+                            "pin_required",
+                            "deploy_required",
+                            "design_required",
+                            "ask_user"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "max_request_bytes"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "enum": [
+                    "fit_from_gt",
+                    "fit_from_bench",
+                    "fit_from_pilot",
+                    "pin_required",
+                    "deploy_required",
+                    "design_required",
+                    "ask_user"
+                  ]
+                }
+              ]
             }
           },
           "required": [
             "max_concurrency",
             "queue_limit",
             "total_deadline_s",
-            "prefix_cache"
+            "prefix_cache",
+            "http"
           ],
           "additionalProperties": false
         },

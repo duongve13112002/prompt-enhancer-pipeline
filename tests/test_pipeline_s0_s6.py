@@ -34,6 +34,15 @@ class FullServerDouble(ModelServerDouble):
         except ValueError:
             return False
 
+    def scripted_answer(self, body):
+        """A scripted reply to a role request that is none of planner, writer, verifier; None means a capability probe."""
+        return None
+
+    @staticmethod
+    def planner_answer(data):
+        """The scripted planner reply for the planner input `data`; subclasses script knowledge links."""
+        return reply(edit_kind='local_edit' if data['task'] == 'edit' else None)
+
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         self.seen.append(body)
@@ -48,8 +57,7 @@ class FullServerDouble(ModelServerDouble):
         parts = body['messages'][-1]['content']
         text = parts if isinstance(parts, str) else next((item['text'] for item in parts if item['type'] == 'text'), '')
         if self.is_planner(body):
-            data = json.loads(text)
-            answer = reply(edit_kind='local_edit' if data['task'] == 'edit' else None)
+            answer = self.planner_answer(json.loads(text))
         elif body['messages'][0]['content'] == self.writer_system:
             answer = 'kept original intent'
         elif body['messages'][0]['content'] == self.verifier_system:
@@ -57,7 +65,9 @@ class FullServerDouble(ModelServerDouble):
                                    'evidence_span': 'kept original intent', 'note': ''}
                                   for item in json.loads(text)['obligations']]}
         else:
-            answer = self.probe(body)
+            answer = self.scripted_answer(body)
+            if answer is None:
+                answer = self.probe(body)
         content = answer if isinstance(answer, str) else json.dumps(answer)
         self.answers.append({'planner': self.is_planner(body), 'text': text, 'answer': answer})
         raw = json.dumps({'choices': [{'finish_reason': 'stop', 'message': {'content': content}}]}).encode()

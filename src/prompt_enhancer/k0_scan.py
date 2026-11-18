@@ -31,6 +31,10 @@ class CacheError(RuntimeError):
     """Checkpoint I/O failed; this is not an unreadable source file."""
 
 
+class SourceTooLarge(ScanError):
+    """A file read through `read_source_file` is larger than the byte limit the caller gave."""
+
+
 class MissingFileID(ScanError):
     """The filesystem cannot provide the identities needed for safe traversal."""
 
@@ -207,7 +211,7 @@ def read_source_file(root, parts, *, max_bytes=None):
         with _opened(path, parent, parts[-1], False) as fd:
             initial = os.fstat(fd)
             if max_bytes is not None and initial.st_size > max_bytes:
-                raise ScanError(f'{path}: source exceeds byte limit')
+                raise SourceTooLarge(f'{path}: source exceeds byte limit')
             chunks = []
             size = 0
             while True:
@@ -216,7 +220,7 @@ def read_source_file(root, parts, *, max_bytes=None):
                     break
                 size += len(block)
                 if max_bytes is not None and size > max_bytes:
-                    raise ScanError(f'{path}: source exceeds byte limit')
+                    raise SourceTooLarge(f'{path}: source exceeds byte limit')
                 chunks.append(block)
             final = os.fstat(fd)
             if (initial.st_size, initial.st_mtime_ns) != (final.st_size, final.st_mtime_ns):

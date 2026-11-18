@@ -23,6 +23,13 @@ sync:
 knowledge:
   root: database                         # the dev machine's knowledge base (decision 61): Git-ignored, read only
 
+serving:
+  # dev-only smoke bound, not measured, and a proxy: `request.v0` has no length limit on `source_image` or `prompt`, so no
+  # request bound exists to derive it from. It is 22 MiB = the base64 form (22369624 B) of the 16 MiB retained-image bound
+  # `sync.retained_images.max_image_bytes` above, plus about 0.66 MiB of slack for the prompt and overrides. A deployment
+  # sets its own value.
+  http: {max_request_bytes: 23068672}
+
 runtime:
   request_deadline_s: fit_from_bench
   trace: {retention_s: deploy_required, queue_limit: deploy_required, workers: deploy_required, drain_timeout_s: deploy_required}

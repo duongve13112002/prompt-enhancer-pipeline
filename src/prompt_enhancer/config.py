@@ -1828,6 +1828,28 @@ def validate_pipeline_reads(config, path='configuration', sources=None, project_
     return result
 
 
+REQUEST_LIMIT_KEY = 'serving.http.max_request_bytes'  # protocol-bound name of the request byte cap (T-016, PM answer Q2)
+
+
+def validate_request_limit(config, path='configuration', sources=None, project_root=None):
+    """The byte cap of one request (`enhance once` request file, T-016 P3 HTTP body): a validated profile value.
+
+    Read by the command line, not by the per-request pipeline reads, so a library caller or a golden check that
+    never receives a request file needs no value here."""
+    sources = {} if sources is None else sources
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    schema, block_key = _configuration_schema(root, config), REQUEST_LIMIT_KEY.rpartition('.')[0]
+    block = _get(config, block_key, path)
+    _sentinel(block, path, block_key, sources)  # also refuses a sentinel at any depth, naming the leaf
+    _validate(block, _schema_at(schema, block_key), path, block_key, sources, _EXACT_INTEGERS)  # shape, unknown keys
+    value = _get(config, REQUEST_LIMIT_KEY, path)
+    _validate(value, _schema_at(schema, REQUEST_LIMIT_KEY), path, REQUEST_LIMIT_KEY, sources, _EXACT_INTEGERS)
+    if type(value) is not int or value <= 0 or value > sys.maxsize:
+        raise ConfigurationError(f'{_source(sources, REQUEST_LIMIT_KEY, path)}: {REQUEST_LIMIT_KEY}: '
+                                 'expected a positive native integer')
+    return value
+
+
 def _require_validation_version(config, path):
     """Refuse legacy requests before any version-dependent field or schema read."""
     if not isinstance(config, dict) or type(config.get('schema_version')) is not int or config['schema_version'] != 2:
