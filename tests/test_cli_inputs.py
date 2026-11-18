@@ -50,7 +50,12 @@ def make_link(link, target):
 
 def drop_link(link):
     if os.path.lexists(link):
-        os.rmdir(link)  # removes the link itself, never its target
+        # Removes the link itself, never its target: a junction is removed with rmdir, a POSIX symlink with unlink
+        # (rmdir on a symlink is ENOTDIR there: CI window 25 on Ubuntu).
+        if os.name == 'nt':
+            os.rmdir(link)
+        else:
+            os.unlink(link)
 
 
 def run_main(capsys, argv, project_root):
