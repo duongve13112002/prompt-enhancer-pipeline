@@ -49,6 +49,27 @@ def bind_double(run, env, double=None, handler=None):
     return double
 
 
+def synthetic_provider_backend(env, provider, *, budget=5, policy='stop'):
+    """Resolve and validate a whole example backend; never load a credential or call it."""
+    names = {'openai_compatible': 'main', 'anthropic': 'cloud_claude'}
+    examples = yaml.safe_load((REPO / 'configs/enhancer.example.yaml').read_bytes())
+    backend = deepcopy(examples['vlm']['backends'][names[provider]])
+    local = env.config['vlm']['backends']['main']
+    for key in ('http', 'probe', 'image', 'max_concurrency', 'model', 'base_urls'):
+        backend[key] = deepcopy(local[key])
+    if provider == 'anthropic':
+        backend.update(endpoints={'chat': 'messages', 'health': 'health'},
+                       anthropic_version='2025-01-01', anthropic_workspace_id='none',
+                       call_budget=budget, on_budget_exhausted=policy, allow_images=True)
+    else:
+        backend.update(engine=deepcopy(local['engine']), endpoints=deepcopy(local['endpoints']))
+    profile = deepcopy(env.config)
+    profile['vlm']['backends']['probe_fixture'] = backend
+    path = env.root / 'synthetic-provider-fixture.yaml'
+    path.write_text(yaml.safe_dump(profile), encoding='utf-8')
+    return load_config(path, 'kb status', project_root=env.root)['vlm']['backends']['probe_fixture']
+
+
 @pytest.mark.parametrize('limit', [1, 2, 3, 5, 6, 8])
 def test_loaded_probe_allowance_and_lazy_role_extension(production_env, limit):
     env = production_env
@@ -64,14 +85,14 @@ def test_loaded_probe_allowance_and_lazy_role_extension(production_env, limit):
             await run.for_role('info_assessor')
             assert len(double.probe_requests) == min(limit, 2)
             await run.for_role('observer')
-            assert len(double.probe_requests) == min(limit, 6)
+            assert len(double.probe_requests) == min(limit, 8)  # Different output/image contexts do not share text proof.
             first = len(double.probe_requests)
             await run.for_role('observer')
             assert len(double.probe_requests) == first
             await run.for_role('folder_namer', require=('multiple_images',))
             assert len(double.probe_requests) == min(limit, 8)
             assert run.client._probe_allowances['main'].sent == len(double.probe_requests)
-            assert (run.probes['main'].capabilities.get('multiple_images') is True) == (limit == 8)
+            assert run.probes['main'].capabilities.get('multiple_images') is None  # Earlier contexts used the cap.
         finally:
             await run.close()
 
@@ -120,7 +141,7 @@ def test_loaded_probe_timeout_changes_observed_outcome(production_env, timeout, 
     asyncio.run(execute())
 
 
-@pytest.mark.parametrize(('failure', 'code'), [('negative', 'CAPABILITY_UNAVAILABLE'),
+@pytest.mark.parametrize(('failure', 'code'), [('negative', 'PROBE_MALFORMED'),
     ('failed', 'PROBE_FAILED'), ('incomplete', 'PROBE_INCOMPLETE')])
 def test_required_proof_failure_reason_and_no_repeat(production_env, failure, code):
     env = production_env
@@ -174,9 +195,10 @@ def test_composition_without_injected_probes_and_optional_warnings(production_en
             value, record = await client.call(b'unchanged', '{"folder_name":"synthetic"}')
             assert value['usable'] is True and record['status'] == 'OK'
             assert record['probe_evidence']
-            assert ('PARAM_UNSUPPORTED', 'sampling.temperature') in record['warnings']
-            assert ('PARAM_UNSUPPORTED', 'reasoning.mode') in record['warnings']
-            assert 'temperature' not in double.requests[-1]
+            assert ('PARAM_UNSUPPORTED', 'sampling.repetition_penalty') in record['warnings']
+            assert 'reasoning.mode' not in client.run.probes['main'].capabilities  # Acceptance is not semantic proof.
+            assert double.requests[-1]['temperature'] == env.config['vlm']['roles']['info_assessor']['sampling']['temperature']
+            assert double.requests[-1]['chat_template_kwargs'] == {'enable_thinking': False}
         finally:
             await client.close()
 
@@ -186,10 +208,8 @@ def test_composition_without_injected_probes_and_optional_warnings(production_en
 @pytest.mark.parametrize('cloud', [False, True])
 def test_retries_are_actual_sends_and_blocked_send_does_not_spend_cloud_grant(production_env, cloud):
     env = production_env
-    backend = deepcopy(env.config['vlm']['backends']['main'])
+    backend = synthetic_provider_backend(env, 'anthropic' if cloud else 'openai_compatible')
     backend['http'].update(max_retries=3, retry_statuses=[503])
-    if cloud:
-        backend['provider'] = 'anthropic'
     ledger = SingleRunBudgetLedger({'main': 5})
     seen = []
 
@@ -270,7 +290,7 @@ def test_escaping_probe_allowance_remains_incomplete(production_env, monkeypatch
                     await run.client.call('card_builder', b'system', '{"request":"generation"}')
             assert caught.value.code == 'PROBE_INCOMPLETE'
             assert caught.value.probe_evidence[-1]['status'] == 'incomplete'
-            assert run.client._production_attempted['cloud_claude'] == {}
+            assert all(not attempts for attempts in run.client._production_attempted.values())
             assert 'cloud_claude' not in run.probes and 'main' not in run.probes
             assert run.ledger._remaining['cloud_claude'] == 5 and not run.ledger._active
         finally:
@@ -301,7 +321,7 @@ def test_image_plus_schema_proof_is_required_separately(production_env):
             _, images = probes.load_probe_bundle(env.root)
             with pytest.raises(ModelCallError) as caught:
                 await client.call(b'system', '{}', images=[('knowledge_reference', images[0])])
-            assert caught.value.code == 'CAPABILITY_UNAVAILABLE'
+            assert caught.value.code == 'PROBE_MALFORMED'
             assert not double.requests
         finally:
             await run.close()
@@ -349,8 +369,7 @@ def test_local_and_ordinary_injected_evidence_is_combined(production_env):
 
 def test_cloud_budget_refusal_makes_no_probe_send(production_env):
     env = production_env
-    backend = deepcopy(env.config['vlm']['backends']['main'])
-    backend['provider'] = 'anthropic'
+    backend = synthetic_provider_backend(env, 'anthropic', budget=0)
 
     async def execute():
         run = ModelClientRun(env.config, env.root)
@@ -523,14 +542,14 @@ def test_probe_failure_evidence_is_checkpointed(production_env, monkeypatch):
         scanned = scan(env)
         result = await name_folders(env.store, env.config, scanned['handoff']['k2'],
             images=scanned['rows']['images'], folder_images=scanned['rows']['folder_images'], knowledge_root=env.source)
-        assert set(result['report']['failed'].values()) == {'CAPABILITY_UNAVAILABLE'}
+        assert set(result['report']['failed'].values()) == {'PROBE_MALFORMED'}
 
     asyncio.run(execute())
     with env.store.writer() as writer:
         rows = [row for row in writer._state_rows().values() if row['stage'] == 'model_probe_failure']
         assert len(rows) == 1
         document = json.loads(writer.checkpoints('model_probe_failure').load(rows[0]['input_key']))
-        assert document['error'] == 'CAPABILITY_UNAVAILABLE'
+        assert document['error'] == 'PROBE_MALFORMED'
         assert {item['capability'] for item in document['probes']} == {'text', 'json_schema'}
         assert all(item['status'] == 'negative' for item in document['probes'])
 
@@ -538,13 +557,7 @@ def test_probe_failure_evidence_is_checkpointed(production_env, monkeypatch):
 def cloud_profile(env, *, budget, policy):
     """Resolved test-only cloud profile; credentials are supplied by a labelled loader double."""
     config = deepcopy(env.config)
-    local = config['vlm']['backends']['main']
-    cloud = deepcopy(config['vlm']['backends']['cloud_claude'])
-    for key in ('http', 'probe', 'image', 'max_concurrency', 'model', 'base_urls', 'endpoints'):
-        cloud[key] = deepcopy(local[key])
-    cloud.update(anthropic_version='2025-01-01', anthropic_workspace_id='none',
-                 call_budget=budget, on_budget_exhausted=policy, allow_images=True)
-    config['vlm']['backends']['cloud_claude'] = cloud
+    config['vlm']['backends']['cloud_claude'] = synthetic_provider_backend(env, 'anthropic', budget=budget, policy=policy)
     for name in ('card_builder', 'observer'):
         role = config['vlm']['roles'][name]
         role['backend'] = 'cloud_claude'
@@ -599,7 +612,7 @@ def test_production_cloud_probe_budget_falls_back_over_http(production_env, monk
                 assert ('BUDGET_EXHAUSTED', 'cloud_claude') in record['warnings']
                 assert record['previous_attempts'][0]['status'] == 'BUDGET_EXHAUSTED'
                 assert run.client._probe_allowances['cloud_claude'].sent == 0
-                assert run.client._production_attempted['cloud_claude'] == {}
+                assert all(not attempts for key, attempts in run.client._production_attempted.items() if key[0] == 'cloud_claude')
                 assert 'cloud_claude' not in run.probes
                 assert double.routes == ['/local', '/local']
             finally:
@@ -724,7 +737,7 @@ def test_production_probe_exception_property(production_env, monkeypatch, fault,
                 _, record = await bound.call(b'system', '{"request":"generation"}')
             except asyncio.CancelledError:
                 assert fault == 'cancel'
-                assert run.client._production_attempted['cloud_claude'] == {}
+                assert all(not attempts for key, attempts in run.client._production_attempted.items() if key[0] == 'cloud_claude')
                 active[0] = False
                 # Cancellation spent its attempted send, but did not poison the next bind.
                 await run.for_role('card_builder')
@@ -734,7 +747,8 @@ def test_production_probe_exception_property(production_env, monkeypatch, fault,
                             'transport': 'PROBE_FAILED', 'timeout': 'PROBE_FAILED'}
                 assert error.code == expected[fault]
                 if fault == 'budget':
-                    assert policy == 'stop' and run.client._production_attempted['cloud_claude'] == {}
+                    assert policy == 'stop' and all(not attempts for key, attempts in run.client._production_attempted.items()
+                                                  if key[0] == 'cloud_claude')
             else:
                 assert fault == 'budget' and policy == 'fallback_to_default_backend'
                 assert record['backend'] == 'main'
@@ -959,7 +973,7 @@ def test_invalid_backend_side_is_refused_without_a_probe_mark(production_env):
             with pytest.raises(ConfigurationError, match='max_side'):
                 await run.for_role('folder_namer')
             assert received_images(double) == []
-            assert 'image' not in run.client._production_attempted['main']
+            assert not run.client._production_attempted  # Invalid context is refused before any mark/send.
         finally:
             await run.close()
 
@@ -1013,15 +1027,14 @@ def test_ordered_pair_that_cannot_be_prepared_is_reported_not_faked(production_e
             await run.for_role('folder_namer')
             sent = len(double.probe_requests)
             run.config['vlm']['backends']['main']['image']['max_decode_pixels'] = 1000  # Below 96x64 = 6144.
-            await run.for_role('folder_namer', require=('multiple_images',))
-            assert len(double.probe_requests) == sent  # no ordered challenge was sent
-            assert run.probes['main'].errors['multiple_images'] == 'PROBE_FAILED'
-            assert run.probes['main'].capabilities.get('multiple_images') is None
+            with pytest.raises(ModelCallError, match='CAPABILITY_UNAVAILABLE'):
+                await run.for_role('folder_namer', require=('multiple_images',))
+            assert len(double.probe_requests) == sent + 2  # New context proves text/format before image preparation refuses.
+            assert run.probes['main'].capabilities.get('image') is None  # Never borrow the old decode policy's proof.
             event = run.client.probe_events[-1]
             assert (event['capability'], event['status'], event['reason']) == (
-                'multiple_images', 'failed', 'INPUT_INVALID')
-            await run.for_role('folder_namer', require=('multiple_images',))
-            assert [e['capability'] for e in run.client.probe_events].count('multiple_images') == 1  # not repeated
+                'image', 'failed', 'INPUT_INVALID')
+            assert all(e['capability'] != 'multiple_images' for e in run.client.probe_events)
         finally:
             await run.close()
 

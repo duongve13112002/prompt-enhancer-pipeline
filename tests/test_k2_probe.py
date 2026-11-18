@@ -32,8 +32,9 @@ class ProbeTransport:
         image_parts = body['messages'][0]['content'][1:]
         first, second = [part['image_url']['url'].split(',')[1] for part in image_parts]
         value = 12 if self.ignore_order or (first, second) == ('first', 'second') else 21
+        refusal = 'synthetic refusal' if self.refuse else None
         return httpx.Response(200, json={'choices': [{'finish_reason': 'stop',
-            'message': {'content': json.dumps({'value': value}), 'refusal': self.refuse}}]})
+            'message': {'content': json.dumps({'value': value}), 'refusal': refusal}}]})
 
     async def close(self):
         pass
@@ -52,6 +53,9 @@ def test_multi_image_probe_requires_both_images_and_order(ignore_order, refuse, 
     assert statuses == (['complete', 'incomplete'] if limit == 1 else
                         ['negative', 'negative'] if refuse else
                         ['complete', 'negative'] if ignore_order else ['complete', 'complete'])
+    if refuse:
+        assert result.errors == {'multiple_images': 'PROBE_REFUSED'}
+        assert [case['reason'] for case in result.evidence] == ['PROBE_REFUSED', 'PROBE_REFUSED']
 
 
 def test_malformed_multi_image_plan_is_refused_without_requests():

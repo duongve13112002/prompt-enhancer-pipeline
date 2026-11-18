@@ -128,7 +128,7 @@ def test_kb_sync_cli_probes_without_injection(k2_env, monkeypatch, capsys):
     config = env.config
     config['embedding']['query_text_template'] = '{text}'
     config['runtime']['cpu_workers'] = 1
-    config['vlm']['backends']['main']['probe'] = {'max_requests': 10, 'timeout_s': 2}
+    config['vlm']['backends']['main']['probe'] = {'max_requests': 20, 'timeout_s': 2}  # Test-only allowance for five contexts.
     # Bind only the CLI's project-root discovery to the tiny temporary project.
     monkeypatch.setattr(cli, '__file__', str(env.root / 'src/prompt_enhancer/__main__.py'))
     bundle = Path(__file__).resolve().parents[1] / 'contracts/probes/model_capabilities.v0.json'
@@ -150,8 +150,8 @@ def test_kb_sync_cli_probes_without_injection(k2_env, monkeypatch, capsys):
         published = json.loads(captured.out)
         assert published['status'] == 'published'
         assert {'info_assessor', 'folder_namer', 'observer', 'card_builder', 'alias_generator'} <= set(double.roles)
-        assert len(double.probe_requests) == 8  # One backend/run: text, schema, image, combined and ordered pair.
-        # RES-1 PM answer 5: one sync holds one run, so one probe per backend, one schema registry and one ledger.
+        assert len(double.probe_requests) == 20  # Assessor 2 + namer 8 + observer 6 + cards 2 + aliases 2.
+        # One run shares transport, allowance and ledger; only identical request contexts share proofs.
         assert len(runs) == 1 and model_schemas._REGISTRIES.builds - builds <= 1
         count = (len(double.probe_requests), len(double.requests), len(double.embedder.requests))
         assert cli.main(['kb', 'sync', '--config', str(profile)]) == 0

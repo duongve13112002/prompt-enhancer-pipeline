@@ -190,16 +190,29 @@ def test_lazy_proof_uses_configured_deadline_without_retrying_unknown_result(k2_
     import prompt_enhancer.model_client as module
     from prompt_enhancer.model_probe import probe_local_multiple_images_pair
     run, _ = probe_run(k2_env, monkeypatch)
-    monkeypatch.setattr(module, 'probe_local_multiple_images_pair', probe_local_multiple_images_pair)
-    run.config['vlm']['backends']['main']['probe']['timeout_s'] = 0.01
-    calls = []
+    configured_timeout = 0.01
+    run.config['vlm']['backends']['main']['probe']['timeout_s'] = configured_timeout
+    dispatched_timeouts = []
+    attempts = []
+    cancelled_attempts = []
     original = run.transports['main']
+
+    async def observe_pair(transport, endpoint, first, second, max_requests, timeout_s):
+        dispatched_timeouts.append(timeout_s)
+        return await probe_local_multiple_images_pair(transport, endpoint, first, second, max_requests, timeout_s)
+
+    monkeypatch.setattr(module, 'probe_local_multiple_images_pair', observe_pair)
 
     class HangingTransport:
         """Labelled timeout double; no sockets or services."""
         async def post(self, *args):
-            calls.append(True)
-            await asyncio.sleep(1)
+            attempt = len(attempts)
+            attempts.append(attempt)
+            try:
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                cancelled_attempts.append(attempt)
+                raise
 
         async def close(self):
             pass
@@ -216,13 +229,15 @@ def test_lazy_proof_uses_configured_deadline_without_retrying_unknown_result(k2_
             await run.close()
 
     asyncio.run(execute())
-    assert len(calls) == 2
+    assert attempts == [0, 1]
+    assert cancelled_attempts == attempts
+    assert dispatched_timeouts == [configured_timeout]
     assert run.probes['main'].status == 'failed'
-    errors = dict(run.probes['main'].errors)
-    # KBS-F1 records one summary code per failed capability next to the per-challenge errors (same keys as the
-    # `multiple_images` capability, never a challenge name): the proof failed, distinct from an unspent allowance.
-    assert errors.pop('multiple_images') == 'PROBE_FAILED'
-    assert errors == {'first': 'TimeoutError', 'second': 'TimeoutError'}  # every challenge error is the timeout
+    assert run.probes['main'].errors == {'multiple_images': 'PROBE_FAILED'}
+    event = module.safe_probe_events(run.client.probe_events)[-1]
+    assert event['capability'] == 'multiple_images' and event['status'] == 'failed'
+    assert event['challenges'] == [
+        {'challenge': name, 'status': 'failed', 'reason': 'PROBE_FAILED'} for name in ('first', 'second')]
     assert run.probes['main'].capabilities.get('multiple_images') is None
 
 

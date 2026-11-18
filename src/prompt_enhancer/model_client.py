@@ -3,7 +3,6 @@
 import hashlib
 import json
 import time
-import base64
 import asyncio
 import math
 from copy import deepcopy
@@ -13,13 +12,13 @@ from jsonschema.exceptions import ValidationError
 from .config import (ConfigurationError, NO_MEDIA_TYPE, _sentinel, image_media_type, resolve_backend_engine,
                      resolve_writer_format)
 from .model_cloud import cloud_headers, cloud_request
-from .model_mapping import map_generation_fields
+from .model_mapping import openai_request
 from .model_image import configure_decode_backstop, prepare_image
 from .model_probe import (ProbeResult, probe_backend, probe_local_image_pair, probe_local_thinking_pair,
-                         probe_local_multiple_images_pair, multiple_images_plan,
+                         probe_local_multiple_images_pair, multiple_images_plan, multiple_images_probe_cases,
                          require_capabilities, ProbeAllowance, ProbeTransport, ProbeArtifactError,
                          load_probe_bundle, production_probe_cases, prepare_probe_image, BUNDLE_ID,
-                         ProbeLimitExhausted)
+                         ProbeLimitExhausted, PROBE_CODES, PROBE_SCHEMA, probe_image_hashes, summarize_probe_group)
 from .model_resources import BackendConcurrency, BudgetExhausted, SingleRunBudgetLedger
 from .model_schemas import cached_registry
 from .model_transport import ModelTransport
@@ -30,7 +29,7 @@ from pathlib import Path
 MODEL_CODES = frozenset(('MODEL_CALL_FAILED', 'MODEL_CALL_INVALID', 'CAPABILITY_UNAVAILABLE',
                         'CONFIGURATION_INVALID', 'INPUT_INVALID', 'CLIENT_STATE_INVALID', 'IMAGE_INVALID',
                         'BUDGET_EXHAUSTED', 'HTTP_ERROR', 'INCOMPLETE_OR_REFUSED', 'SCHEMA_INVALID',
-                        'PROBE_CASES_MISSING', 'PROBE_ARTIFACT_INVALID', 'PROBE_INCOMPLETE', 'PROBE_FAILED'))
+                        'PROBE_CASES_MISSING', 'PROBE_ARTIFACT_INVALID', *PROBE_CODES))
 
 
 def safe_model_code(code):
@@ -54,7 +53,8 @@ def safe_probe_events(events):
         challenges = event.get('challenges', [])
         if isinstance(challenges, list):
             item['challenges'] = [
-                {'challenge': case['challenge'], 'status': case['status']}
+                {'challenge': case['challenge'], 'status': case['status'],
+                 **({'reason': case['reason']} if type(case.get('reason')) is str and case['reason'] in PROBE_CODES else {})}
                 for case in challenges if isinstance(case, dict)
                 and type(case.get('challenge')) is str and case['challenge'] in ('0', '1', 'first', 'second')
                 and type(case.get('status')) is str
@@ -283,6 +283,7 @@ class RoleClient:
         self._production = probe_cases is None and local_probe_plans is None and not probes
         self._bundle = None
         self._production_attempted = {}
+        self._production_proofs = {}
         self.probe_events = []
         self._probe_allowances = {}
         self.probe_cases = probe_cases or {}
@@ -300,30 +301,67 @@ class RoleClient:
             self._cloud_headers[backend_name] = cloud_headers(backend['provider'], backend, self.project_root)
         return self._cloud_headers[backend_name]
 
-    def _multiple_images_pair(self, backend_name, role_name, *, require=()):
+    def _proof_key(self, backend_name, role):
+        """Artifact-bound v1 context; no credentials or admission-only settings."""
+        backend = self.config['vlm']['backends'][backend_name]
+        output = role['output']
+        schema_hash = None
+        if output['validate_response'] and output['schema_id'] not in ('none', 'from_profile_manifest'):
+            _, schema_hash = self.schemas.get(output['schema_id'])
+        image = role['image']
+        vision = self.config['vision'] if isinstance(image, dict) else None
+        return (backend_name, _digest({
+            'identity': 'role_probe_context_v1', 'bundle': BUNDLE_ID,
+            'provider': backend['provider'], 'engine': resolve_backend_engine(backend, 'vlm.backends.' + backend_name),
+            'model': backend['model'], 'base_urls': backend['base_urls'], 'chat': backend['endpoints']['chat'],
+            'extra_body': backend.get('extra_body', {}),
+            'inference': {key: role[key] for key in ('max_tokens', 'sampling', 'reasoning', 'output')},
+            'schema_hash': schema_hash, 'image': image,
+            'vision': ({key: vision[key] for key in ('max_image_side', 'format', 'alpha_policy')}
+                       if vision is not None else None),
+            'image_backend': backend['image'],
+            'effective_side': image_max_side(self.config, image, backend) if isinstance(image, dict) else None,
+        }))
+
+    def _multiple_images_pair(self, backend_name, role_name, *, require=(), role=None, proof_key=None, warnings=None):
         validate_require(require)
-        if 'multiple_images' not in require or backend_name in self._multiple_attempted:
+        key = proof_key if proof_key is not None else backend_name
+        if 'multiple_images' not in require or key in self._multiple_attempted:
             return None
         backend = self.config['vlm']['backends'][backend_name]
-        role = self.config['vlm'].get('roles', {}).get(role_name)
-        if (role is not None and role['backend'] == backend_name
+        role = self.config['vlm'].get('roles', {}).get(role_name) if role is None else role
+        if (role is not None and (self._production or role['backend'] == backend_name)
                 and backend['provider'] == 'openai_compatible' and isinstance(role['image'], dict)
                 and role['image'].get('source') in ('source_image', 'user_reference', 'knowledge_reference')):
             # Same side rule as generation (decision 144), so the pair is proved on the pixels a real call sends.
             side = image_max_side(self.config, role['image'], backend)
             vision = self.config['vision']
             try:
+                probe_role = deepcopy(role)
+                probe_role['output'] = dict(role['output'], schema_id=BUNDLE_ID)
+
+                def build(prompt, images):
+                    body, dropped = openai_request(backend, probe_role, None, prompt, schema=PROBE_SCHEMA, images=images,
+                                                   mapped=self._production,
+                                                   capabilities=None if self._production else self.probes.get(
+                                                       backend_name, ProbeResult('complete', {}, {})).capabilities)
+                    if warnings is not None:
+                        warnings.extend(item for item in dropped if item not in warnings)
+                    return body
                 return multiple_images_plan(backend['model']['id'], role['max_tokens'],
-                                            lambda data: prepare_probe_image(data, side, backend, role, vision))
+                                            lambda data: prepare_probe_image(data, side, backend, role, vision), build=build)
             except (ValueError, TypeError, KeyError, OSError) as error:
+                if proof_key is not None:
+                    raise  # Production records build and shape failures through the same group outcome.
                 # An unpreparable fixture (e.g. a decode bound below its size) leaves the proof absent, never faked.
-                self._multiple_attempted.add(backend_name)
+                self._multiple_attempted.add(key)
                 self.probe_events.append({'role': role_name, 'capability': 'multiple_images', 'status': 'failed',
                     'sent': self._probe_transport(backend_name).allowance.sent,
                     'reason': 'CLIENT_STATE_INVALID' if isinstance(error, (TypeError, KeyError)) else 'INPUT_INVALID'})
-                cached = self.probes.get(backend_name)
+                cache = self._production_proofs if proof_key is not None else self.probes
+                cached = cache.get(key)
                 if cached is not None:
-                    self.probes[backend_name] = ProbeResult('failed', cached.capabilities,
+                    cache[key] = ProbeResult('failed', cached.capabilities,
                         {**cached.errors, 'multiple_images': 'PROBE_FAILED'}, cached.evidence)
         return None
 
@@ -354,6 +392,10 @@ class RoleClient:
             role = self.config['vlm']['roles'].get(role_name)
         if role is None or self.project_root is None:
             raise ModelCallError('PROBE_CASES_MISSING: production probes need a configured role and project')
+        if role['output']['format'] == 'from_profile_manifest':
+            # A writer has no request shape until its call supplies the admin manifest.
+            return ProbeResult('incomplete', {}, {})
+        key = self._proof_key(backend_name, role)
         if self._bundle is None:
             try:
                 self._bundle, self._images = load_probe_bundle(self.project_root)
@@ -371,8 +413,8 @@ class RoleClient:
             capabilities.append('image')
             if output in ('json_object', 'json_schema'):
                 capabilities.append('image+' + output)
-        previous = self.probes.get(backend_name, ProbeResult('complete', {}, {}))
-        attempted = self._production_attempted.setdefault(backend_name, {})
+        previous = self._production_proofs.get(key, ProbeResult('complete', {}, {}))
+        attempted = self._production_attempted.setdefault(key, {})
         transport = self._probe_transport(backend_name)
         self._probe_remaining.setdefault(backend_name, limits['max_requests'])
         for capability in capabilities:
@@ -383,8 +425,9 @@ class RoleClient:
             # Mark before await so failed/incomplete proof is never repeatedly spent.
             attempted[capability] = 'incomplete'
             try:
+                dropped = []
                 cases = production_probe_cases(bundle, self._bundle_images(), backend, role,
-                                               self.config['vision'], capability, side)
+                                               self.config['vision'], capability, side, warnings=dropped)
             except (ValueError, TypeError, KeyError) as error:
                 self.probe_events.append({'role': role_name, 'capability': capability,
                     'status': 'failed', 'sent': transport.allowance.sent,
@@ -403,75 +446,92 @@ class RoleClient:
                         'status': 'incomplete', 'sent': transport.allowance.sent,
                         'reason': 'BUDGET_EXHAUSTED' if isinstance(error, BudgetExhausted) else 'PROBE_INCOMPLETE'})
                 raise
-            status = result.status
-            if status == 'complete' and not all(result.capabilities.values()):
-                attempted[capability] = 'negative'
-            else:
-                attempted[capability] = status
-            proof = ({capability: all(result.capabilities.values())} if status == 'complete' else {})
-            evidence = {'bundle_id': BUNDLE_ID, 'capability': capability, 'role': role_name,
+            group = summarize_probe_group(result, cases, capability)
+            accepted = group.capabilities.get(capability)
+            attempted[capability] = 'negative' if accepted is False else group.status
+            event = {'role': role_name, 'capability': capability, 'status': attempted[capability],
+                     'sent': transport.allowance.sent, 'challenges': list(group.evidence)}
+            if capability in group.errors:
+                event['reason'] = group.errors[capability]
+            evidence = {**event, 'bundle_id': BUNDLE_ID,
                         'backend': backend_name, 'provider': backend['provider'],
                         'model_id': backend['model']['id'], 'model_revision': backend['model']['revision'],
                         'engine': resolve_backend_engine(backend, 'vlm.backends.' + backend_name),
-                        'status': attempted[capability], 'sent': transport.allowance.sent,
+                        'context_hash': key[1], 'warnings': dropped,
+                        'request_accepted': accepted is True,
                         'body_hashes': [_digest(body) for body, _ in cases.values()],
+                        'prepared_image_hashes': {name: probe_image_hashes(body, backend['provider'])
+                                                  for name, (body, _) in cases.items()},
                         'image_hashes': [item['sha256'] for item in bundle['images']] if capability.startswith('image') else []}
-            previous = ProbeResult(status, {**previous.capabilities, **proof},
-                                   {**previous.errors, **({capability: 'PROBE_' + status.upper()} if status != 'complete' else {})},
+            previous = ProbeResult(group.status, {**previous.capabilities, **group.capabilities},
+                                   {**previous.errors, **group.errors},
                                    (*previous.evidence, evidence))
+            self._production_proofs[key] = previous
             self.probes[backend_name] = previous
-            self.probe_events.append({'role': role_name, 'capability': capability,
-                'status': attempted[capability], 'sent': transport.allowance.sent,
-                'challenges': [{'challenge': name,
-                    'status': ('complete' if result.capabilities[name] else 'negative')
-                        if name in result.capabilities else
-                        'failed' if name in result.errors and result.errors[name] != 'PROBE_INCOMPLETE' else 'incomplete'}
-                    for name in cases]})
-        self.probes.setdefault(backend_name, previous)
-        return await self._extend_multiple_images(backend_name, self._multiple_images_pair(backend_name, role_name, require=require))
+            self.probe_events.append(event)
+        self._production_proofs.setdefault(key, previous)
+        pair_warnings = []
+        try:
+            pair = self._multiple_images_pair(backend_name, role_name, require=require, role=role, proof_key=key,
+                                              warnings=pair_warnings)
+            cases = multiple_images_probe_cases(*pair) if pair is not None else None
+        except (ValueError, TypeError, KeyError, OSError, AttributeError, IndexError):
+            cases = {}  # Ordered proof was demanded and preparation failed before either case could be sent.
+        return await self._extend_multiple_images(backend_name, None, cases=cases, proof_key=key, role_name=role_name,
+                                                  warnings=pair_warnings)
 
     def _bundle_images(self):
         return self._images
 
-    async def _extend_multiple_images(self, backend_name, pair):
-        result = self.probes[backend_name]
-        if (pair is None or result.capabilities.get('multiple_images') is not None
-                or backend_name in self._multiple_attempted):
+    async def _extend_multiple_images(self, backend_name, pair, *, cases=None, proof_key=None, role_name='folder_namer',
+                                      warnings=()):
+        key = proof_key if proof_key is not None else backend_name
+        cache = self._production_proofs if proof_key is not None else self.probes
+        result = cache[key]
+        self.probes[backend_name] = result  # compatibility/inspection view; production gates use the returned context
+        if ((pair is None and cases is None) or result.capabilities.get('multiple_images') is not None
+                or key in self._multiple_attempted):
             return result
-        self._multiple_attempted.add(backend_name)
-        count = self._take_probe_requests(backend_name, 2)
-        if not count:
-            result = ProbeResult('incomplete', result.capabilities,
-                                 {**result.errors, 'multiple_images': 'PROBE_INCOMPLETE'}, result.evidence)
-            self.probes[backend_name] = result
-            self.probe_events.append({'role': 'folder_namer', 'capability': 'multiple_images',
-                'status': 'incomplete', 'sent': self._probe_transport(backend_name).allowance.sent,
-                'challenges': [{'challenge': name, 'status': 'incomplete'} for name in ('first', 'second')]})
-            return result
+        self._multiple_attempted.add(key)
         backend = self.config['vlm']['backends'][backend_name]
+        transport = self._probe_transport(backend_name)
+        names = ('first', 'second')
         try:
-            multiple = await probe_local_multiple_images_pair(self._probe_transport(backend_name), backend['endpoints']['chat'],
-                                                             *pair, count, backend['probe']['timeout_s'])
+            if cases is not None and not cases:
+                failed = ProbeResult('failed', {}, dict.fromkeys(names, 'PROBE_FAILED'))
+                multiple = summarize_probe_group(failed, names, 'multiple_images')
+            else:
+                count = self._take_probe_requests(backend_name, len(names))
+                endpoint, timeout = backend['endpoints']['chat'], backend['probe']['timeout_s']
+                if not count:
+                    multiple = summarize_probe_group(ProbeResult('incomplete', {}, {}), names, 'multiple_images')
+                elif cases is None:
+                    multiple = await probe_local_multiple_images_pair(transport, endpoint, *pair, count, timeout)
+                else:
+                    raw = await probe_backend(transport, endpoint, cases, count, timeout)
+                    multiple = summarize_probe_group(raw, cases, 'multiple_images')
         except BaseException:
-            self._multiple_attempted.discard(backend_name)
+            self._multiple_attempted.discard(key)
             raise
         status = ('failed' if 'failed' in (result.status, multiple.status) else
                   'incomplete' if 'incomplete' in (result.status, multiple.status) else 'complete')
         result = ProbeResult(status, {**result.capabilities, **multiple.capabilities},
-                             {**result.errors, **multiple.errors,
-                              **({'multiple_images': 'PROBE_' + multiple.status.upper()}
-                                 if multiple.status != 'complete' else {})}, result.evidence)
-        self.probes[backend_name] = result
-        proof_status = (multiple.status if multiple.status != 'complete' else
-                        'complete' if multiple.capabilities.get('multiple_images') is True else 'negative')
-        event = {'role': 'folder_namer', 'capability': 'multiple_images', 'status': proof_status,
-                 'sent': self._probe_transport(backend_name).allowance.sent,
-                 'challenges': list(multiple.evidence)}
+                             {**result.errors, **multiple.errors}, result.evidence)
+        accepted = multiple.capabilities.get('multiple_images')
+        proof_status = 'negative' if accepted is False else multiple.status
+        event = {'role': role_name, 'capability': 'multiple_images', 'status': proof_status,
+                 'sent': transport.allowance.sent, 'challenges': list(multiple.evidence)}
+        if 'multiple_images' in multiple.errors:
+            event['reason'] = multiple.errors['multiple_images']
         self.probe_events.append(event)
         if self._production:
             result = ProbeResult(result.status, result.capabilities, result.errors,
-                (*result.evidence, {**event, 'body_hashes': [_digest(item[0]) for item in pair]}))
-            self.probes[backend_name] = result
+                (*result.evidence, {**event, 'context_hash': proof_key[1], 'warnings': list(warnings),
+                    'body_hashes': [_digest(body) for body, _ in cases.values()],
+                    'prepared_image_hashes': {name: probe_image_hashes(body, backend['provider'])
+                                              for name, (body, _) in cases.items()}}))
+        self.probes[backend_name] = result
+        cache[key] = result
         return result
 
     async def start_backend(self, backend_name, *, role_name=None, require=()):
@@ -617,12 +677,14 @@ class RoleClient:
                     raise ModelCallError('gemini: image request mapping unproven')
                 headers = self._headers(backend_name)
             try:
-                if backend_name not in self.probes:
+                if not self._production and backend_name not in self.probes:
                     await self.start_backend(backend_name, role_name=role_name)
                 if self._production:
                     async with self._probe_locks.setdefault(backend_name, asyncio.Lock()):
-                        await self._production_probe(backend_name, role_name, role=role,
-                                                     require=('multiple_images',) if len(images) > 1 else ())
+                        proof = await self._production_probe(backend_name, role_name, role=role,
+                                                            require=('multiple_images',) if len(images) > 1 else ())
+                else:
+                    proof = self.probes[backend_name]
             except BudgetExhausted:
                 if backend.get('on_budget_exhausted') != 'fallback_to_default_backend':
                     raise
@@ -638,9 +700,9 @@ class RoleClient:
             output = role['output']
             if output['format'] != 'none' and output['validate_response'] is not True:
                 raise ModelCallError('structured output requires response validation')
-            required = [] if output['format'] == 'none' else [output['format']]
-            if self._production:
-                required.append('text')
+            required = ['text'] if self._production else []
+            if output['format'] != 'none':
+                required.append(output['format'])
             if images:
                 required.append('image')
                 if self._production and output['format'] != 'none':
@@ -648,24 +710,19 @@ class RoleClient:
                 if len(images) > 1:
                     required.append('multiple_images')
                     if (backend_name == role['backend']
-                            and self.probes[backend_name].capabilities.get('multiple_images') is None):
-                        await self.ensure_role_capabilities(backend_name, role_name, require=('multiple_images',))
+                            and proof.capabilities.get('multiple_images') is None and not self._production):
+                        proof = await self.ensure_role_capabilities(backend_name, role_name, require=('multiple_images',))
             try:
-                require_capabilities(self.probes[backend_name], required)
+                require_capabilities(proof, required)
             except ValueError as error:
                 if self._production:
-                    missing = [cap for cap in required if self.probes[backend_name].capabilities.get(cap) is not True]
-                    codes = [self.probes[backend_name].errors.get(cap) for cap in missing]
-                    code = ('PROBE_INCOMPLETE' if 'PROBE_INCOMPLETE' in codes else
-                            'PROBE_FAILED' if 'PROBE_FAILED' in codes else 'CAPABILITY_UNAVAILABLE')
+                    missing = [cap for cap in required if proof.capabilities.get(cap) is not True]
+                    # Stable demand order: unfinished text cannot be hidden by a later output proof.
+                    codes = [proof.errors.get(cap) for cap in missing]
+                    code = next((code for code in codes if code in PROBE_CODES), 'CAPABILITY_UNAVAILABLE')
                     raise ModelCallError(code + ': required capability is unproved') from error
                 raise ModelCallError('CAPABILITY_UNAVAILABLE: required capability is unproven') from error
-            capabilities = self.probes[backend_name].capabilities
-            body, dropped = map_generation_fields(provider, role, capabilities)
-            if provider == 'openai_compatible':
-                warnings.extend(dropped)
-            body['model'] = backend['model']['id']
-            content = user_text
+            capabilities = proof.capabilities
             cloud_images = []
             if images:
                 image_settings = role['image']
@@ -679,7 +736,6 @@ class RoleClient:
                 media_type = image_media_type(fmt)
                 if media_type is None:
                     raise ConfigurationError(f'vlm.roles.{role_name}.image.format: {NO_MEDIA_TYPE.format(fmt)}')
-                content = [{'type': 'text', 'text': user_text}]
                 for image_role, image_data in images:
                     if image_role not in ('source_image', 'user_reference', 'knowledge_reference'):
                         raise ModelCallError('invalid image role')
@@ -688,24 +744,7 @@ class RoleClient:
                                                  alpha_policy=vision['alpha_policy'], output_format=fmt, quality=quality)
                     except Exception as error:
                         raise ModelCallError('IMAGE_INVALID: image preparation failed') from error
-                    encoded = base64.b64encode(prepared).decode('ascii')
                     cloud_images.append((media_type, prepared))
-                    content.append({'type': 'image_url', 'image_url': {'url': f'data:{media_type};base64,{encoded}'}})  # O
-            body['messages'] = [{'role': 'system', 'content': system_prompt.decode('utf-8')},
-                                {'role': 'user', 'content': content}]
-            reasoning = role['reasoning']
-            if provider == 'openai_compatible' and reasoning['mode'] in ('on', 'off'):
-                if capabilities.get('reasoning.mode') is True:
-                    body['chat_template_kwargs'] = {reasoning['template_kwargs_key']: reasoning['mode'] == 'on'}  # L,V
-                else:
-                    warnings.append(('PARAM_UNSUPPORTED', 'reasoning.mode'))
-            if provider == 'openai_compatible' and reasoning['effort'] not in ('none', 'backend_default', None):
-                if capabilities.get('reasoning.effort') is True:
-                    body['reasoning_effort'] = reasoning['effort']  # O,L
-                else:
-                    warnings.append(('PARAM_UNSUPPORTED', 'reasoning.effort'))
-            if provider == 'openai_compatible' and reasoning['budget_tokens'] not in ('none', None):
-                warnings.append(('PARAM_UNSUPPORTED', 'reasoning.budget_tokens'))
             schema_id = output['schema_id']
             schema_hash = None
             cloud_schema = None
@@ -713,14 +752,13 @@ class RoleClient:
                 _, schema_hash = self.schemas.get(schema_id)
             if provider == 'anthropic' and output['format'] == 'json_schema':
                 cloud_schema, schema_hash = self.schemas.get(schema_id)
-            if provider == 'openai_compatible' and output['format'] == 'json_object':
-                body['response_format'] = {'type': 'json_object'}  # O
-            elif provider == 'openai_compatible' and output['format'] == 'json_schema':
+            if provider == 'openai_compatible' and output['format'] == 'json_schema':
                 schema, schema_hash = self.schemas.get(schema_id)
-                body['response_format'] = {'type': 'json_schema', 'json_schema': {
-                    'name': schema_id, 'schema': schema, 'strict': output['strict']}}  # O
             if provider == 'openai_compatible':
-                body.update(deepcopy(backend.get('extra_body', {})))
+                body, dropped = openai_request(backend, role, system_prompt.decode('utf-8'), user_text,
+                                              schema=schema if output['format'] == 'json_schema' else None,
+                                              images=cloud_images, capabilities=capabilities, mapped=self._production)
+                warnings.extend(dropped)
             else:
                 body, cloud_warnings = cloud_request(provider, backend, role, system_prompt.decode('utf-8'), user_text,
                                                      schema=cloud_schema, images=cloud_images)
@@ -752,7 +790,7 @@ class RoleClient:
                       'image_roles': [image_role for image_role, _ in images],
                       'warnings': warnings, 'previous_attempts': attempts}
             if self._production:
-                record['probe_evidence'] = list(self.probes[backend_name].evidence)
+                record['probe_evidence'] = list(proof.evidence)
             started = time.monotonic()
             try:
                 response = await self.transports[backend_name].post(backend['endpoints']['chat'], body, headers)

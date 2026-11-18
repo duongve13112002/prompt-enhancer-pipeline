@@ -14,6 +14,7 @@ from PIL import Image, ImageDraw
 
 from .model_resources import BudgetExhausted
 from .model_cloud import cloud_request
+from .model_mapping import openai_request
 from .config import image_media_type
 from .model_image import prepare_image
 
@@ -96,30 +97,108 @@ def load_probe_bundle(project_root):
         raise ProbeArtifactError('PROBE_ARTIFACT_INVALID') from error
 
 
-def verify_probe_reply(response, provider, expected):
-    """Check completion, refusal, exact JSON shape, strict integer type and answer."""
+# Protocol-bound verdict codes; never retain response text in a verdict.
+PROBE_CODES = frozenset(('PROBE_TRUNCATED', 'PROBE_REFUSED', 'PROBE_MALFORMED',
+                         'PROBE_WRONG_ANSWER', 'PROBE_INCOMPLETE', 'PROBE_FAILED'))
+PROBE_SCHEMA = {'type': 'object', 'properties': {'value': {'type': 'integer'}},
+                'required': ['value'], 'additionalProperties': False}  # artifact-bound challenge shape
+
+
+@dataclass(frozen=True)
+class ProbeVerdict:
+    success: bool
+    code: str | None = None
+
+    def __post_init__(self):
+        if type(self.success) is not bool or (self.success and self.code is not None) or (
+                not self.success and (type(self.code) is not str or self.code not in PROBE_CODES)):
+            raise ValueError('invalid structural probe verdict')
+
+
+def probe_verdict(response, provider, expected):
+    """Classify only protocol structure, then exact JSON shape and integer answer."""
     try:
         payload = response.json()
+        if type(payload) is not dict:
+            return ProbeVerdict(False, 'PROBE_MALFORMED')
         if provider == 'openai_compatible':
-            choice = payload['choices'][0]
+            choices = payload['choices']
+            if type(choices) is not list or not choices or type(choices[0]) is not dict:
+                return ProbeVerdict(False, 'PROBE_MALFORMED')
+            choice = choices[0]
             message = choice['message']
-            if choice['finish_reason'] != 'stop' or message.get('refusal'):
-                return False
+            finish = choice['finish_reason']
+            if type(message) is not dict or type(finish) is not str:
+                return ProbeVerdict(False, 'PROBE_MALFORMED')
+            refusal = message.get('refusal')
+            if refusal is not None and type(refusal) is not str:
+                return ProbeVerdict(False, 'PROBE_MALFORMED')
+            if refusal or finish == 'content_filter':
+                return ProbeVerdict(False, 'PROBE_REFUSED')
+            if finish == 'length':
+                return ProbeVerdict(False, 'PROBE_TRUNCATED')
+            if finish != 'stop':
+                return ProbeVerdict(False, 'PROBE_INCOMPLETE')
             text = message['content']
         elif provider == 'anthropic':
-            if payload['stop_reason'] not in ('end_turn', 'stop_sequence'):
-                return False
-            text = ''.join(part['text'] for part in payload['content'] if part['type'] == 'text')
+            finish = payload['stop_reason']
+            if type(finish) is not str:
+                return ProbeVerdict(False, 'PROBE_MALFORMED')
+            if finish == 'refusal':
+                return ProbeVerdict(False, 'PROBE_REFUSED')
+            if finish == 'max_tokens':
+                return ProbeVerdict(False, 'PROBE_TRUNCATED')
+            if finish not in ('end_turn', 'stop_sequence'):
+                return ProbeVerdict(False, 'PROBE_INCOMPLETE')
+            parts = payload['content']
+            if type(parts) is not list or any(type(part) is not dict or type(part.get('type')) is not str
+                                               for part in parts):
+                return ProbeVerdict(False, 'PROBE_MALFORMED')
+            text = ''.join(part['text'] for part in parts if part['type'] == 'text')
+        elif provider == 'gemini':
+            feedback = payload.get('promptFeedback', {})
+            if type(feedback) is not dict:
+                return ProbeVerdict(False, 'PROBE_MALFORMED')
+            block_reason = feedback.get('blockReason', '')
+            if type(block_reason) is not str:
+                return ProbeVerdict(False, 'PROBE_MALFORMED')
+            if block_reason:
+                return ProbeVerdict(False, 'PROBE_REFUSED')
+            candidates = payload['candidates']
+            if type(candidates) is not list or not candidates or type(candidates[0]) is not dict:
+                return ProbeVerdict(False, 'PROBE_MALFORMED')
+            choice = candidates[0]
+            finish = choice['finishReason']
+            if type(finish) is not str:
+                return ProbeVerdict(False, 'PROBE_MALFORMED')
+            if finish == 'SAFETY':
+                return ProbeVerdict(False, 'PROBE_REFUSED')
+            if finish == 'MAX_TOKENS':
+                return ProbeVerdict(False, 'PROBE_TRUNCATED')
+            if finish != 'STOP':
+                return ProbeVerdict(False, 'PROBE_INCOMPLETE')
+            content = choice['content']
+            if type(content) is not dict:
+                return ProbeVerdict(False, 'PROBE_MALFORMED')
+            parts = content['parts']
+            if type(parts) is not list or any(type(part) is not dict for part in parts):
+                return ProbeVerdict(False, 'PROBE_MALFORMED')
+            text = ''.join(part['text'] for part in parts if 'text' in part)
         else:
-            choice = payload['candidates'][0]
-            if choice['finishReason'] != 'STOP':
-                return False
-            text = ''.join(part['text'] for part in choice['content']['parts'] if 'text' in part)
+            return ProbeVerdict(False, 'PROBE_MALFORMED')
+        if type(text) is not str:
+            return ProbeVerdict(False, 'PROBE_MALFORMED')
         value = json.loads(text)
-        return (type(value) is dict and set(value) == {'value'}
-                and type(value['value']) is int and value['value'] == expected)
-    except (KeyError, IndexError, TypeError, ValueError):
-        return False
+        if type(value) is not dict or set(value) != {'value'} or type(value['value']) is not int:
+            return ProbeVerdict(False, 'PROBE_MALFORMED')
+        return ProbeVerdict(True) if value['value'] == expected else ProbeVerdict(False, 'PROBE_WRONG_ANSWER')
+    except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+        return ProbeVerdict(False, 'PROBE_MALFORMED')
+
+
+def verify_probe_reply(response, provider, expected):
+    """Compatibility boolean adapter for explicitly supplied verification seams."""
+    return probe_verdict(response, provider, expected).success
 
 
 def prepare_probe_image(data, max_side, backend, role, vision):
@@ -138,7 +217,36 @@ def prepare_probe_image(data, max_side, backend, role, vision):
     return media_type, prepared
 
 
-def production_probe_cases(bundle, image_bytes, backend, role, vision, capability, max_side):
+def probe_image_hashes(body, provider):
+    """Artifact provenance of final prepared payloads, including any engine-extra override."""
+    hashes = []
+    messages = body.get('messages', [])
+    for message in messages if isinstance(messages, list) else ():
+        content = message.get('content') if isinstance(message, dict) else None
+        for part in content if isinstance(content, list) else ():
+            if not isinstance(part, dict):
+                continue
+            encoded = None
+            if provider == 'openai_compatible' and part.get('type') == 'image_url':
+                image = part.get('image_url')
+                url = image.get('url') if isinstance(image, dict) else None
+                if isinstance(url, str) and url.startswith('data:') and ';base64,' in url:
+                    encoded = url.partition(';base64,')[2]
+            elif provider == 'anthropic' and part.get('type') == 'image':
+                source = part.get('source')
+                if isinstance(source, dict) and source.get('type') == 'base64':
+                    encoded = source.get('data')
+            if not isinstance(encoded, str):
+                continue
+            try:
+                hashes.append(hashlib.sha256(base64.b64decode(encoded, validate=True)).hexdigest())
+            except ValueError:
+                # An invalid overridden payload cannot gain provenance from the original fixture.
+                continue
+    return hashes
+
+
+def production_probe_cases(bundle, image_bytes, backend, role, vision, capability, max_side, *, warnings=None):
     """Build only the demanded challenge; deployment choices come from validated config.
 
     `max_side` is the effective image side generation would use for this role and backend (never re-derived here).
@@ -149,8 +257,6 @@ def production_probe_cases(bundle, image_bytes, backend, role, vision, capabilit
     fmt = fmt if fmt in ('json_object', 'json_schema') else 'none'
     if image_case and provider != 'openai_compatible' and not backend['allow_images']:
         raise ValueError('image probe prohibited by backend')
-    schema = {'type': 'object', 'properties': {'value': {'type': 'integer'}},
-              'required': ['value'], 'additionalProperties': False}
     challenges = zip(image_bytes, [item['answer'] for item in bundle['images']]) if image_case else (
         (None, bundle['text_answer']),)
     result = {}
@@ -159,25 +265,16 @@ def production_probe_cases(bundle, image_bytes, backend, role, vision, capabilit
         images = []
         if data is not None:
             images = [prepare_probe_image(data, max_side, backend, role, vision)]
+        probe_role = deepcopy(role)
+        probe_role['output'] = dict(role['output'], format=fmt, schema_id=BUNDLE_ID)
         if provider == 'openai_compatible':
-            content = prompt if not images else [
-                {'type': 'text', 'text': prompt}, *[
-                {'type': 'image_url', 'image_url': {'url': 'data:' + mime + ';base64,'
-                                                  + base64.b64encode(raw).decode('ascii')}} for mime, raw in images]]
-            body = {'model': backend['model']['id'], 'max_tokens': role['max_tokens'],
-                    'messages': [{'role': 'user', 'content': content}]}
-            if fmt != 'none':
-                body['response_format'] = {'type': fmt}
-                if fmt == 'json_schema':
-                    body['response_format']['json_schema'] = {
-                        'name': BUNDLE_ID, 'schema': schema, 'strict': role['output']['strict']}
-            body.update(deepcopy(backend.get('extra_body', {})))
+            body, dropped = openai_request(backend, probe_role, None, prompt, schema=PROBE_SCHEMA,
+                                           images=images, mapped=True)
         else:
-            probe_role = deepcopy(role)
-            probe_role['output'] = dict(role['output'], format=fmt)
-            # Optional controls without observable proof stay unknown; the call records their warnings.
-            body, _ = cloud_request(provider, backend, probe_role, '', prompt, schema=schema, images=images)
-        result[str(index)] = (body, lambda response, answer=answer: verify_probe_reply(response, provider, answer))
+            body, dropped = cloud_request(provider, backend, probe_role, '', prompt, schema=PROBE_SCHEMA, images=images)
+        if warnings is not None:
+            warnings.extend(item for item in dropped if item not in warnings)
+        result[str(index)] = (body, lambda response, answer=answer: probe_verdict(response, provider, answer))
     return result
 
 
@@ -187,6 +284,32 @@ class ProbeResult:
     capabilities: dict
     errors: dict
     evidence: tuple = ()
+
+
+def summarize_probe_group(result, names, capability):
+    """Normalize case evidence and decide the outcome of one required capability."""
+    cases = []
+    for name in names:
+        reason = result.errors.get(name)
+        if reason == 'PROBE_INCOMPLETE' or (reason is None and name not in result.capabilities):
+            status, reason = 'incomplete', 'PROBE_INCOMPLETE'
+        elif reason == 'PROBE_FAILED' or name not in result.capabilities:
+            status, reason = 'failed', 'PROBE_FAILED'
+        else:
+            status = 'complete' if result.capabilities[name] else 'negative'
+        case = {'challenge': name, 'status': status}
+        if reason in PROBE_CODES:
+            case['reason'] = reason
+        cases.append(case)
+
+    statuses = {case['status'] for case in cases}
+    if 'failed' in statuses:
+        return ProbeResult('failed', {}, {capability: 'PROBE_FAILED'}, tuple(cases))
+    if not cases or 'incomplete' in statuses:
+        return ProbeResult('incomplete', {}, {capability: 'PROBE_INCOMPLETE'}, tuple(cases))
+    reason = next((case['reason'] for case in cases if case['status'] == 'negative' and 'reason' in case), None)
+    return ProbeResult('complete', {capability: 'negative' not in statuses},
+                       {capability: reason} if reason else {}, tuple(cases))
 
 
 async def probe_capabilities(cases, max_requests, timeout_s):
@@ -199,11 +322,20 @@ async def probe_capabilities(cases, max_requests, timeout_s):
             or not math.isfinite(timeout_s) or timeout_s <= 0):
         raise ValueError('invalid probe limits')
     capabilities, errors = {}, {}
+    failed, incomplete = False, False
     for index, (name, case) in enumerate(cases.items()):
         if index >= max_requests:
             break
         try:
             result = await asyncio.wait_for(case(), timeout=timeout_s)
+            if isinstance(result, ProbeVerdict):
+                if result.code == 'PROBE_INCOMPLETE':
+                    incomplete = True
+                else:
+                    capabilities[name] = result.success
+                if result.code:
+                    errors[name] = result.code
+                continue
             if type(result) is not bool:
                 raise ValueError('probe did not return verified boolean evidence')
             capabilities[name] = result
@@ -212,8 +344,9 @@ async def probe_capabilities(cases, max_requests, timeout_s):
         except ProbeLimitExhausted:
             return ProbeResult('incomplete', capabilities, {**errors, name: 'PROBE_INCOMPLETE'})
         except Exception as error:
+            failed = True
             errors[name] = type(error).__name__
-    status = 'failed' if errors else ('incomplete' if len(capabilities) < len(cases) else 'complete')
+    status = 'failed' if failed else ('incomplete' if incomplete or len(capabilities) < len(cases) else 'complete')
     return ProbeResult(status, capabilities, errors)
 
 
@@ -264,7 +397,7 @@ async def probe_local_image_pair(transport, endpoint, first, second, max_request
 
     def verifier(expected_value):
         def verify(response):
-            return verify_probe_reply(response, 'openai_compatible', expected_value)
+            return probe_verdict(response, 'openai_compatible', expected_value)
         return verify
 
     cases = {'first': (first[0], verifier(expected[0])), 'second': (second[0], verifier(expected[1]))}
@@ -304,7 +437,7 @@ async def probe_local_thinking_pair(transport, endpoint, enabled, disabled, temp
     return ProbeResult('complete', {'reasoning.mode': all(result.capabilities.values())}, result.errors)
 
 
-def multiple_images_plan(model_id, max_tokens, prepare):
+def multiple_images_plan(model_id, max_tokens, prepare, *, build=None):
     """Production challenge: count one/two circles and combine both counts in their input order.
 
     `prepare` maps the raw fixture PNG to (media type, bytes) exactly as generation prepares a real image
@@ -312,6 +445,7 @@ def multiple_images_plan(model_id, max_tokens, prepare):
     """
     # Protocol-bound challenge geometry/answers, independent of deployment quality settings.
     urls = []
+    prepared_images = []
     for count in (1, 2):
         with Image.new('RGB', (96, 64), 'white') as image:
             draw = ImageDraw.Draw(image)
@@ -320,6 +454,7 @@ def multiple_images_plan(model_id, max_tokens, prepare):
             output = BytesIO()
             image.save(output, format='PNG')
         media_type, prepared = prepare(output.getvalue())
+        prepared_images.append((media_type, prepared))
         urls.append('data:' + media_type + ';base64,' + base64.b64encode(prepared).decode('ascii'))
     prompt = ('Count the black circles in each image. Return only JSON {"value": N}, '
               'where N is ten times the count in the first image plus the count in the second image.')
@@ -329,11 +464,13 @@ def multiple_images_plan(model_id, max_tokens, prepare):
             {'type': 'text', 'text': prompt},
             *[{'type': 'image_url', 'image_url': {'url': url}} for url in images]]}]}
 
+    if build is not None:
+        return (build(prompt, prepared_images), 12), (build(prompt, list(reversed(prepared_images))), 21)
     return (body(urls), 12), (body(list(reversed(urls))), 21)
 
 
-async def probe_local_multiple_images_pair(transport, endpoint, first, second, max_requests, timeout_s):
-    """Prove ordered two-image input with two independently checked, image-dependent answers.
+def multiple_images_probe_cases(first, second):
+    """Validate the final ordered bodies before constructing response verifiers.
 
     Challenges are caller-supplied `(body, expected_integer)` pairs as for the single-image probe. Each body
     contains exactly two distinct images and the second swaps their order without changing text or settings.
@@ -356,15 +493,14 @@ async def probe_local_multiple_images_pair(transport, endpoint, first, second, m
 
     def verifier(answer):
         def verify(response):
-            return verify_probe_reply(response, 'openai_compatible', answer)
+            return probe_verdict(response, 'openai_compatible', answer)
         return verify
 
-    cases = {'first': (first[0], verifier(expected[0])), 'second': (second[0], verifier(expected[1]))}
+    return {'first': (first[0], verifier(expected[0])), 'second': (second[0], verifier(expected[1]))}
+
+
+async def probe_local_multiple_images_pair(transport, endpoint, first, second, max_requests, timeout_s):
+    """Run caller-supplied ordered challenges after validating their controlled difference."""
+    cases = multiple_images_probe_cases(first, second)
     result = await probe_backend(transport, endpoint, cases, max_requests, timeout_s)
-    evidence = tuple({'challenge': name, 'status':
-        ('complete' if result.capabilities[name] else 'negative') if name in result.capabilities else
-        'failed' if name in result.errors and result.errors[name] != 'PROBE_INCOMPLETE' else 'incomplete'}
-        for name in cases)
-    if result.status != 'complete':
-        return ProbeResult(result.status, {}, result.errors, evidence)
-    return ProbeResult('complete', {'multiple_images': all(result.capabilities.values())}, result.errors, evidence)
+    return summarize_probe_group(result, cases, 'multiple_images')

@@ -460,7 +460,7 @@ def test_alias_probe_failure_evidence_persists_before_generation(k2_env, monkeyp
 
     monkeypatch.setattr(ModelTransport, '__init__', init)
     result = asyncio.run(build_aliases(k2_env.store, k2_env.config, **inputs()))
-    code = {'negative': 'CAPABILITY_UNAVAILABLE', 'failed': 'PROBE_FAILED', 'incomplete': 'PROBE_INCOMPLETE'}[failure]
+    code = {'negative': 'PROBE_MALFORMED', 'failed': 'PROBE_FAILED', 'incomplete': 'PROBE_INCOMPLETE'}[failure]
     assert set(result['report']['failed'].values()) == {code} and result['rows']['aliases'] == []
     assert len(seen) == (1 if failure == 'incomplete' else 2)
     with k2_env.store.writer() as writer:
