@@ -4,6 +4,14 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
 
 ## Current state
 
+- **2026-11-20 02:5x: T-017 is blocked on the user.**
+  - **J4a5 (after T017-FIX2):** the live fix works. llama.cpp accepts the bounded schema; the planner retry differs only in its seed, and `ragoff-02`'s planner passed on the retry.
+  - **Planner sampling experiment (decision 186):** two variants, 0.7/0.8/20 and 1.0/0.95/40, against the 0.2/0.9/40 baseline. Neither makes `nomatch-01` or `edit-local-04` pass. The 4B dev planner keeps breaking cross-field invariants: a knowledge need for an unlinked candidate, a relation or edit target naming an undeclared entity, and with hotter sampling also non-verbatim mentions (R-001 refuses them, as designed). This is a 3-case smoke, not a fit (R-020).
+  - **G1:** `ragoff-02`'s writer reply still lacks its final `}`; the draft and the reseeded repair are byte-identical.
+  - **Consequence:** J4 cannot be green, so the decision 189 chain (full `kb sync`, full pilot) stops here.
+  - **Open for the user:** the G1 route (an admin output schema, or JSON mode); a larger dev planner and writer model, or accepting these golden failures as a dev-model limit; whether MULTI-SOURCE MS-1 may start while T-017 waits.
+  - **Noticed:** the trace keeps only `INVARIANT_INVALID` for a refused planner reply, not which rule refused it.
+
 - **2026-11-20 02:xx: T017-FIX2 integrated on main.**
   - The S2 planner retry and the S5 writer repair now change only the seed (`attempt_seed`).
   - The planner gets a reply schema bounded to the shortlist it was sent.
