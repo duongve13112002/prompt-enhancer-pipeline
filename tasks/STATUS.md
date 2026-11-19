@@ -4,6 +4,12 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
 
 ## Current state
 
+- **2026-11-20 status for the returning user: nothing is running; every next step waits for the user.**
+  - main = `7bb9f74`, pushed; CI 39 green; the repository is private again. No workers and no worktrees run; the GPU is free (0 MiB).
+  - **S42 tooling fix integrated (`7bb9f74`):** `ci_window` views a run again when `gh run view` answers HTTP 404 right after dispatch, only before the run is first seen and within `dispatch_lookup_timeout_seconds`. Gemini Flash diff-only review PASS. Noticed, not fixed: `gh run cancel` and `gh run list` could meet the same transient 404.
+  - **Waiting for the user:** the T-017 questions in the 02:5x and 00:0x/00:xx rows below (G1 route, dev model size, MS-1 start, golden retrieval switch, S1 code in the envelope, `degraded` in a grounding case, a "not reached" retrieval state), and the PM decisions pending user review in those rows.
+  - Cleanup pending: `.tmp/worktrees/T-026-retest3` could not be removed ("link or left partially"); not forced.
+
 - **2026-11-20 02:5x: T-017 is blocked on the user.**
   - **J4a5 (after T017-FIX2):** the live fix works. llama.cpp accepts the bounded schema; the planner retry differs only in its seed, and `ragoff-02`'s planner passed on the retry.
   - **Planner sampling experiment (decision 186):** two variants, 0.7/0.8/20 and 1.0/0.95/40, against the 0.2/0.9/40 baseline. Neither makes `nomatch-01` or `edit-local-04` pass. The 4B dev planner keeps breaking cross-field invariants: a knowledge need for an unlinked candidate, a relation or edit target naming an undeclared entity, and with hotter sampling also non-verbatim mentions (R-001 refuses them, as designed). This is a 3-case smoke, not a fit (R-020).
