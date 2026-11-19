@@ -28,6 +28,7 @@ import posixpath
 import re
 import sys
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -112,10 +113,26 @@ def manifest_path(approvals: Path, run: str) -> Path:
 
 def approvals_dir(root: Path, text: str | None) -> Path:
     base = (root / ".tmp" / "pm-state" / "approvals") if text is None else Path(text)
+    # `.secrets/` is refused lexically before anything resolves the path (AGENTS.md section 6: never touched).
+    if _names_secrets(root, Path(os.path.abspath(base))):
+        raise GateError("the approvals directory may not lie under .secrets/")
     resolved = base.resolve()
     if not resolved.is_relative_to(root.resolve()):
         raise GateError(f"approvals directory {resolved} is outside the project root")
+    if _names_secrets(root, resolved):  # a link that leads into .secrets/
+        raise GateError("the approvals directory may not lie under .secrets/")
     return resolved
+
+
+def _names_secrets(root: Path, path: Path) -> bool:
+    for base in {Path(os.path.abspath(root)), root.resolve()}:
+        try:
+            parts = path.relative_to(base).parts
+        except ValueError:
+            continue
+        if parts and os.path.normcase(parts[0]) == os.path.normcase(".secrets"):
+            return True
+    return False
 
 
 def canonical_text(profile: str) -> str:
@@ -161,7 +178,21 @@ def resolve_values(root: Path, profile: str) -> dict[str, Any]:
         resolved = load_runtime_settings(profile, root)
     except Exception as exc:  # ConfigurationError and friends: the profile itself is the problem
         raise GateError(f"profile {profile} does not load: {type(exc).__name__}: {exc}") from exc
+    # A loader returns either a plain mapping (a project whose loader has no defaults to fill) or a settings object.
+    if isinstance(resolved, Mapping):
+        try:  # the round trip makes the stored and compared values plain JSON; a date or set cannot be compared
+            plain = json.loads(json.dumps(resolved, sort_keys=True, allow_nan=False, default=_mapping_as_dict))
+        except (TypeError, ValueError) as exc:
+            raise GateError(f"profile {profile} holds a value that is not plain JSON: {exc}") from exc
+        return flatten(plain)
     return flatten(resolved.settings.model_dump(mode="json"))
+
+
+def _mapping_as_dict(value: Any) -> dict[Any, Any]:
+    """`json.dumps` hook: any mapping serializes as an object; every other unknown type stays an error."""
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def read_manifest(path: Path) -> dict[str, Any]:

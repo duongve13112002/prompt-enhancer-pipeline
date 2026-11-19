@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import json
+import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -21,7 +24,7 @@ import project_config  # noqa: E402
 
 TOOLS = Path(__file__).resolve().parents[1]
 REPO = TOOLS.parents[1]
-PROFILE = "configs/evaluation/r3-gen-8gb.example.yaml"
+PROFILE = "configs/enhancer.dev.example.yaml"
 
 
 def load() -> ModuleType:
@@ -203,6 +206,80 @@ def test_bad_arguments_and_paths_are_gate_errors_not_tracebacks(
         assert gate.main([*outside, "check", "--run", "r", "--profile", "p"]) == 2
     record(area)
     assert cli(area, "approve", "--run", "r1", "--key", "/a", "--to", "{bad", "--source", "s") == 2
+
+
+def test_a_loader_that_returns_a_plain_mapping_is_flattened(area: Path, monkeypatch) -> None:
+    """A project whose loader has no defaults to fill returns the merged configuration as a mapping."""
+    module = ModuleType("mapping_loader_t")
+    module.load_runtime_settings = lambda profile, root: {"vlm": {"route": "a", "n": 3}, "paths": ["p"]}  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "mapping_loader_t", module)
+    binding = dataclasses.replace(
+        project_config.load(), runtime_config_module="mapping_loader_t", runtime_config_loader="load_runtime_settings"
+    )
+    monkeypatch.setattr(gate.project_config, "load", lambda root: binding)
+    assert gate.resolve_values(REPO, "p.yaml") == {"/vlm/route": "a", "/vlm/n": 3, "/paths": ["p"]}
+
+
+def _bind_loader(monkeypatch, result: Any) -> None:
+    module = ModuleType("mapping_loader_t")
+    module.load_runtime_settings = lambda profile, root: result  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "mapping_loader_t", module)
+    binding = dataclasses.replace(
+        project_config.load(), runtime_config_module="mapping_loader_t", runtime_config_loader="load_runtime_settings"
+    )
+    monkeypatch.setattr(gate.project_config, "load", lambda root: binding)
+
+
+def test_any_mapping_is_reduced_to_plain_json_values(monkeypatch) -> None:
+    """A read-only mapping is a mapping; a tuple becomes the list a stored manifest holds, so record equals check."""
+    from types import MappingProxyType
+
+    _bind_loader(monkeypatch, MappingProxyType({"gpus": (0, 1), "nested": MappingProxyType({"on": True})}))
+    assert gate.resolve_values(REPO, "p.yaml") == {"/gpus": [0, 1], "/nested/on": True}
+
+
+@pytest.mark.parametrize("value", [__import__("datetime").date(2026, 11, 19), {1, 2}, float("nan")])
+def test_a_value_that_is_not_plain_json_is_a_gate_error_not_a_traceback(monkeypatch, value) -> None:
+    """YAML can load a date, and Python a set or NaN: none compares reliably, so the gate refuses with exit 2."""
+    _bind_loader(monkeypatch, {"when": value})
+    with pytest.raises(gate.GateError, match="not plain JSON"):
+        gate.resolve_values(REPO, "p.yaml")
+
+
+def test_an_approvals_directory_under_secrets_is_refused_before_it_resolves(area: Path, monkeypatch) -> None:
+    """Checked in a scratch root: the refusal is lexical, so `resolve` is never reached for a `.secrets` path."""
+    real_resolve = Path.resolve
+
+    def no_resolve(self, strict=False):
+        assert ".secrets" not in str(self).lower(), "resolve was reached for a .secrets path"
+        return real_resolve(self, strict=strict)
+
+    spellings = [area / ".secrets" / "a", area / "x" / ".." / ".secrets"]
+    if os.path.normcase("A") == "a":  # a case-folding file system: `.SECRETS` is the same directory
+        spellings.append(area / ".SECRETS" / "a")
+    for spelling in spellings:
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "resolve", no_resolve)
+            with pytest.raises(gate.GateError, match=".secrets"):
+                gate.approvals_dir(area, str(spelling))
+    assert gate.approvals_dir(area, str(area / "secrets-not")) == (area / "secrets-not").resolve()
+
+
+def test_an_approvals_directory_reached_through_a_link_into_secrets_is_refused(area: Path) -> None:
+    (area / ".secrets").mkdir()  # a scratch stand-in, never the project's `.secrets/`
+    link = area / "approvals"
+    if os.name == "nt":
+        made = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(area / ".secrets")],
+                              capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if made.returncode != 0:
+            pytest.skip("a junction cannot be created here")
+    else:
+        os.symlink(area / ".secrets", link, target_is_directory=True)
+    try:
+        with pytest.raises(gate.GateError, match=".secrets"):
+            gate.approvals_dir(area, str(link))
+    finally:
+        os.rmdir(link) if os.name == "nt" else os.unlink(link)
 
 
 def test_an_unloadable_profile_is_exit_2(area: Path) -> None:
