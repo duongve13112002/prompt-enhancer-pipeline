@@ -4,10 +4,15 @@ from copy import deepcopy
 from functools import partial
 from pathlib import Path
 import shutil
+import sys
 
 import pytest
 import yaml
 from hypothesis import settings
+
+# CI shard selection (decision 168): inert unless PE_SHARD and PE_SHARDS are set; see tools/agent-workflow/ci_shard.py.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools' / 'agent-workflow'))
+from ci_shard import pytest_collection_modifyitems, pytest_report_collectionfinish  # noqa: E402,F401 - pytest hooks
 
 # Shared machines cannot provide a stable per-example wall-clock deadline.
 settings.register_profile('pipeline_cpu', deadline=None)

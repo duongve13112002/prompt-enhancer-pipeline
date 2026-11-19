@@ -1,6 +1,10 @@
 # CI of R-025 (docs/ci.md, T-022). Started only by manual dispatch, from tools/agent-workflow/ci_window.py inside the
 # visibility window, so a push never starts a run while the repository is private (decisions 26, 112).
-# Both legs run every test; nothing is skipped, deselected or allowed to fail (T-022 PM approval point 2).
+# Together the matrix jobs run every test of both suites on both systems; nothing is skipped, deselected by a name
+# or allowed to fail (T-022 PM approval point 2). Decision 168 splits the slow suites into shards so a window ends
+# sooner: each job runs whole test files chosen by tools/agent-workflow/ci_shard.py from PE_SHARD and PE_SHARDS, and
+# tools/agent-workflow/tests/test_ci_shard.py (it runs in the tooling jobs) proves over the real collection of both
+# suites that their shards partition the files; every job uses the same selector code.
 # Action pins: full commit SHAs of the latest releases, read by the PM from the official repositories with
 # `gh api repos/actions/<name>/releases/latest` and `.../git/ref/tags/<tag>` on 2026-11-15 16:12 (docs/ci.md);
 # ci_window.py refuses to open while any `uses:` is not a full SHA.
@@ -14,17 +18,28 @@ permissions:
 
 jobs:
   test:
-    name: tests (${{ matrix.os }}, ${{ matrix.suite }})
+    name: tests (${{ matrix.os }}, ${{ matrix.suite }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        # One job per suite, in parallel: run 43820753462 ran both suites in one Windows job, and the pipeline suite
-        # alone took 23 min 27 s there, so the 30 min limit cancelled the tooling suite after 1018 tests in 355 s.
-        suite: [pipeline, tooling]
+        # One entry per job: every shard 1..shards of each (os, suite) pair must be listed, or its files go untested
+        # (test_ci_shard.py checks this). Counts follow CI window 25 (run 44415756388): Windows pipeline 51 min,
+        # Ubuntu pipeline 20 min, Windows tooling 19 min, Ubuntu tooling 6 min; the committed weight table
+        # (ci_shard_weights.json) forecasts the slowest shard, see docs/ci.md. Run 43820753462 had shown that the
+        # two suites cannot share one job (the 30 min limit cancelled the tooling suite).
+        include:
+          - {os: ubuntu-latest, suite: pipeline, shard: 1, shards: 2}
+          - {os: ubuntu-latest, suite: pipeline, shard: 2, shards: 2}
+          - {os: ubuntu-latest, suite: tooling, shard: 1, shards: 1}
+          - {os: windows-latest, suite: pipeline, shard: 1, shards: 4}
+          - {os: windows-latest, suite: pipeline, shard: 2, shards: 4}
+          - {os: windows-latest, suite: pipeline, shard: 3, shards: 4}
+          - {os: windows-latest, suite: pipeline, shard: 4, shards: 4}
+          - {os: windows-latest, suite: tooling, shard: 1, shards: 2}
+          - {os: windows-latest, suite: tooling, shard: 2, shards: 2}
     runs-on: ${{ matrix.os }}
-    # Below ci_window_config.json run_timeout_seconds (4200 s). PM value pending user review: the Windows tooling
-    # suite is estimated at about 37 min from that partial run (6360 tests at its rate), so 60 min leaves a margin.
+    # Below ci_window_config.json run_timeout_seconds (4200 s). PM value pending user review: kept from before the
+    # sharding because no sharded run has been measured yet; lower it, with run_timeout_seconds, after window 26.
     timeout-minutes: 60
     env:
       PYTHONNOUSERSITE: "1"
@@ -40,28 +55,41 @@ jobs:
           python-version: "3.12"
       - name: Install the CPU profile (pyproject dependencies and the test extra; no GPU package)
         run: python -m pip install ".[test]"
-      # Each job runs exactly the suite its matrix entry names; together the four jobs run both suites on both systems.
-      # A suite value matching no step fails here, so a misspelled entry can never pass without running tests
+      # Each job runs exactly the suite and shard its matrix entry names; together the jobs run both suites on both
+      # systems. A suite value matching no step fails here, so a misspelled entry can never pass without running tests
       # (S42-ci5 review F1). The value comes in through the environment, not into the script text.
       - name: Refuse an unknown suite
         if: ${{ matrix.suite != 'pipeline' && matrix.suite != 'tooling' }}
         env:
           SUITE: ${{ matrix.suite }}
         run: python -c "import os, sys; sys.exit('unknown matrix suite ' + os.environ['SUITE'])"
+      # A missing, malformed, zero, negative or out-of-range shard value fails the job before any test runs; the
+      # collection hook refuses the same values again, and an empty shard, so none can pass green with no tests.
+      - name: Refuse a malformed shard
+        env:
+          PE_SHARD: ${{ matrix.shard }}
+          PE_SHARDS: ${{ matrix.shards }}
+        run: python tools/agent-workflow/ci_shard.py check
       - name: Pipeline suite
         if: ${{ matrix.suite == 'pipeline' }}
         env:
           PYTHONPATH: src
+          PE_SHARD: ${{ matrix.shard }}
+          PE_SHARDS: ${{ matrix.shards }}
         run: python -B -X faulthandler -m pytest -q -p no:cacheprovider tests
       # S42-ci7: CI window 7 saw one child abort at interpreter exit ("terminate called without an active exception")
       # after an in-memory Parquet read. The abort was rare upstream (2/300 to 38/3000 processes), so this Linux-only
       # opt-in check spawns 1000 short children that each read a manifest and exit; the default suite skips it.
+      # It names one test and carries no shard variable, and only Ubuntu pipeline shard 1 runs it: exactly once.
       - name: Exit stress after an in-memory Parquet read (Linux)
-        if: ${{ matrix.suite == 'pipeline' && runner.os == 'Linux' }}
+        if: ${{ matrix.suite == 'pipeline' && runner.os == 'Linux' && matrix.shard == 1 }}
         env:
           PYTHONPATH: src
           PE_EXIT_STRESS: "1000"
         run: python -B -X faulthandler -m pytest -q -p no:cacheprovider tests/test_storage_concurrency.py::test_child_reading_a_manifest_exits_cleanly_many_times
       - name: Tooling suite
         if: ${{ matrix.suite == 'tooling' }}
+        env:
+          PE_SHARD: ${{ matrix.shard }}
+          PE_SHARDS: ${{ matrix.shards }}
         run: python -B -X faulthandler -m pytest -q -p no:cacheprovider tools/agent-workflow/tests

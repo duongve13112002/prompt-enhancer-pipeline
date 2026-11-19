@@ -11,7 +11,7 @@ from prompt_enhancer.storage import StorageError
 
 
 @pytest.mark.parametrize(('role', 'stage'), [('info_assessor', 'k2_naming'), ('folder_namer', 'k2_naming'),
-    ('observer', 'k2_observation'), ('card_builder', 'k3'), ('alias_generator', 'k4')])
+    ('observer', 'k2_observation'), ('card_builder', 'k3')])
 def test_model_failures_have_no_text_in_reports_state_or_cli(k2_env, monkeypatch, capsys, role, stage):
     from prompt_enhancer import __main__ as cli
     marker = 'MODEL_TEXT_MUST_NEVER_ENTER_DIAGNOSTICS'

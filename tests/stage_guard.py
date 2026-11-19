@@ -105,7 +105,8 @@ STAGES = {
         ('storage.identity', 'normalise_name'), ('storage.identity', 'canonical_json')]),
     'kb_sync': ('kb_sync', 'KB_SYNC_REVISION', [
         ('kb_sync', 'retain_images'), ('kb_sync', 'concept_texts'), ('kb_sync', '_checkpoint'),
-        ('kb_sync', 'sync_knowledge')]),
+        ('kb_sync', 'sync_knowledge'), ('kb_sync', 'alias_failures'), ('kb_sync', 'require_per_concept'),
+        ('kb_sync', '_PER_CONCEPT_CODES')]),  # which K4 failures publish and what the snapshot records (decision 165)
 }
 
 
@@ -164,7 +165,7 @@ LEFT_OUT = [
                            'ServingIndex.search']),
     ('kb_sync', DECLARED, ['KB_SYNC_REVISION']),
     ('kb_sync', KEY, ['LAYOUT', 'ROLES', 'sync_identity']),
-    ('kb_sync', ERRORS, ['require_success']),
+    ('kb_sync', ERRORS, ['require_success', '_CLOSED_CODES', '_closed_code']),
     ('model_client', DECLARED, ['MODEL_CALL_REVISION']),
     ('model_client', ERRORS, ['MODEL_CODES', 'safe_model_code', 'safe_probe_events', 'ModelCallError.__init__',
                               'ProbeCasesMissing']),

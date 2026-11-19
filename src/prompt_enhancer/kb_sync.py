@@ -20,6 +20,7 @@ from .k5_index import ServingIndex, _tools, build_index
 from .profile_prompt import load_prompt
 from .model_client import MODEL_CALL_REVISION, ModelClientRun, MODEL_CODES
 from .storage import StorageError, open_knowledge_store
+from .storage.identity import is_concept_id
 from .storage.store import RETAINED_IMAGE_MARKER
 from .storage.tables import SNAPSHOT_TABLES
 
@@ -29,7 +30,7 @@ LAYOUT = 'kb-sync-v2-retained-images'
 # artifact-bound: declared revision of the sync assembly that shapes a snapshot (KBS-S3-1); it enters the sync
 # identity with the stage revisions, so a stage edit or this module's edit replans the sync but changes no stage key.
 # Bump it with any edit to a function its guard pins (tests/test_stage_revisions.py).
-KB_SYNC_REVISION = 'kb-sync-1'
+KB_SYNC_REVISION = 'kb-sync-2'
 ROLES = ('info_assessor', 'folder_namer', 'observer', 'card_builder', 'alias_generator')
 
 
@@ -67,14 +68,45 @@ def retain_images(builder, source, rows, limits):
     return seen
 
 
+# protocol-bound: the structural codes a recorded failure may carry; anything else is reported as MODEL_CALL_FAILED.
+_CLOSED_CODES = MODEL_CODES | {'SOURCE_CHANGED', 'SOURCE_READ_FAILED'}
+
+
+def _closed_code(code):
+    return code if type(code) is str and code in _CLOSED_CODES else 'MODEL_CALL_FAILED'
+
+
 def require_success(stage, result):
     """Partial rows cannot substitute for successful completion of a model stage."""
     failed = result['report']['failed']
     if failed:
-        codes = Counter(code if type(code) is str and code in MODEL_CODES | {'SOURCE_CHANGED', 'SOURCE_READ_FAILED'}
-                        else 'MODEL_CALL_FAILED' for code in failed.values())
+        codes = Counter(_closed_code(code) for code in failed.values())
         summary = ','.join(f'{code}={count}' for code, count in sorted(codes.items()))
         raise StorageError(f'{stage}: STAGE_FAILED: count={len(failed)}; codes={summary}')
+
+
+# protocol-bound: the K4 failure codes that belong to one concept's request or reply (decision 165). Every other code
+# (configuration, client state, capability, probe, budget) is the same for every concept, so it still blocks the
+# publish: a run-level failure must not replace a snapshot that has its aliases with one that has none.
+_PER_CONCEPT_CODES = frozenset(('SCHEMA_INVALID', 'INCOMPLETE_OR_REFUSED', 'MODEL_CALL_INVALID', 'MODEL_CALL_FAILED',
+                                'HTTP_ERROR', 'INPUT_INVALID'))
+
+
+def require_per_concept(result):
+    """K4 under decision 165: per-concept failures publish without that concept's generated aliases; a single
+    run-level code fails the stage as before."""
+    if any(_closed_code(code) not in _PER_CONCEPT_CODES for code in result['report']['failed'].values()):
+        require_success('k4', result)
+
+
+def alias_failures(failed):
+    """Structural record of the failed K4 keys (decision 165): concept ids and closed codes, never model text (R-026).
+
+    `concept_ids` holds at most one id per concept, so it is bounded by the snapshot's own concept count; the
+    snapshot summary keeps only `count` and `codes` (bounded by the closed code set)."""
+    codes = Counter(_closed_code(code) for code in failed.values())
+    return {'count': len(failed), 'codes': dict(sorted(codes.items())),
+            'concept_ids': sorted(key for key in failed if is_concept_id(key))}
 
 
 def concept_texts(rows):
@@ -172,7 +204,9 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
         current = store.current()
         if current is not None:
             summary = store._registry()[current[0]]['source_scan_summary']
-            if summary.get('sync_identity') == identity and summary.get('sync_layout') == LAYOUT:
+            # A snapshot that records failed K4 keys is never "unchanged": the next sync retries them (decision 165).
+            if (summary.get('sync_identity') == identity and summary.get('sync_layout') == LAYOUT
+                    and 'k4_failed' not in summary):
                 store.verify_snapshot(*current)
                 _previous_for_plan(store, inspect=lambda pin: ServingIndex(pin, config))
                 return {'status': 'unchanged', 'snapshot_id': current[0], 'report': scanned['report']}
@@ -212,8 +246,14 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
                        overrides=named['effective_overrides'], client=client, writer=writer))
         rows.update(cards['rows'])
         handoff['concepts'] = rows['concepts']
-        aliases = accept('k4', await build_aliases(store, config, handoff, cards=rows['cards'],
-                         overrides=named['effective_overrides'], client=client, writer=writer))
+        # Decision 165: a failed alias key does not block the publish; its generated rows are absent (rows come from
+        # this run's replies only) and the failure is recorded. Every other stage, and a run-level K4 code, still blocks.
+        aliases = await build_aliases(store, config, handoff, cards=rows['cards'],
+                                      overrides=named['effective_overrides'], client=client, writer=writer)
+        require_per_concept(aliases)
+        reports['k4'] = aliases['report']
+        artifacts.update(aliases.get('artifacts', []))
+        failures = alias_failures(aliases['report']['failed'])
         rows.update(aliases['rows'])
         items = concept_texts(rows)
         text = accept('k1_text', await embed_concept_texts(store, config, items, transport=transport, writer=writer))
@@ -228,7 +268,13 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
         index = build_index(builder, config)
         if index.get('validated') is not True:
             raise StorageError('k5: VALIDATION_REQUIRED')
-        snapshot_id = builder.finish(source_scan_summary={'sync_layout': LAYOUT, 'sync_identity': identity})
+        summary = {'sync_layout': LAYOUT, 'sync_identity': identity}
+        if failures['count']:
+            summary['k4_failed'] = {'count': failures['count'], 'codes': failures['codes']}
+        snapshot_id = builder.finish(source_scan_summary=summary)
         writer.publish(snapshot_id)
-        return {'status': 'published', 'snapshot_id': snapshot_id, 'report': scanned['report'],
-                'stages': reports, 'index': index}
+        result = {'status': 'published', 'snapshot_id': snapshot_id, 'report': scanned['report'],
+                  'stages': reports, 'index': index}
+        if failures['count']:
+            result['alias_failures'] = failures
+        return result

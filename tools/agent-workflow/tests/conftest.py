@@ -31,6 +31,10 @@ settings.load_profile("ci")
 
 import live_state_guard as lsg  # noqa: E402 - sits beside this file; needs the sys.path entry pytest adds
 
+# CI shard selection (decision 168): inert unless PE_SHARD and PE_SHARDS are set; see tools/agent-workflow/ci_shard.py.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from ci_shard import pytest_collection_modifyitems, pytest_report_collectionfinish  # noqa: E402,F401 - pytest hooks
+
 # Live-state guard (decision 72): no test reads or writes the live PM state directory. Installed at import, before any
 # test module is collected, so import-time reads are covered too.
 lsg.install()

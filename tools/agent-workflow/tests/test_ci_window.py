@@ -973,8 +973,10 @@ def test_workflow_is_dispatch_only_least_privilege_and_runs_both_suites() -> Non
     assert data["permissions"] == {"contents": "read"}
     (job,) = data["jobs"].values()
     assert job["strategy"]["fail-fast"] is False
-    assert job["strategy"]["matrix"]["os"] == ["ubuntu-latest", "windows-latest"]
-    assert job["strategy"]["matrix"]["suite"] == ["pipeline", "tooling"]
+    # Decision 168: one matrix entry per job (os, suite, shard, shards); test_ci_shard.py checks the shard lists.
+    entries = job["strategy"]["matrix"]["include"]
+    assert {e["os"] for e in entries} == {"ubuntu-latest", "windows-latest"}
+    assert {e["suite"] for e in entries} == {"pipeline", "tooling"}
     assert job["timeout-minutes"] * 60 < cw.load(cw.DEFAULT_CONFIG)["run_timeout_seconds"]
     assert "continue-on-error" not in text and "--deselect" not in text and " -k " not in text
     runs = [s.get("run", "") for s in job["steps"]]
@@ -987,7 +989,7 @@ def test_workflow_is_dispatch_only_least_privilege_and_runs_both_suites() -> Non
         "tools/agent-workflow/tests": "${{ matrix.suite == 'tooling' }}",
         # S42-ci7: the opt-in exit stress check runs one named test (no -k), only in the Linux pipeline job.
         "tests/test_storage_concurrency.py::test_child_reading_a_manifest_exits_cleanly_many_times": (
-            "${{ matrix.suite == 'pipeline' && runner.os == 'Linux' }}"
+            "${{ matrix.suite == 'pipeline' && runner.os == 'Linux' && matrix.shard == 1 }}"
         ),
     }
     (stress,) = [s for s in job["steps"] if s.get("name") == "Exit stress after an in-memory Parquet read (Linux)"]
@@ -1015,7 +1017,7 @@ def test_workflow_is_dispatch_only_least_privilege_and_runs_both_suites() -> Non
     assert names.index("Refuse an unknown suite") < names.index("Pipeline suite") < names.index("Tooling suite")
     assert any('pip install ".[test]"' in r for r in runs)
     step_env = [s.get("env", {}) for s in job["steps"]]
-    assert {"PYTHONPATH": "src"} in step_env
+    assert any(env.get("PYTHONPATH") == "src" for env in step_env)
     uses = [s["uses"] for s in job["steps"] if "uses" in s]
     assert uses and all(u.split("@")[0] in ("actions/checkout", "actions/setup-python") for u in uses)
     assert all(cw.PINNED.search(u) for u in uses)  # full commit SHAs (docs/ci.md records their source)

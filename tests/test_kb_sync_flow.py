@@ -69,49 +69,12 @@ def test_full_sync_plan_is_read_only(k2_env):
     assert inventory(k2_env.store.root) == before and result['status'] == 'planned'
 
 
-@pytest.mark.parametrize('existing', [False, True])
-def test_sync_refuses_k4_failure_with_partial_aliases(k2_env, monkeypatch, existing):
-    folder(k2_env, 'f', 'Name\ndescription')
-    folder(k2_env, 'peer', 'Other\npeer description')
-    server = SyncServer()
-    if existing:
-        invoke(k2_env, server)
-    current = k2_env.store.current()
-    pin = k2_env.store.pin() if existing else None
-    old_index = ServingIndex(pin, k2_env.config) if pin else None
-    (k2_env.source / 'kb_overrides.yaml').write_text('Name:\n  aliases: [author]\n', encoding='utf-8')
-    server.fail_role = 'alias_generator'
-    server.fail_concept = 'Name'
-    captured = []
-    original = module.build_aliases
-
-    async def capture(*args, **kwargs):
-        result = await original(*args, **kwargs)
-        captured.append(result)
-        return result
-
-    monkeypatch.setattr(module, 'build_aliases', capture)
-    # Change a semantic input so a previous valid generation cannot mask the failure.
-    (k2_env.source / 'f/info.txt').write_text('Name\nchanged description', encoding='utf-8')
-    monkeypatch.setattr(SnapshotBuilder, 'finish', lambda *a, **k: pytest.fail('finish on failed K4'))
-    monkeypatch.setattr(Writer, 'publish', lambda *a, **k: pytest.fail('publish on failed K4'))
-    try:
-        with pytest.raises(StorageError, match='^k4: STAGE_FAILED: count=1; codes=SCHEMA_INVALID=1$'):
-            invoke(k2_env, server)
-        assert {row['origin'] for row in captured[0]['rows']['aliases']} == {'author', 'generated'}
-        if old_index:
-            assert old_index.exact('Name') == [concept_id('Name')]
-    finally:
-        if pin:
-            pin.release()
-    assert k2_env.store.current() == current
-
-
-@pytest.mark.parametrize('stage', ['k1_image', 'k2_naming', 'k2_observation', 'k3', 'k4', 'k1_text'])
+# A failed K4 alias key no longer blocks the publish (decision 165): tests/test_kb_sync_alias_failure.py.
+@pytest.mark.parametrize('stage', ['k1_image', 'k2_naming', 'k2_observation', 'k3', 'k1_text'])
 def test_every_failed_stage_blocks_publication(k2_env, monkeypatch, stage):
     folder(k2_env, 'f', 'Name\ndescription')
     function = {'k1_image': 'embed_images', 'k2_naming': 'name_folders', 'k2_observation': 'observe_images',
-                'k3': 'build_cards', 'k4': 'build_aliases', 'k1_text': 'embed_concept_texts'}[stage]
+                'k3': 'build_cards', 'k1_text': 'embed_concept_texts'}[stage]
     original = getattr(module, function)
 
     async def fail(*args, **kwargs):

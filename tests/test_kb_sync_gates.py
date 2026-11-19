@@ -156,11 +156,12 @@ def test_each_sync_read_leaf_refused_before_k0(k2_env, monkeypatch, failure):
 
 
 @pytest.mark.parametrize('partial', [False, True])
-def test_sync_refuses_k4_failure_with_partial_aliases(partial):
+def test_require_success_refuses_partial_rows(partial):
+    # K4 no longer goes through it (decision 165); the other model stages do, partial rows or not.
     result = {'report': {'failed': {'trusted-id': 'SCHEMA_INVALID'}},
               'rows': {'aliases': [{'origin': 'author'}, {'origin': 'generated'}] if partial else []}}
-    with pytest.raises(StorageError, match='^k4: STAGE_FAILED: count=1; codes=SCHEMA_INVALID=1$'):
-        require_success('k4', result)
+    with pytest.raises(StorageError, match='^k3: STAGE_FAILED: count=1; codes=SCHEMA_INVALID=1$'):
+        require_success('k3', result)
 
 
 @pytest.mark.parametrize('schema', ['info_assessment.v0', 'folder_naming.v0', 'observer_reply.v1',

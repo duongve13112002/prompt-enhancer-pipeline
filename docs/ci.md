@@ -13,12 +13,29 @@ Continuous integration runs on GitHub Actions with the latest Ubuntu and Windows
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml):
 
 - **Trigger:** `workflow_dispatch` only, so a push never starts a run while the repository is private. GitHub runs it only "if the workflow file exists on the default branch" (N134).
-- **Matrix:** `ubuntu-latest` and `windows-latest`, times the suites `pipeline` and `tooling`: four parallel jobs, with `fail-fast: false`.
+- **Matrix (decision 168):** `ubuntu-latest` and `windows-latest`, times the suites `pipeline` and `tooling`, each split into shards: nine parallel jobs, with `fail-fast: false`. One `include` entry per job (`os`, `suite`, `shard`, `shards`):
+
+  | Leg | Shards | Why |
+  | --- | --- | --- |
+  | Windows pipeline | 4 | CI window 25 (run 44415756388): 51 min |
+  | Ubuntu pipeline | 2 | 20 min |
+  | Windows tooling | 2 | 19 min |
+  | Ubuntu tooling | 1 | 6 min (already below the target) |
+
   - Each job installs the CPU profile (`pip install ".[test]"`: the pyproject dependencies and the test extra, no GPU package).
-  - It then runs its suite: the pipeline suite (`tests/`, `PYTHONPATH=src`) or the tooling suite (`tools/agent-workflow/tests`).
+  - It then runs its suite exactly as before: the pipeline suite (`tests/`, `PYTHONPATH=src`) or the tooling suite (`tools/agent-workflow/tests`). The shard comes in through the environment, `PE_SHARD` (1-based) and `PE_SHARDS` (count), set from the matrix; the pytest command line does not change.
   - **Why one job per suite:** in run 43820753462 the Windows job ran both suites in turn. The pipeline suite alone took 23 min 27 s, so the 30 min limit cancelled the tooling suite.
-  - **Job limit: 60 min.** This is a PM value pending user review: the Windows tooling suite is estimated at about 37 min, from 1018 tests in 355 s.
-  - Nothing is skipped, deselected or allowed to fail. There is no GPU, no model download, no secret and no paid call.
+  - **Job limit: 60 min,** unchanged. This is a PM value pending user review, kept from before the sharding because no sharded run has been measured yet. After window 26 it can be lowered together with `run_timeout_seconds`.
+  - Nothing is skipped, deselected by name or allowed to fail. There is no GPU, no model download, no secret and no paid call.
+- **Sharding** ([`ci_shard.py`](../tools/agent-workflow/ci_shard.py), weights in [`ci_shard_weights.json`](../tools/agent-workflow/ci_shard_weights.json)):
+  - **Selector:** a pytest collection hook, loaded from each suite's `conftest.py`. It assigns whole test files to shards, longest first by weight to the least-loaded shard, and deselects the tests of the other shards' files (pytest reports the deselected count). Every shard computes the same partition on its own from the set of collected files and the table, so no coordination is needed. Without the variables the hook does nothing and the full suite runs.
+  - **Why a hook and not a file-list script:** the partition is made over the files pytest actually collected, so "every test exactly once" follows from "every file in exactly one shard" with no second file discovery to disagree with pytest, and a shard command line needs no shell-specific quoting on Windows and Linux.
+  - **Weights:** seconds of test time per file, measured once on the dev machine, one pytest process per file (sum of the junit testcase times), 133 pipeline files (2995 s, 7792 tests) and 52 tooling files (1538 s, 6461 tests). A file missing from the table gets `default_weight_s` (the median) and is still assigned; the shard line printed at collection shows how many files used it. Refresh the table after large changes to the suites; only the balance depends on it, never which tests run.
+  - **Forecast of the slowest job** (weight share of the heaviest shard, scaled to the CI window 25 time of the leg; the job time adds checkout, Python setup and `pip install`, which were not measured separately and are assumed to be 2 to 3 min): Windows pipeline, 4 shards, 25 % of 51 min is about 12.8 min; Ubuntu pipeline, 2 shards, 50 % of 20 min is about 10 min (Windows weights, an extrapolation: POSIX-only tests are skipped on Windows, so per-file ratios on Linux can differ); Windows tooling, 2 shards, 50 % of 19 min is about 9.5 min; Ubuntu tooling, 1 shard, about 6 min (the whole suite, no split). The slowest job is therefore expected near 15 min, against 51 min before. This is a forecast from local weights, not a measurement; window 26 gives the first real figures.
+  - **Refusals:** a malformed, zero, negative, out-of-range or half-set value fails the job in the step "Refuse a malformed shard" (`ci_shard.py check`, which also needs both variables set) and again in the hook; a shard that selects no test fails instead of passing green. The two variables are CI protocol values, not profile settings.
+  - **Proof:** [`test_ci_shard.py`](../tools/agent-workflow/tests/test_ci_shard.py) lives in the tooling suite, so it runs in the tooling jobs only (Windows shard that holds it, and Ubuntu tooling), not in the pipeline jobs. Every job uses the same selector code, so the proof carries over. The test checks, over the real `tests/` and `tools/agent-workflow/tests/` collections (collected once by a child pytest, 1 to 8 shards), that the shards are disjoint and join to the whole, with a Hypothesis property test over file lists, weights and shard counts and child-pytest runs of the hook over synthetic projects, including one session over two directories whose conftests both register the hook (applied once). It also checks that every shard of every suite is in the matrix. At run time no job compares its own count with the other shards'; the per-shard counts of the real suites were summed by hand (decision 168 task file).
+  - **Child processes:** the shard variables are process environment, so a test that starts a child pytest loading a conftest must take its environment from `ci_shard.child_environ()` (a guard test scans both suites for the spawn pattern).
+  - **Exit stress:** the Linux opt-in check runs once, in Ubuntu pipeline shard 1, as a separate step that names one test and carries no shard variable.
 - **Token:** `permissions: contents: read`.
 - **Action pins:** each action is pinned to a full commit SHA, with its tag in a comment.
   - `actions/checkout` v7.0.1 is `3d3c42e5aac5ba805825da76410c181273ba90b1`.
@@ -42,7 +59,7 @@ The orchestrator only, after each accepted and pushed task, or when the user ask
 Settings: [`tools/agent-workflow/ci_window_config.json`](../tools/agent-workflow/ci_window_config.json). Every key is required.
 
 - **Reused from [`guard_config.json`](../tools/agent-workflow/guard_config.json):** the remote and branch (`git_guard.push_remote`, `push_branch`), the forbidden paths (`push_guard.forbidden_*`) and `git_timeout_seconds`.
-- **`run_timeout_seconds` = 4200** was refit after run 43820753462. It is above the 60 min job limit, with a margin for queueing. It is a PM value pending user review.
+- **`run_timeout_seconds` = 4200** was refit after run 43820753462. It is above the 60 min job limit, with a margin for queueing. It is a PM value pending user review. Decision 168 leaves it unchanged: the sharded jobs are expected to take about 15 min, but only a measured window shows the real figure.
 
 Steps, in the order the tool runs them:
 

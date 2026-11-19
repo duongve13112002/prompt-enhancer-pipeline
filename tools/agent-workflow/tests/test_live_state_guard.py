@@ -18,6 +18,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 import live_state_guard as lsg
+from ci_shard import child_environ  # the conftest puts tools/agent-workflow on sys.path
 from conftest import make_link
 
 TESTS = Path(__file__).resolve().parent
@@ -553,7 +554,9 @@ def test_a_test_that_touches_the_live_directory_fails_even_when_it_swallows_the_
     scratch = tmp_path / "child"
     scratch.mkdir()
     (scratch / "test_child.py").write_text(CHILD_TESTS, encoding="utf-8")
-    env = {k: v for k, v in os.environ.items() if k != lsg.STATE_ENV}
+    # The child loads the real conftest (so the CI shard hook): without PE_SHARD/PE_SHARDS it runs its own files, whatever
+    # shard this job has (decision 168; the child would otherwise land in an empty shard).
+    env = {k: v for k, v in child_environ().items() if k != lsg.STATE_ENV}
     env["PYTHONPATH"] = os.pathsep.join([str(TESTS), str(HOOKS)])
     proc = subprocess.run(
         [
