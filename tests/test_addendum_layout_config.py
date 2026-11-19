@@ -133,17 +133,34 @@ def test_none_separator_with_separate_layout_sends_two_system_messages(model_tes
     assert not any('none' in json.dumps(message['content']) for message in body['messages'] if message['role'] == 'system')
 
 
+EXAMPLE_PROFILES = ('configs/enhancer.example.yaml', 'configs/enhancer.dev.example.yaml')
+
+
+def profile_tree(tmp_path):
+    """A project root under `tmp_path` holding copies of the two example profiles only (about 45 KB), so the loader's
+    inside-the-root check holds wherever pytest puts its basetemp (CI: outside the checkout, another drive on
+    Windows)."""
+    tree = tmp_path / 'tree'
+    for relative in EXAMPLE_PROFILES:
+        target = tree / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((ROOT / relative).read_bytes())
+    return tree
+
+
 def child_main(tmp_path, project_root, parent, own):
     """Merge a child profile file over `parent` with the real loader chain (`config._load_chain`, `extends`) and
-    return the child's resolved `vlm.backends.main`."""
+    return the child's resolved `vlm.backends.main`. A relative `parent` names an example profile, copied into the
+    tree; an absolute one is a file the test wrote inside `profile_tree(tmp_path)`."""
     from prompt_enhancer.config import _load_chain
 
-    parent_path = Path(parent) if Path(parent).is_absolute() else ROOT / parent
-    child = tmp_path / 'child.yaml'
+    tree = profile_tree(tmp_path)
+    parent_path = Path(parent) if Path(parent).is_absolute() else tree / parent
+    child = tree / 'child.yaml'
     child.write_text(yaml.safe_dump({'schema_version': yaml.safe_load(parent_path.read_bytes())['schema_version'],
-                                     'extends': os.path.relpath(parent_path, tmp_path).replace(os.sep, '/'),
+                                     'extends': os.path.relpath(parent_path, tree).replace(os.sep, '/'),
                                      'vlm': {'backends': {'main': own}}}), encoding='utf-8')
-    return main(_load_chain(child, ROOT, (), {}))  # the child file lives in this repository's basetemp
+    return main(_load_chain(child, tree, (), {}))
 
 
 def apply_layout(config, resolved):
@@ -190,9 +207,9 @@ def test_a_child_of_the_dev_example_that_keeps_the_separator_cannot_pick_separat
 
 
 def test_a_child_of_a_separate_profile_switches_back_to_joined(model_test_profile, tmp_path, project_root):
-    parent = tmp_path / 'separate.yaml'
-    parent.write_text(yaml.safe_dump({'schema_version': 2, 'extends': os.path.relpath(
-        ROOT / 'configs/enhancer.dev.example.yaml', tmp_path).replace(os.sep, '/'), 'vlm': {'backends': {'main': {
+    parent = profile_tree(tmp_path) / 'separate.yaml'
+    parent.write_text(yaml.safe_dump({'schema_version': 2, 'extends': 'configs/enhancer.dev.example.yaml',
+                                      'vlm': {'backends': {'main': {
             'addendum_layout': 'separate_system_message', 'addendum_separator': 'none'}}}}), encoding='utf-8')
     resolved = child_main(tmp_path, project_root, parent,
                           {'addendum_layout': 'joined_system_message', 'addendum_separator': ' | '})
