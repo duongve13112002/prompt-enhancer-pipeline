@@ -7,7 +7,8 @@ import asyncio
 import math
 from copy import deepcopy
 
-from jsonschema.exceptions import ValidationError
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError, ValidationError
 
 from .config import (ConfigurationError, NO_MEDIA_TYPE, _sentinel, attempt_seed_refusal, image_media_type,
                      resolve_backend_engine, resolve_writer_format)
@@ -29,7 +30,7 @@ from pathlib import Path
 # artifact-bound: declared revision of the shared model-call path (request mapping, image preparation, reply parsing)
 # that every K2, K3 and K4 artifact passes through (KBS-S3-1). It keys those artifacts in place of a hash of module
 # source; bump it in the same change that edits a function its guard pins (tests/test_stage_revisions.py).
-MODEL_CALL_REVISION = 'model-call-4'
+MODEL_CALL_REVISION = 'model-call-5'
 
 # Protocol-bound public failure codes; never expose arbitrary exception/model text.
 MODEL_CODES = frozenset(('MODEL_CALL_FAILED', 'MODEL_CALL_INVALID', 'CAPABILITY_UNAVAILABLE',
@@ -256,10 +257,12 @@ class BoundModelClient:
         self.role_name = role_name
 
     async def call(self, system_prompt, user_text, *, manifest=None, images=(), addendum=None, schema_id=None,
-                   seed=None):
+                   schema=None, seed=None):
         options = {} if addendum is None else {'addendum': addendum}
         if schema_id is not None:
             options['schema_id'] = schema_id
+        if schema is not None:  # T017-FIX2: a per-request schema derived from the base one by tightening bounds
+            options['schema'] = schema
         if seed is not None:  # a retry attempt (decisions 183, 188); absent for attempt 0, so doubles stay valid
             options['seed'] = seed
         return await self.run.client.call(self.role_name, system_prompt, user_text, manifest=manifest, images=images,
@@ -706,10 +709,10 @@ class RoleClient:
         return await self._extend_multiple_images(backend_name, production_pair)
 
     async def call(self, role_name, system_prompt, user_text, *, manifest=None, images=(), addendum=None,
-                   schema_id=None, seed=None):
+                   schema_id=None, schema=None, seed=None):
         try:
             return await self._call(role_name, system_prompt, user_text, manifest=manifest, images=images,
-                                    addendum=addendum, reply_schema=schema_id, seed=seed)
+                                    addendum=addendum, reply_schema=schema_id, sent_schema=schema, seed=seed)
         except ModelCallError as error:
             error.probe_evidence = safe_probe_events(self.probe_events)
             if error.__cause__ is not None or error.code != 'MODEL_CALL_FAILED':
@@ -733,7 +736,7 @@ class RoleClient:
             raise ModelCallError('MODEL_CALL_FAILED: model call could not be completed') from error
 
     async def _call(self, role_name, system_prompt, user_text, *, manifest=None, images=(), addendum=None,
-                    reply_schema=None, seed=None):
+                    reply_schema=None, sent_schema=None, seed=None):
         if seed is not None and (type(seed) is not int or seed < 0):
             raise ValueError('seed must be a non-negative integer')
         if addendum is not None and not isinstance(addendum, bytes):
@@ -741,13 +744,24 @@ class RoleClient:
         addendum_text = None if addendum is None else addendum.decode('utf-8')
         role = deepcopy(self.config['vlm']['roles'][role_name])
         configured_output = deepcopy(role['output'])
+        concrete = (configured_output['schema_id'] not in ('none', 'from_profile_manifest')
+                    and configured_output['format'] != 'from_profile_manifest')
         if reply_schema is not None:
             # T017-FIX: a caller may send a registered, narrower reply schema (the planner's generate schema). It is
             # applied after the probes, so the probe proof key and challenges stay those of the configured role.
-            if (type(reply_schema) is not str or configured_output['schema_id'] in ('none', 'from_profile_manifest')
-                    or configured_output['format'] == 'from_profile_manifest'):
+            if type(reply_schema) is not str or not concrete:
                 raise ValueError('a reply schema override needs a role with a concrete schema')
             self.schemas.get(reply_schema)
+        if sent_schema is not None:
+            # T017-FIX2: the caller's per-request schema, derived from the base schema (`reply_schema`, else the
+            # role's) by tightening bounds. The record keeps the base id; the reply must pass both schemas.
+            if not isinstance(sent_schema, dict) or not concrete or configured_output['validate_response'] is not True:
+                raise ValueError('a sent schema needs a validated role with a concrete schema')
+            try:
+                Draft202012Validator.check_schema(sent_schema)
+            except SchemaError as error:
+                raise ValueError('the sent schema is not a valid JSON Schema') from error
+            sent_schema = deepcopy(sent_schema)
         if role_name == 'writer':
             if manifest is None:
                 raise ModelCallError('writer requires a profile manifest')
@@ -867,6 +881,18 @@ class RoleClient:
                 cloud_schema, schema_hash = self.schemas.get(schema_id)
             if provider == 'openai_compatible' and output['format'] == 'json_schema':
                 schema, schema_hash = self.schemas.get(schema_id)
+            # A derived schema's digest (canonical JSON, `_digest`, like the body) is named after where it went:
+            # `sent_schema_hash` when it is placed in the body, `client_schema_hash` when only the client checks it.
+            schema_hashes = {}
+            if sent_schema is not None:
+                if output['format'] == 'json_schema' and provider == 'anthropic':
+                    cloud_schema = sent_schema
+                    schema_hashes['sent_schema_hash'] = _digest(sent_schema)
+                elif output['format'] == 'json_schema' and provider == 'openai_compatible':
+                    schema = sent_schema
+                    schema_hashes['sent_schema_hash'] = _digest(sent_schema)
+                else:
+                    schema_hashes['client_schema_hash'] = _digest(sent_schema)
             # A retry changes only sampling.seed, on a copy made here: the probe proof key and every artifact key come
             # from the configured `role`, so a result stored on attempt 2 is found by the next run.
             sent_role = role
@@ -903,7 +929,8 @@ class RoleClient:
                                     'sampling': sent_role['sampling'],
                                     'reasoning': role['reasoning'], 'output': configured_output,
                                     'resolved_output': output, 'engine': engine,
-                                    'model_revision': backend['model']['revision']})
+                                    'model_revision': backend['model']['revision'],
+                                    **schema_hashes})
             record = {'role': role_name, 'prompt_id': role['prompt_id'], 'backend': backend_name,
                       'provider': provider, 'engine': engine, 'model_id': backend['model']['id'],
                       'model_revision': backend['model']['revision'], 'schema_id': schema_id,
@@ -911,6 +938,7 @@ class RoleClient:
                       'effective_system_hash': system_hash,
                       'image_roles': [image_role for image_role, _ in images],
                       'warnings': warnings, 'previous_attempts': attempts}
+            record.update(schema_hashes)
             if self._production:
                 record['probe_evidence'] = list(proof.evidence)
             started = time.monotonic()
@@ -969,6 +997,8 @@ class RoleClient:
                     value = strict_json(text)
                 if output['validate_response'] and schema_id != 'none':
                     self.schemas.validate(schema_id, value)
+                if sent_schema is not None:
+                    self.schemas.validate_with(sent_schema, value)
                 record['usage'] = _usage(payload, provider)
                 record['status'] = 'OK'
                 return value, record

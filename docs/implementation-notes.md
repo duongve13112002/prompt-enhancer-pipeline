@@ -129,3 +129,28 @@ Decisions, deviations, assumptions, tradeoffs, rejected alternatives and risks, 
 - **Root cause (experiment):** `ServingIndex.search` scored each shard with a BLAS matrix-vector product, whose bits depend on the shard shape (`-2.2e-17` in one shard and `0.0` in another for the same vector), so ties among equal vectors broke on float noise instead of the primary key and the ranking depended on `index.build.block_rows`. Found by the full suite (`tests/test_k5_properties.py`).
 - **Built:** the score is an elementwise product and a row sum over `np.ascontiguousarray(matrix, dtype=SCORE_DTYPE)` (no copy on today's path), for both metrics; nothing rounded or zeroed; `_matrix` and the stored index unchanged, so no revision change. Tests: the failing example, a bitwise property over shard size, position and count (float vectors, dimension 1 to 300), a memory-layout test, a differential test against the old product within `2*dim*eps*sum|ab|`, tiny-score cases for both metrics. Cost: scoring alone about 13 times slower on 8192x1024, the whole shard step about 2% (`_matrix` dominates); CPU smoke, not a timing claim. Task file: [K5-TIE](../tasks/active/K5-TIE-shard-scores.md).
 - **Not verified:** bitwise equality across numpy builds or machines (only within one build).
+
+## 2026-11-20 seeded planner retry and writer repair, shortlist-bounded planner schema (T017-FIX2)
+
+- **Root causes:** found by the read-only report T017-RCA3 on run J4a3 and confirmed against the code.
+  - The planner's one retry (decision 192) resent a byte-identical request, so under a fixed `sampling.seed` it bought nothing (G4).
+  - With an empty shortlist the reply schema left positions open, and the dev model invented `knowledge_needs[0].candidate_position: 0` (G3).
+- **Built, retries:** the planner retry and S5 writer repair round k change only `sampling.seed`, to `attempt_seed(base, k)`, the K2/K3 pattern of decisions 183 and 188.
+  - Attempt 0 is unchanged.
+  - Nothing about a refused reply goes back (R-026).
+  - An unseeded role stays unseeded.
+  - Every attempt's seed is recorded.
+- **Built, bounded schema:** the planner sends a per-request schema derived from the registered one.
+  - It only adds upper bounds to shortlist, variant-group and variant positions, plus `maxItems: 0` on arrays that can hold no valid item.
+  - The reply is validated client-side against both schemas.
+  - The record keeps the base `schema_id` plus `sent_schema_hash` when the schema is in the body (`json_schema` on `openai_compatible` and `anthropic`) or `client_schema_hash` when only the client checks it.
+- **Revision:** `model-call-5`, so the K2, K3 and K4 artifacts recompute once at the next `kb sync`.
+- **PM decisions pending user review:**
+  - The planner retry is refused (`PLANNER_CALL_FAILED`, cause `CONFIGURATION_INVALID`) when the backend drops the seed, because it would repeat attempt 0 byte for byte.
+  - The writer repair is never refused for a dropped seed, because its brief already differs (draft and failures); the attempt records the seed as null with the `PARAM_UNSUPPORTED` warning.
+  - `drops_seed` lives in `planner.py`, so that no K2/K3 pin bump is needed.
+- **Reviews:** Gemini Flash PASS; Claude Sonnet PASS WITH NITS (F1, the writer refusal, and N1 to N4); one fix round; Gemini diff-only retest PASS.
+- **Rejected:**
+  - repairing a reply by dropping out-of-range knowledge needs, which would break "planner replies are never repaired";
+  - a prompt line about empty shortlists, which is weak on dev models and changes a runtime prompt.
+- **Not verified:** whether llama.cpp's grammar honours `maximum` inside `anyOf` and `maxItems: 0` (client-side validation enforces both); live behaviour until the next golden run. Task file: [T017-FIX2](../tasks/active/T017-FIX2-retry-seed-schema-bound.md).

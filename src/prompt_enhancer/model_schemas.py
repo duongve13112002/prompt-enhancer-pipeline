@@ -96,6 +96,10 @@ class SchemaRegistry:
         Draft202012Validator(schema, registry=self._registry).validate(value)
         return digest
 
+    def validate_with(self, schema, value):
+        """Validate against a caller-derived schema (T017-FIX2), resolving any `$ref` through the registered ones."""
+        Draft202012Validator(schema, registry=self._registry).validate(value)
+
     def get(self, schema_id):
         """A private copy, so no caller can change a registry other runs share."""
         schema, digest = self._schemas[schema_id]

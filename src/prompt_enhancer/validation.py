@@ -324,10 +324,13 @@ async def validate(intake_result, plan_result, assembly_result, writer_result, w
             return finish(status, output, verdicts)
         if intent is None or unavailable or repairs >= policy['max_repairs'] or (not complete and last['status'] != 'SCHEMA_INVALID'):
             break
+        # T017-FIX2 (G4): repair round k sends attempt_seed(base, k). A backend that drops the seed still repairs: the
+        # repair brief carries the draft and the failures, so it never repeats the earlier request (fix round 1, F1).
         repairs += 1
         current = await write(intake_result, plan_result, assembly_result, writer_client, project_root=root,
                               repair={'draft': output if complete else None,
-                                      'failures': [item for item in verdicts if item['verdict'] != 'pass']})
+                                      'failures': [item for item in verdicts if item['verdict'] != 'pass']},
+                              attempt=repairs)
         calls.extend(deepcopy(current['calls']))
         warnings.extend(current['warnings'])
 

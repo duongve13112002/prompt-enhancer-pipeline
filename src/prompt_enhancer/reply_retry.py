@@ -3,6 +3,12 @@
 The request is re-sent identical except `sampling.seed`: no validator message, no earlier reply and nothing else goes
 back to the model (R-026), and nothing about the reply is repaired or relaxed. Only a reply that arrived and failed
 validation is retried; transport, budget, configuration and cancellation failures propagate at once.
+
+`call_until_valid` drives K2 observation and K3 cards. `attempt_seed` is also used by the plain image probe
+(`model_client.RoleClient._retry_plain_image`), the S2 planner retry (`planner.plan`) and the S5 writer repair
+(`writer.attempt_seed_of`), each with its own loop (T017-FIX2). The planner refuses a retry the backend would send
+without its seed only when the retry is due (its attempt 0 is not a configured attempt count). The writer repair is
+never refused for that: its brief carries the draft and the failures, so it never repeats the earlier request.
 """
 
 from .k2_naming import _digest, failure_code

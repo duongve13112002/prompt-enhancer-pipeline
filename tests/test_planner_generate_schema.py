@@ -19,7 +19,7 @@ from prompt_enhancer.model_client import CAPABILITIES, BoundModelClient, RoleCli
 from prompt_enhancer.model_probe import ProbeResult
 from prompt_enhancer.model_resources import BudgetExhausted
 from prompt_enhancer.model_schemas import SchemaRegistry
-from prompt_enhancer.planner import GENERATE_REPLY_SCHEMA, REPLY_SCHEMA, check_reply, plan
+from prompt_enhancer.planner import GENERATE_REPLY_SCHEMA, REPLY_SCHEMA, bounded_reply_schema, check_reply, plan
 from test_planner import PROMPT, kb, literal_reply, png, shortlist_for  # noqa: F401 - kb is a fixture
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -157,8 +157,10 @@ def test_generate_request_body_carries_the_generate_schema(env):
     bound, _ = real_client(env, {'main': transport})
     result = run(env, bound)
     assert result['state'] == 'ready'
-    assert sent_schema(transport.bodies[0]) == json.loads(
-        (SCHEMAS / 'planner_reply_generate.v0.schema.json').read_bytes())
+    # T017-FIX2: the generate file, bounded to the (empty) shortlist this request sent; the record names the file
+    assert sent_schema(transport.bodies[0]) == bounded_reply_schema(SchemaRegistry(SCHEMAS), GENERATE_REPLY_SCHEMA,
+                                                                    [], {})
+    assert sent_schema(transport.bodies[0])['properties']['preserve']['maxItems'] == 0
     assert result['calls'][0]['schema_id'] == GENERATE_REPLY_SCHEMA
 
 
@@ -171,7 +173,12 @@ def test_edit_request_body_carries_the_shared_schema_and_accepts_preserve(env):
     source = {'image_id': 'sha256:test', 'role': 'source_image', 'data': base64.b64encode(png()).decode('ascii')}
     result = run(env, bound, task='edit', source=source)
     assert result['state'] == 'ready' and len(result['intent_ir']['preserve']) == 7
-    assert sent_schema(transport.bodies[0]) == json.loads((SCHEMAS / 'planner_reply.v0.schema.json').read_bytes())
+    # T017-FIX2: the shared file bounded to the (empty) shortlist; its open edit fields are untouched
+    sent = sent_schema(transport.bodies[0])
+    assert sent == bounded_reply_schema(SchemaRegistry(SCHEMAS), REPLY_SCHEMA, [], {})
+    assert sent['properties']['preserve'] == json.loads(
+        (SCHEMAS / 'planner_reply.v0.schema.json').read_bytes())['properties']['preserve']
+    assert result['calls'][0]['schema_id'] == REPLY_SCHEMA
 
 
 def test_replay_seven_locator_generate_reply_is_refused_by_the_client_schema(env):

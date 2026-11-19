@@ -13,6 +13,7 @@ from .config import ConfigurationError, resolve_writer_format, validate_writer_r
 from .model_client import ModelCallError, safe_model_code
 from .model_json import check_json_depth
 from .model_schemas import SchemaRegistry
+from .planner import drops_seed
 from .profile_prompt import ProfileError, load_prompt, placeholders, sha256_tag
 from .profile_validators import validate_artifact
 
@@ -158,18 +159,38 @@ def prepare_write(intake_result, plan_result, assembly_result, *, project_root, 
     return PreparedWrite(registry, resolved_role, system, text, images, addendum)
 
 
+def attempt_seed_of(role, attempt):
+    """The seed writer attempt `attempt` sends: None for the S4 draft (attempt 0, the profile's request) and for an
+    unseeded role (a plain resend, a fresh draw); `attempt_seed(base, k)` for S5 repair round k (T017-FIX2, G4)."""
+    from .reply_retry import attempt_seed
+
+    base = role['sampling']['seed']
+    return attempt_seed(base, attempt) if attempt and type(base) is int else None
+
+
 async def write(intake_result, plan_result, assembly_result, client, *, project_root, repair=None,
-                prepared=None, binding_error=None):
-    """One logical writer call with the same typed failure boundary for binding and generation."""
+                prepared=None, binding_error=None, attempt=0):
+    """One logical writer call with the same typed failure boundary for binding and generation.
+
+    `attempt` is 0 for the S4 draft and the round number for an S5 repair; a repair changes `sampling.seed` beside the
+    repair data in the brief. A backend that drops the seed still answers (the repair data already makes the request
+    differ); its attempt entry then records the sent seed as None."""
+    from .reply_retry import reply_digest  # lazy: reply_retry imports planner.SEED_BITS
+
     if binding_error is None and getattr(client, 'role_name', None) != ROLE:
         raise ValueError('S4 requires a writer-bound client')
+    if type(attempt) is not int or attempt < 0:
+        raise ValueError('attempt must be a non-negative integer')
     if prepared is None:
         prepared = prepare_write(intake_result, plan_result, assembly_result, project_root=project_root, repair=repair)
     system, text, addendum = prepared.system, prepared.text, prepared.addendum
+    seed = attempt_seed_of(prepared.role, attempt)
     try:
         if binding_error is not None:
             raise binding_error
         options = {} if addendum is None else {'addendum': addendum}
+        if seed is not None:
+            options['seed'] = seed
         value, record = await client.call(system, text, manifest=intake_result.profile.manifest,
                                           images=prepared.images, **options)
     except ModelCallError as error:
@@ -184,6 +205,14 @@ async def write(intake_result, plan_result, assembly_result, client, *, project_
                 prepared.registry.validate(schema_id, value)
         except (ValueError, ValidationError, RecursionError):
             status, okay = 'SCHEMA_INVALID', False
+    base = prepared.role['sampling']['seed']
+    sent = seed if attempt else (base if type(base) is int else None)
+    if drops_seed(record):  # PARAM_UNSUPPORTED/sampling.seed: the request went out without a seed (warning kept)
+        sent = None
+    # Every attempt's seed in its record (the _safe_attempts shape: counters, closed codes and a digest, never text).
+    record = {**record, 'attempt': {'attempt': attempt, 'seed': sent,
+                                    'code': None if okay else status if status != 'OK' else 'OUTPUT_INVALID',
+                                    'reply_digest': None if value is None else reply_digest(value)}}
     warnings = [entry[0] if isinstance(entry, (tuple, list)) else entry for entry in record.get('warnings', [])]
     result = {'state': 'draft' if okay else 'failed', 'output': value if okay else None,
               'calls': [{'status': status, 'record_json': json.dumps(record, ensure_ascii=False, allow_nan=False)}],

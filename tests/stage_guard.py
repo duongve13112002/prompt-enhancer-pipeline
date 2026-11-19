@@ -27,6 +27,7 @@ MODEL_CALL = [
     ('model_image', 'prepare_image'), ('model_image', 'prepare_image_with_info'), ('model_image', '_stored_size'),
     ('config', 'image_media_type'),  # image preparation and its declared media type
     ('model_schemas', 'SchemaRegistry.validate'),  # reply validation
+    ('model_schemas', 'SchemaRegistry.validate_with'),  # T017-FIX2: reply validation against a caller-derived schema
     ('profile_prompt', 'load_prompt'),  # the system prompt bytes
 ]
 K1_SHARED = [

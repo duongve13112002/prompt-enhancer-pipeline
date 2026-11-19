@@ -20,9 +20,12 @@ class PlannerClientDouble:
         self.outcomes = list(outcomes)
         self.calls = []
 
-    async def call(self, system_prompt, user_text, *, manifest=None, images=(), schema_id=None):
+    async def call(self, system_prompt, user_text, *, manifest=None, images=(), schema_id=None, **extra):
+        # T017-FIX: the per-request reply schema id, None = the role's; T017-FIX2: the bounded `schema` sent and the
+        # retry `seed` (absent for attempt 0, as BoundModelClient.call forwards it); any other keyword is refused.
+        assert set(extra) <= {'schema', 'seed'}, extra
         self.calls.append({'system': system_prompt, 'text': user_text, 'images': list(images),
-                           'schema_id': schema_id})  # T017-FIX: the per-request reply schema, None = the role's
+                           'schema_id': schema_id, **extra})
         outcome = self.outcomes.pop(0) if len(self.outcomes) > 1 else self.outcomes[0]
         if isinstance(outcome, Exception):
             raise outcome

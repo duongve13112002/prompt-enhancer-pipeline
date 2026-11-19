@@ -31,6 +31,9 @@ REPLY_SCHEMA = 'planner_reply.v0'  # artifact-bound: the configured role schema 
 # artifact-bound (T017-FIX): planner_reply.v0 with the edit fields structurally empty, sent for generate requests
 GENERATE_REPLY_SCHEMA = 'planner_reply_generate.v0'
 SEED_BITS = 63  # protocol-bound: seeds stay inside the schema's non-negative 64-bit integer range
+# protocol-bound model code (T017-FIX2): a retry refused because the backend would send it without its seed, the
+# code reply_retry.call_until_valid raises for the same condition
+SEED_DROPPED = 'CONFIGURATION_INVALID'
 
 
 class InvalidReply(ValueError):
@@ -88,6 +91,70 @@ def check_integers(reply, registry, schema_id=REPLY_SCHEMA):
         _EXACT_INTEGERS(schema).validate(reply)
     except ValidationError as error:
         raise InvalidReply('reply breaks the schema with exact integers at ' + '/'.join(map(str, error.absolute_path)))
+
+
+def _cap(node, count):
+    """Tighten a non-negative position to `range(count)`: a `maximum` (never above an existing one), or, when no
+    position exists, drop the integer branch of a nullable position; a bare integer with no position is refused."""
+    if 'anyOf' in node:
+        branches = [branch for branch in node['anyOf'] if branch.get('type') == 'integer']
+        if len(branches) != 1 or len(node['anyOf']) != 2:
+            raise ValueError('planner reply schema: unexpected position shape')
+        if count == 0:
+            node['anyOf'] = [branch for branch in node['anyOf'] if branch is not branches[0]]
+            return
+        node = branches[0]
+    if node.get('type') != 'integer' or count == 0:
+        raise ValueError('planner reply schema: unexpected position shape')
+    node['maximum'] = min(node.get('maximum', count - 1), count - 1)
+
+
+def _empty(node, empty):
+    """`maxItems: 0` on an array that can hold no valid item; never raises an existing bound."""
+    if node.get('type') != 'array':
+        raise ValueError('planner reply schema: unexpected array shape')
+    if empty:
+        node['maxItems'] = 0
+    return empty
+
+
+def bounded_reply_schema(registry, schema_id, entries, variants):
+    """The registered reply schema with every position bounded to the lists this request sends (T017-FIX2, G3).
+
+    Shortlist positions (`links[].candidate_position`, `links[].candidates[].position`,
+    `links[].variants[].candidate_position`, `knowledge_needs[].candidate_position`) are capped at the shortlist
+    length; variant-group and variant positions at the largest group and variant count sent. An array that can hold
+    no valid item gets `maxItems: 0`. Only bounds are added and only to a deep copy: no field, enum or text rule, and
+    every reply `check_reply` accepts stays valid (a `no_match` link has a null position and empty lists). The
+    registered file stays the contract; check_integers and check_reply still run on the reply.
+    """
+    schema, _ = registry.get(schema_id)
+    count = len(entries)
+    groups = [variants.get(entry['concept_id'], []) for entry in entries]
+    widest = max((len(found) for found in groups), default=0)
+    largest = max((len(group['variants']) for found in groups for group in found), default=0)
+    link = schema['properties']['links']['items']['properties']
+    _cap(link['candidate_position'], count)
+    if not _empty(link['candidates'], count == 0):
+        _cap(link['candidates']['items']['properties']['position'], count)
+    if not _empty(link['variants'], count == 0 or widest == 0):
+        item = link['variants']['items']['properties']
+        _cap(item['candidate_position'], count)
+        _cap(item['group_position'], widest)
+        _cap(item['named_variant_position'], largest)
+        if not _empty(item['ratings'], largest == 0):
+            _cap(item['ratings']['items']['properties']['variant_position'], largest)
+    needs = schema['properties']['knowledge_needs']
+    if not _empty(needs, count == 0):
+        _cap(needs['items']['properties']['candidate_position'], count)
+    return schema
+
+
+def drops_seed(record):
+    """The call record says the backend did not send `sampling.seed`, so a seeded retry would repeat the request."""
+    from .reply_retry import SEED_WARNING  # lazy: reply_retry imports SEED_BITS from this module
+
+    return any(isinstance(item, (tuple, list)) and tuple(item) == SEED_WARNING for item in record.get('warnings', ()))
 
 
 def check_reply(reply, prompt, task, entries, variants, facet_groups):
@@ -311,25 +378,47 @@ async def plan(intake_result, shortlist, client, *, project_root, embedder=None)
     # keep the configured schema and the old call shape. check_reply keeps the invariant as a defence.
     reply_schema = GENERATE_REPLY_SCHEMA if task == 'generate' else REPLY_SCHEMA
     options = {'schema_id': GENERATE_REPLY_SCHEMA} if task == 'generate' else {}
+    base_seed = role['sampling']['seed']
+    seeded = type(base_seed) is int  # an unseeded role stays unseeded: its retry is a plain resend, a fresh draw
 
     async def ask(shortlist_entries):
+        from .reply_retry import attempt_seed, reply_digest  # lazy: reply_retry imports SEED_BITS from this module
+
         text = _data(payload, config, manifest, shortlist_entries, variants)
-        for _ in range(2):  # one retry, and only for an invalid reply (docs/stages/S2-planner.md)
+        # T017-FIX2 (G3): positions are bounded to the lists this request sends; the reply is checked as before.
+        bounded = bounded_reply_schema(registry, reply_schema, shortlist_entries, variants)
+        # One retry, and only for an invalid reply (docs/stages/S2-planner.md). T017-FIX2 (G4): it changes only
+        # sampling.seed, as K2 and K3 do (decisions 183, 188); nothing about the refused reply goes back (R-026).
+        for attempt in range(2):
+            seed = None
+            if attempt and seeded:
+                if drops_seed(calls[-1]):  # the retry would repeat attempt 0 byte for byte: refused, not sent
+                    return None, ('PLANNER_CALL_FAILED', SEED_DROPPED)
+                seed = attempt_seed(base_seed, attempt)
             try:
-                value, record = await client.call(system, text, images=images, **options)
+                value, record = await client.call(system, text, images=images, schema=bounded, **options,
+                                                  **({} if seed is None else {'seed': seed}))
             except ModelCallError as error:
                 return None, ('PLANNER_CALL_FAILED', error.code)  # T017-FIX (F3): the cause code survives
             calls.append(_plain(record))
+            entry = {'attempt': attempt, 'seed': seed if attempt else (base_seed if seeded else None),
+                     'code': None, 'reply_digest': None}  # the _safe_attempts shape: counters, codes, digests only
+            calls[-1]['attempt'] = entry
+            if seed is not None and drops_seed(record):  # e.g. a budget fallback onto a backend without seed
+                entry['code'] = SEED_DROPPED
+                return None, ('PLANNER_CALL_FAILED', SEED_DROPPED)
             if value is None:
+                entry['code'] = safe_model_code(record['status'])
                 if record['status'] != 'SCHEMA_INVALID':
                     return None, ('PLANNER_CALL_FAILED', safe_model_code(record['status']))
                 _warn('SCHEMA_INVALID')
                 continue
+            entry['reply_digest'] = reply_digest(value)
             try:
                 check_integers(value, registry, reply_schema)
                 return check_reply(value, prompt, task, shortlist_entries, variants, groups), None
             except InvalidReply:
-                calls[-1]['reply_check'] = 'INVARIANT_INVALID'
+                calls[-1]['reply_check'] = entry['code'] = 'INVARIANT_INVALID'
                 _warn('SCHEMA_INVALID')
         return None, ('PLANNER_REPLY_INVALID', None)
 
