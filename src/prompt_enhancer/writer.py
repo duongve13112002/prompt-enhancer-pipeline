@@ -8,6 +8,7 @@ from pathlib import Path
 
 from jsonschema import ValidationError
 
+from .assembly import CHANNEL, attached_note
 from .config import ConfigurationError, resolve_writer_format, validate_writer_reads
 from .model_client import ModelCallError, safe_model_code
 from .model_json import check_json_depth
@@ -56,7 +57,9 @@ def _data_json(data):
     for key, value in data.items():
         if key == 'knowledge':
             facts = ',\n'.join(encode(fact) for fact in value['facts'])
-            fields.append('"knowledge":{"facts":[\n' + facts + '\n],"images":' + encode(value['images']) + '}')
+            attached = value.get('attachments')  # absent unless images are attached, so other briefs keep their bytes
+            tail = '' if not attached else ',"attachments":[\n' + ',\n'.join(encode(item) for item in attached) + '\n]'
+            fields.append('"knowledge":{"facts":[\n' + facts + '\n],"images":' + encode(value['images']) + tail + '}')
         else:
             fields.append(encode(key) + ':' + encode(value))
     return '{' + ','.join(fields) + '}'
@@ -78,7 +81,21 @@ def render_brief(intake_result, plan_result, assembly_result, template, *, repai
     if config['rag']['enabled'] and assembly_result is not None and assembly_result['pack'] is not None:
         pack = assembly_result['pack']
         data['knowledge'] = {'facts': deepcopy(pack['facts']),
-                             'images': [deepcopy(item) for item in pack['images'] if item['channel'] != 'attach']}
+                             'images': [deepcopy(item) for item in pack['images'] if item['channel'] != CHANNEL]}
+        attached = [item for item in pack['images'] if item['channel'] == CHANNEL]
+        if attached:
+            # Same selection and order as the S6 attachments (envelope.py), so a position names the delivered image.
+            if payload['task'] != 'edit' or config['edit']['attach_kb_reference_images'] is not True:
+                raise ValueError('S4: knowledge images are attached only for edit with attach_kb_reference_images')
+            # A profile that accepts no reference images gets none delivered (S6 degrades; pipeline.py
+            # retain_attachments reads the same field), so the brief must not describe them (PM decision pending).
+            if manifest['renderer']['accepts_reference_images']:
+                # The note is decoded and re-checked against the kept facts, so it reaches the writer only as data
+                # (R-026).
+                data['knowledge']['attachments'] = [
+                    {'position': position, 'image_id': item['image_id'], 'bound_entity': item['bound_entity'],
+                     'facets': list(item['facets']), 'note': attached_note(item, pack['facts'])}
+                    for position, item in enumerate(attached, start=1)]
     if placeholders(template) != ['data']:
         raise ConfigurationError('vlm.roles.writer.prompt_id: brief requires exactly the data variable')
     rendered = _substitute(template, {'data': _data_json(data).encode('utf-8')})

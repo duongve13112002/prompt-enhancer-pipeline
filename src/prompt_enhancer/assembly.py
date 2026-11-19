@@ -235,6 +235,27 @@ def _select_images(kept, tables, config):
     return chosen
 
 
+def attached_note(image, facts):
+    """Decode an `attach` image's note into facet and value pairs, checked against the kept facts it supports.
+
+    The one rule for S3 validation and for the S4 brief, so the writer never renders a value S3 would refuse.
+    """
+    supported = {(fact['facet'], fact['value']) for fact in facts
+                 if image['image_id'] in fact['image_ids'] and fact['concept_id'] == image['concept_id']
+                 and fact['bound_entity'] == image['bound_entity']}
+    if image['channel'] != CHANNEL or not supported:
+        raise ValueError('S3: an image does not support a kept fact')
+    try:
+        noted = json.loads(image['note'])
+        pairs = {(item['facet'], item['value']) for item in noted}
+    except (ValueError, TypeError, KeyError) as error:
+        raise ValueError('S3: an image note is not a list of facet and value pairs') from error
+    # The note and the facet list carry only values of kept facts this image supports (decision 16).
+    if not pairs <= supported or sorted({facet for facet, _ in pairs}) != image['facets']:
+        raise ValueError('S3: an image note names a value that is not a kept fact it supports')
+    return [{'facet': item['facet'], 'value': item['value']} for item in noted]
+
+
 def validate_assembly(result, ir, config, task, snapshot_id, request_id, registry):
     """Schema, then the pack invariants the schema cannot express; a failure is a defect, never repaired."""
     registry.validate(RESULT_SCHEMA, result)
@@ -264,19 +285,7 @@ def validate_assembly(result, ir, config, task, snapshot_id, request_id, registr
                 or len({image['image_id'] for image in images}) != len(images)):
             raise ValueError('S3: the image selection exceeds its limits')
         for image in images:
-            supported = {(fact['facet'], fact['value']) for fact in pack['facts']
-                         if image['image_id'] in fact['image_ids'] and fact['concept_id'] == image['concept_id']
-                         and fact['bound_entity'] == image['bound_entity']}
-            if image['channel'] != CHANNEL or not supported:
-                raise ValueError('S3: an image does not support a kept fact')
-            try:
-                noted = json.loads(image['note'])
-                pairs = {(item['facet'], item['value']) for item in noted}
-            except (ValueError, TypeError, KeyError) as error:
-                raise ValueError('S3: an image note is not a list of facet and value pairs') from error
-            # The note and the facet list carry only values of kept facts this image supports (decision 16).
-            if not pairs <= supported or sorted({facet for facet, _ in pairs}) != image['facets']:
-                raise ValueError('S3: an image note names a value that is not a kept fact it supports')
+            attached_note(image, pack['facts'])
     content = bool(pack['facts'] or images)
     if (state == 'retrieved') != content or (state == 'skipped_no_knowledge_needed' and pack['left_out']):
         raise ValueError('S3: the retrieval state does not match the pack')

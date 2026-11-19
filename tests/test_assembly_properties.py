@@ -249,7 +249,8 @@ def test_closed_snapshot_raises_before_any_read(base, project_root, case):
 MUTATIONS = {'leak': 'outside the scope', 'duplicate': 'exactly once', 'both': 'exactly once',
              'state': 'state does not match', 'snapshot': 'another request or snapshot',
              'image_generate': 'only for edit', 'image_cap': 'exceeds its limits',
-             'image_unsupported': 'does not support a kept fact', 'error_with_pack': 'failed result',
+             'image_unsupported': 'does not support a kept fact', 'image_entity': 'does not support a kept fact',
+             'error_with_pack': 'failed result',
              'note_leak': 'not a kept fact it supports', 'note_not_pairs': 'not a list of facet and value pairs',
              'note_facets': 'not a kept fact it supports'}
 
@@ -289,6 +290,8 @@ def test_validate_assembly_refuses_broken_results(base, project_root, mutation):
         pack['images'].append(dict(pack['images'][0], image_id=IMG[1]))
     elif mutation == 'image_unsupported':
         pack['images'][0]['image_id'] = IMG[3]
+    elif mutation == 'image_entity':
+        pack['images'][0]['bound_entity'] = 'other-entity'  # the fact is kept for e0, so this image supports none
     elif mutation == 'note_leak':
         pack['images'][0]['note'] = json.dumps([{'facet': 'apparel.color', 'value': 'red'}])
     elif mutation == 'note_not_pairs':

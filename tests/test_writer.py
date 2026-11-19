@@ -85,8 +85,8 @@ def test_only_kept_knowledge_is_rendered(model_test_profile, tmp_path, project_r
     config = setup(model_test_profile, tmp_path, project_root)
     config['rag']['enabled'] = True
     s0 = view(config)
-    pack = {'facts': [{'value': 'allowed', 'bound_entity': 'e1'}], 'images': [
-            {'image_id': 'unretained-reference', 'channel': 'attach'}],
+    # Attached images and their notes are covered in test_writer_attachments.py; here none is selected.
+    pack = {'facts': [{'value': 'allowed', 'bound_entity': 'e1'}], 'images': [],
             'left_out': [{'value': 'forbidden-reference-value'}]}
     rendered = render_brief(s0, plan(ir()), {'pack': pack}, b'{{data}}')
     assert json.loads(rendered)['knowledge']['facts'][0]['value'] == 'allowed'
