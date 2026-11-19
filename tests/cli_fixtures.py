@@ -66,6 +66,9 @@ def pipeline_config(model_test_profile, tmp_path, project_root, port, *, retriev
     """A complete, resolved request configuration for the loopback double (every value is test-only)."""
     config = (assembly_config if retrieval else configuration)(model_test_profile, tmp_path)
     config['runtime'].update(runtime())
+    # test-only: the shared runtime() deadline of 5 s expired on a loaded machine and gave a deadline-failed envelope with
+    # no attachments (T-016 P3 N1); no test here measures the pipeline deadline, so it is large enough never to be the cause
+    config['runtime']['request_deadline_s'] = 120
     config['storage']['data_root'] = str(tmp_path / 'data')
     config['resolution']['random_seed'] = 7
     config['serving']['http'] = {'max_request_bytes': REQUEST_CAP}

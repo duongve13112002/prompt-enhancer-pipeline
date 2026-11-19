@@ -406,8 +406,15 @@ serving:                                 # docs/serving.md, R-019, decision 21
   max_concurrency: fit_from_bench
   queue_limit: design_required
   total_deadline_s: fit_from_bench       # measured on the deployment, never claimed from estimates
-  prefix_cache: true                     # the admin's system prompt stays first in the message so a backend can reuse its cache
-  http: {max_request_bytes: deploy_required}   # largest request: a `enhance once` request file and (T-016 P3) one HTTP body, in bytes
+  prefix_cache: true                     # an external-backend setup choice (docs/serving.md): the wrapper does not read it
+  host: deploy_required                  # `enhance serve` listen address (an IP address or a host name); no command-line flag
+  port: deploy_required                  # `enhance serve` listen port, 1 to 65535; no command-line flag
+  http:
+    max_request_bytes: deploy_required   # largest request: an `enhance once` request file or one HTTP body, in bytes
+    max_connections: deploy_required     # open connections at once (reading, queued, running, writing), at least max_concurrency + queue_limit; one more gets 503
+    read_timeout_s: deploy_required      # one deadline for reading a whole request (head and body)
+    write_timeout_s: deploy_required     # one deadline for writing a response and for the transport to release its bytes
+    shutdown_timeout_s: deploy_required  # how long a stop waits for running requests, and again for the pipeline to close
 
 evaluation:                              # G-evaluation, R-023, decision 22
   scenario_kinds: [single_concept, multi_concept, family_mention, variant_unspecified, no_match, negation, literal_text, edit_local, edit_global, edit_recompose, rag_off]

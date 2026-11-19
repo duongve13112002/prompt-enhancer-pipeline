@@ -28,7 +28,17 @@ serving:
   # request bound exists to derive it from. It is 22 MiB = the base64 form (22369624 B) of the 16 MiB retained-image bound
   # `sync.retained_images.max_image_bytes` above, plus about 0.66 MiB of slack for the prompt and overrides. A deployment
   # sets its own value.
-  http: {max_request_bytes: 23068672}
+  # `enhance serve` dev smoke values (T-016 P3), all dev-only and none measured. No existing dev limit bounds a socket or
+  # a timer (every comparable timer of this profile is `deploy_required`), so they are small round values with a stated
+  # meaning: loopback only, port 8765 an example; 4 connections hold one request in flight (the dev VLM backend, under
+  # `vlm.backends.main` below, serves one request at a time through its own `max_concurrency` of 1), one queued request
+  # and two more that are turned away with 503 (the service's own `serving.max_concurrency` stays unresolved, see the
+  # last sentence; `max_connections` must hold `serving.max_concurrency + serving.queue_limit`); 10 s to read a request (the
+  # largest request, max_request_bytes above, is read from loopback in well under that), 10 s per write, and 10 s for a
+  # stop to wait for running requests. `max_concurrency`, `queue_limit` and `total_deadline_s` stay unresolved above.
+  host: 127.0.0.1
+  port: 8765
+  http: {max_request_bytes: 23068672, max_connections: 4, read_timeout_s: 10, write_timeout_s: 10, shutdown_timeout_s: 10}
 
 runtime:
   request_deadline_s: fit_from_bench

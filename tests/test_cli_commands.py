@@ -97,7 +97,6 @@ def test_kb_writer_commands_refuse_a_missing_store_without_creating_it(k2_env, t
 
 
 @pytest.mark.parametrize('argv, owner', [
-    (['enhance', 'serve'], 'T-016 phase 3'),
     (['eval', 'run'], 'T-016 phase 4'),
     (['eval', 'import'], 'T-016 phase 4'),
     (['eval', 'build'], 'T-003'),

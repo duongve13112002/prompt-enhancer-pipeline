@@ -8,17 +8,17 @@ import hashlib
 from .config import COMMAND_READS, _get, _schema, validate_sync_config
 from .k0 import guard_removals
 from .k0_scan import read_source_file
-from .k0_checkpoint import _REVISION, _VERSION, _bytes, _key, _matching
+from .k0_checkpoint import K0_SCAN_REVISION, _REVISION, _VERSION, _bytes, _key, _matching
 from .k0_sync import _previous_for_plan, sync
-from .k1_embed import (MODEL_TOOL_MODULES, ConceptText, embed_concept_texts, embed_images, image_key, text_key,
-                       embedder_settings, tool_revision)
-from .k2_naming import _digest, _read_overrides, name_folders
-from .k2_observe import observe_images
-from .k3_cards import build_cards
-from .k4_aliases import build_aliases
+from .k1_embed import (K1_IMAGE_REVISION, K1_TEXT_REVISION, ConceptText, embed_concept_texts, embed_images, image_key,
+                       text_key, embedder_settings)
+from .k2_naming import K2_DRAW_REVISION, K2_NAMING_REVISION, _digest, _read_overrides, name_folders
+from .k2_observe import K2_OBSERVE_REVISION, observe_images
+from .k3_cards import K3_CARD_REVISION, build_cards
+from .k4_aliases import K4_ALIAS_REVISION, build_aliases
 from .k5_index import ServingIndex, _tools, build_index
 from .profile_prompt import load_prompt
-from .model_client import ModelClientRun, MODEL_CODES
+from .model_client import MODEL_CALL_REVISION, ModelClientRun, MODEL_CODES
 from .storage import StorageError, open_knowledge_store
 from .storage.store import RETAINED_IMAGE_MARKER
 from .storage.tables import SNAPSHOT_TABLES
@@ -26,6 +26,10 @@ from .storage.tables import SNAPSHOT_TABLES
 
 # Artifact-bound completion identity in the existing scan-summary metadata.
 LAYOUT = 'kb-sync-v2-retained-images'
+# artifact-bound: declared revision of the sync assembly that shapes a snapshot (KBS-S3-1); it enters the sync
+# identity with the stage revisions, so a stage edit or this module's edit replans the sync but changes no stage key.
+# Bump it with any edit to a function its guard pins (tests/test_stage_revisions.py).
+KB_SYNC_REVISION = 'kb-sync-1'
 ROLES = ('info_assessor', 'folder_namer', 'observer', 'card_builder', 'alias_generator')
 
 
@@ -108,9 +112,11 @@ def sync_identity(config, scanned, overrides, store):
     schemas.update({config['vlm']['roles'][role]['output']['schema_id']:
                     _schema(root, config['vlm']['roles'][role]['output']['schema_id']) for role in ROLES})
     return _digest({'layout': LAYOUT, 'source': source, 'config': reads, 'prompts': prompts, 'schemas': schemas,
-                    'tools': _tools(store.catalog), 'code': tool_revision(
-                        'kb_sync', 'k0', 'k0_scan', 'k0_checkpoint', 'k0_sync', 'k1_embed', 'k2_naming',
-                        'k2_observe', 'k3_cards', 'k4_aliases', *MODEL_TOOL_MODULES)})
+                    'tools': _tools(store.catalog),
+                    'code': {'kb_sync': KB_SYNC_REVISION, 'k0': K0_SCAN_REVISION, 'k1_image': K1_IMAGE_REVISION,
+                             'k1_text': K1_TEXT_REVISION, 'k2_naming': K2_NAMING_REVISION, 'k2_draw': K2_DRAW_REVISION,
+                             'k2_observe': K2_OBSERVE_REVISION, 'k3': K3_CARD_REVISION, 'k4': K4_ALIAS_REVISION,
+                             'model_call': MODEL_CALL_REVISION}})
 
 
 def _checkpoint(writer, scanned, knowledge):

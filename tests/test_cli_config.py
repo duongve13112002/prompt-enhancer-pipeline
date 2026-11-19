@@ -68,10 +68,8 @@ def test_the_shipped_profiles_leave_the_limit_to_the_deployment_except_the_dev_p
     import yaml
     from pathlib import Path
     repo = Path(__file__).resolve().parents[1]
-    assert yaml.safe_load((repo / 'configs/enhancer.example.yaml').read_bytes())['serving']['http'] == {
-        'max_request_bytes': 'deploy_required'}
-    assert yaml.safe_load((repo / 'configs/overlays/deploy-vllm.example.yaml').read_bytes())['serving']['http'] == {
-        'max_request_bytes': 'deploy_required'}
+    for name in ('configs/enhancer.example.yaml', 'configs/overlays/deploy-vllm.example.yaml'):
+        assert yaml.safe_load((repo / name).read_bytes())['serving']['http']['max_request_bytes'] == 'deploy_required'
     dev = yaml.safe_load((repo / 'configs/enhancer.dev.example.yaml').read_bytes())['serving']['http']['max_request_bytes']
     assert type(dev) is int and dev == 23_068_672
 

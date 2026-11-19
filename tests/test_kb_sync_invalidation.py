@@ -66,8 +66,7 @@ def test_sync_identity_invalidation(k2_env, monkeypatch, change):
     elif change == 'query_limit':
         k2_env.config['embedding']['query_text_limit'] = 256
     else:
-        revision = module.tool_revision
-        monkeypatch.setattr(module, 'tool_revision', lambda *names: revision(*names) + 'test-revision')
+        monkeypatch.setattr(module, 'KB_SYNC_REVISION', module.KB_SYNC_REVISION + 'test-revision')
     changed = invoke(k2_env, server)
     assert changed['status'] == 'published' and changed['snapshot_id'] != original
     assert invoke(k2_env, server)['status'] == 'unchanged'
@@ -125,9 +124,9 @@ def test_alias_tool_revision_invalidates_its_items_only(k2_env, monkeypatch):
     invoke(k2_env, server)
     server.roles.clear()
     embedding_calls = len(server.embedder.requests)
-    revision = module.tool_revision
-    monkeypatch.setattr(module, 'tool_revision', lambda *names: revision(*names) + 'test-change')
-    monkeypatch.setattr(k4_aliases, 'tool_revision', lambda *names: revision(*names) + 'test-change')
+    changed = k4_aliases.K4_ALIAS_REVISION + 'test-change'
+    monkeypatch.setattr(module, 'K4_ALIAS_REVISION', changed)  # the sync identity reads kb_sync's own name
+    monkeypatch.setattr(k4_aliases, 'K4_ALIAS_REVISION', changed)  # the alias item keys read the stage's name
     invoke(k2_env, server)
     assert server.roles == ['alias_generator']
     assert len(server.embedder.requests) == embedding_calls

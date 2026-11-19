@@ -27,7 +27,6 @@ STATUS_TABLES = ('folders', 'concepts', 'images', 'cards', 'aliases')  # counted
 NOT_SERVED = {
     'eval build': 'eval build is owned by T-003 (scenario build) and is not part of this tool',
     'eval fit': 'eval fit is owned by T-030 (experiments that fit the fit_from_* values) and is not part of this tool',
-    'enhance serve': 'enhance serve is not yet implemented in this build (T-016 phase 3)',
     'eval run': 'eval run is not yet implemented in this build (T-016 phase 4)',
     'eval import': 'eval import is not yet implemented in this build (T-016 phase 4)',
 }
@@ -153,7 +152,7 @@ def profile_check(args, root):
 HANDLERS = {
     'kb status': kb_status, 'kb show': kb_show, 'kb rollback': kb_rollback, 'kb gc': kb_gc,
     'profile register': profile_register, 'profile check': profile_check,
-    'enhance serve': not_served, 'eval run': not_served, 'eval import': not_served,
+    'eval run': not_served, 'eval import': not_served,
     'eval build': not_served, 'eval fit': not_served, 'kb only': kb_only,
 }
 

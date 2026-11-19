@@ -49,9 +49,11 @@ UNDECODABLE = 'undecodable'
 EXCEEDS = 'exceeds_max_decode_pixels'
 SOURCE_CHANGED = 'SOURCE_CHANGED'  # report code: no member path still holds the bytes of the image_id
 REUSED_REFERENCED = 'REUSED_REFERENCED'  # report code: T-008 Q5
-# Artifact-bound dependencies that map semantic role inputs to model requests and stored validation.
-MODEL_TOOL_MODULES = ('model_client', 'model_mapping', 'model_cloud', 'model_image', 'model_resources',
-                      'model_schemas', 'model_transport', 'profile_prompt', 'config', 'storage/identity')
+# artifact-bound: declared revisions of the code that shapes a K1 artifact (KBS-S3-1). They key the artifacts in
+# place of a hash of module source, so an edit outside that code keeps every embedding. Bump one in the same change
+# that edits a function its guard pins (tests/test_stage_revisions.py), because stored artifacts then differ.
+K1_IMAGE_REVISION = 'k1-image-3'
+K1_TEXT_REVISION = 'k1-text-2'
 
 
 class EmbeddingError(RuntimeError):
@@ -90,12 +92,6 @@ class ConceptText:
 
 def _digest(value):
     return hashlib.sha256(canonical_json(value).encode('utf-8')).hexdigest()
-
-
-def tool_revision(*modules):
-    """Artifact-bound implementation identity, including explicitly named local helpers."""
-    root = Path(__file__).parent
-    return _digest({name: (root / (name + '.py')).read_text(encoding='utf-8') for name in modules})
 
 
 def embedder_settings(config, path='configuration'):
@@ -146,17 +142,14 @@ def image_revisions(settings):
                                'extra_body': settings.extra_body}),
             'schema': _digest({'layout': LAYOUT_VERSION, 'metadata_rule': IMAGE_METADATA_RULE,
                                'vision': settings.vision, 'max_decode_pixels': settings.max_decode_pixels,
-                               'pillow': PIL.__version__, 'tool': tool_revision(
-                                   'k1_embed', 'model_image', 'model_transport', 'model_resources', 'config',
-                                   'storage/identity')})}
+                               'pillow': PIL.__version__, 'stage_revision': K1_IMAGE_REVISION})}
 
 
 def text_revisions(settings):
     return {'model': settings.revision,
             'prompt': _digest({'shape': settings.shape, 'text_template': settings.text_template,
                                'extra_body': settings.extra_body}),
-            'schema': _digest({'layout': LAYOUT_VERSION, 'tool': tool_revision(
-                'k1_embed', 'model_transport', 'model_resources', 'config', 'storage/identity')})}
+            'schema': _digest({'layout': LAYOUT_VERSION, 'stage_revision': K1_TEXT_REVISION})}
 
 
 def image_key(settings, image_id):
@@ -315,6 +308,28 @@ class Embedder:
         return await self._embed(self.text_bodies(texts), len(texts))
 
 
+def _image_order(rows):
+    """The order of the image inputs; with `_chunks` it fixes every batch, and a batch changes bf16 vectors."""
+    return sorted(rows, key=lambda row: row['image_id'])
+
+
+def _batch_members(chunk, records):
+    """The members of one image request. Cached refusals stay out as positional facts; cached successful members
+    take part even in a partially committed request, because a changed batch changes bf16 vectors (T-018)."""
+    return [(image_id, key) for image_id, key in chunk
+            if image_id not in records or records[image_id]['vector'] is not None]
+
+
+def _companion_lost(image_id, outcome, records):
+    """A cached member whose preparation failed in this run: it only supplied batch context, so its record stays."""
+    return image_id in records and (outcome is None or outcome[1] is None)
+
+
+def _text_order(items):
+    """The distinct texts in embedding order; identical text is embedded once."""
+    return sorted({item.text for item in items})
+
+
 def _chunks(items, settings):
     """Consecutive `batch_size` chunks of ALL inputs, before checkpoint filtering (RES-1 / R-017).
 
@@ -359,6 +374,19 @@ def _skip_or_reuse(checkpoints, key, expected, settings, report, label):
         report['reused_referenced'].append(label)
         return _load_record(checkpoints, key, expected, settings)
     return None
+
+
+def _image_record(metadata, image_id, settings, vector):
+    """The stored layout of one image artifact; `vector` is None for an image refused before embedding."""
+    encoded = None if vector is None else base64.b64encode(pack_vector(vector)).decode('ascii')
+    return dict(metadata, version=LAYOUT_VERSION, image_id=image_id, embedder_revision=settings.revision,
+                dim=settings.dimension, vector=encoded)
+
+
+def _text_record(text, settings, vector):
+    """The stored layout of one text artifact."""
+    return {'version': LAYOUT_VERSION, 'text_hash': text_hash(text), 'embedder_revision': settings.revision,
+            'dim': settings.dimension, 'vector': base64.b64encode(pack_vector(vector)).decode('ascii')}
 
 
 def _commit_record(checkpoints, key, kind, record, revisions):
@@ -439,7 +467,7 @@ async def embed_images(store, config, handoff, *, knowledge_root, transport=None
         with nullcontext(writer) if writer is not None else store.writer() as writer:
             checkpoints = writer.checkpoints(IMAGE_STAGE)
             inputs = []
-            for row in sorted(handoff['images'], key=lambda row: row['image_id']):
+            for row in _image_order(handoff['images']):
                 image_id = row['image_id']
                 if not is_image_id(image_id):
                     raise ValueError(f'invalid image_id {image_id!r}')
@@ -454,18 +482,14 @@ async def embed_images(store, config, handoff, *, knowledge_root, transport=None
             async def embed_chunk(chunk):
                 if all(image_id in records for image_id, _ in chunk):
                     return
-                # Cached refusals remain positional facts. Cached successful members must participate in a
-                # partially committed request too: changing its batch changes bf16 vectors (T-018).
-                decodable = [(image_id, key) for image_id, key in chunk
-                             if image_id not in records or records[image_id]['vector'] is not None]
+                decodable = _batch_members(chunk, records)
                 decoded = await asyncio.gather(*(loop.run_in_executor(pool, prepare, image_id)
                                                  for image_id, _ in decodable))
                 if stop.is_set():
                     return  # stopped workers have no result, never a source failure or decode refusal
                 prepared = []
                 for (image_id, key), outcome in zip(decodable, decoded):
-                    # Replay companions supply batch context only; failed preparation cannot alter their record.
-                    if image_id in records and (outcome is None or outcome[1] is None):
+                    if _companion_lost(image_id, outcome, records):
                         continue
                     if outcome is None:
                         checkpoints.fail(key, SOURCE_CHANGED, revisions=revisions)
@@ -473,8 +497,7 @@ async def embed_images(store, config, handoff, *, knowledge_root, transport=None
                         continue
                     metadata, image = outcome
                     if image is None:
-                        record = dict(metadata, version=LAYOUT_VERSION, image_id=image_id,
-                                      embedder_revision=settings.revision, dim=settings.dimension, vector=None)
+                        record = _image_record(metadata, image_id, settings, None)
                         _commit_record(checkpoints, key, IMAGE_STAGE, record, revisions)
                         records[image_id] = record
                         report['decode_failed'][image_id] = metadata['decode_status']
@@ -494,9 +517,7 @@ async def embed_images(store, config, handoff, *, knowledge_root, transport=None
                 for (image_id, key, metadata, _), vector in zip(prepared, vectors):
                     if image_id in records:
                         continue
-                    record = dict(metadata, version=LAYOUT_VERSION, image_id=image_id,
-                                  embedder_revision=settings.revision, dim=settings.dimension,
-                                  vector=base64.b64encode(pack_vector(vector)).decode('ascii'))
+                    record = _image_record(metadata, image_id, settings, vector)
                     _commit_record(checkpoints, key, IMAGE_STAGE, record, revisions)
                     records[image_id] = record
                     report['embedded'] += 1
@@ -545,7 +566,7 @@ async def embed_concept_texts(store, config, items, *, transport=None, writer=No
             raise ValueError(f'invalid concept text {item!r}')
     report = {'embedded': 0, 'skipped_done': 0, 'reused_referenced': [], 'failed': {}}
     revisions = text_revisions(settings)
-    texts = sorted({item.text for item in items})
+    texts = _text_order(items)
     records = {}
     embedder = Embedder(settings, transport=transport)
     capacity = embedder.capacity_window()
@@ -576,9 +597,7 @@ async def embed_concept_texts(store, config, items, *, transport=None, writer=No
                 for (text, key), vector in zip(chunk, vectors):
                     if text in records:
                         continue
-                    record = {'version': LAYOUT_VERSION, 'text_hash': text_hash(text),
-                              'embedder_revision': settings.revision, 'dim': settings.dimension,
-                              'vector': base64.b64encode(pack_vector(vector)).decode('ascii')}
+                    record = _text_record(text, settings, vector)
                     _commit_record(checkpoints, key, TEXT_STAGE, record, revisions)
                     records[text] = record
                     report['embedded'] += 1

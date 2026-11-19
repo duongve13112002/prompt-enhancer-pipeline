@@ -79,7 +79,11 @@ COMMAND_READS = {
     'enhance serve': ('profiles', 'rag', 'vision', 'candidates', 'embedding', 'planner', 'resolution',
                       'clarification', 'creativity', 'edit', 'assembly', 'writer', 'validation', 'runtime',
                       'storage.data_root', 'storage.table_format',
-                      'vlm.roles.planner', 'vlm.roles.writer', 'vlm.roles.verifier', 'serving'),
+                      'vlm.roles.planner', 'vlm.roles.writer', 'vlm.roles.verifier',
+                      # `serving.prefix_cache` is an external-backend setup choice and is not read here (T-016 Q2);
+                      # the keys below are read leaf by leaf, then checked together by `validate_serving`.
+                      'serving.host', 'serving.port', 'serving.max_concurrency', 'serving.queue_limit',
+                      'serving.total_deadline_s', 'serving.http'),
     'eval build': ('evaluation', 'storage.kb_store', 'storage.lock', 'storage.data_root', 'storage.table_format',
                    'vlm.roles.scenario_generator'),
     'eval run': ('evaluation', 'profiles', 'rag', 'vision', 'candidates', 'embedding', 'planner', 'resolution',
@@ -1850,6 +1854,77 @@ def validate_request_limit(config, path='configuration', sources=None, project_r
     return value
 
 
+# protocol-bound: RFC 1123 limits of a host name (253 characters in all, 63 in a label)
+_HOST_NAME_LIMIT, _HOST_LABEL_LIMIT = 253, 63
+_HOST_LABEL_CHARACTERS = frozenset('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-')
+SERVING_TIMERS = ('read_timeout_s', 'write_timeout_s', 'shutdown_timeout_s')  # protocol-bound `serving.http` leaf names
+
+
+def _listen_host(value, path, key, sources):
+    """An IP address, or a host name in RFC 1123 syntax; whether it can be bound is left to the bind itself."""
+    where = f'{_source(sources, key, path)}: {key}'
+    if type(value) is not str or not value:
+        raise ConfigurationError(f'{where}: expected a non-empty host name or IP address')
+    try:
+        ipaddress.ip_address(value)
+        return value
+    except ValueError:
+        pass
+    labels = value.rstrip('.').split('.') if len(value) <= _HOST_NAME_LIMIT else ()
+    if not labels or any(not label or len(label) > _HOST_LABEL_LIMIT or label[0] == '-' or label[-1] == '-'
+                         or not set(label) <= _HOST_LABEL_CHARACTERS for label in labels):
+        raise ConfigurationError(f'{where}: not an IP address or a valid host name')
+    return value
+
+
+def _serving_number(config, name, path, sources, *, minimum, integer):
+    """One `serving` leaf: a native integer (never a bool) or a finite number, at or above `minimum`."""
+    key = f'serving.{name}'
+    value = _get(config, key, path)
+    where = f'{_source(sources, key, path)}: {key}'
+    if type(value) is int:
+        # a count is held in a native integer; a duration only has to convert to the float the timer clocks add
+        if (integer and value > sys.maxsize) or not _converts_to_float(value):
+            raise ConfigurationError(f'{where}: the number is outside the range a timer or a count can hold')
+    elif integer or type(value) is not float or not math.isfinite(value):
+        raise ConfigurationError(f'{where}: expected {"a native integer" if integer else "a finite number"}')
+    if value < minimum or (not integer and value <= 0):
+        raise ConfigurationError(f'{where}: expected {"a positive" if minimum or not integer else "a non-negative"} '
+                                 'value')
+    return value
+
+
+def validate_serving(config, path='configuration', sources=None, project_root=None):
+    """Every value `enhance serve` consumes, after the loader's per-leaf sentinel and schema checks, as one mapping.
+
+    `serving.prefix_cache` is not read: it describes the external model server (T-016 Q2). A deployment value is never
+    defaulted: a missing or unresolved leaf is refused naming its key. Cross-field rules: the connection limit must
+    hold every active and waiting request, and the service deadline must exceed the pipeline's own
+    `runtime.request_deadline_s`, which it wraps and never replaces."""
+    sources = {} if sources is None else sources
+    values = {'host': _listen_host(_get(config, 'serving.host', path), path, 'serving.host', sources)}
+    port = _get(config, 'serving.port', path)
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ConfigurationError(f'{_source(sources, "serving.port", path)}: serving.port: expected an integer '
+                                 'from 1 to 65535')
+    values['port'] = port
+    values['max_concurrency'] = _serving_number(config, 'max_concurrency', path, sources, minimum=1, integer=True)
+    values['queue_limit'] = _serving_number(config, 'queue_limit', path, sources, minimum=0, integer=True)
+    values['total_deadline_s'] = _serving_number(config, 'total_deadline_s', path, sources, minimum=0, integer=False)
+    values['max_request_bytes'] = validate_request_limit(config, path, sources, project_root)
+    values['max_connections'] = _serving_number(config, 'http.max_connections', path, sources, minimum=1, integer=True)
+    for name in SERVING_TIMERS:
+        values[name] = _serving_number(config, f'http.{name}', path, sources, minimum=0, integer=False)
+    needed = values['max_concurrency'] + values['queue_limit']
+    if values['max_connections'] < needed:
+        raise ConfigurationError(f'{_source(sources, "serving.http.max_connections", path)}: serving.http.'
+                                 f'max_connections: below serving.max_concurrency + serving.queue_limit ({needed})')
+    if values['total_deadline_s'] <= config['runtime']['request_deadline_s']:
+        raise ConfigurationError(f'{_source(sources, "serving.total_deadline_s", path)}: serving.total_deadline_s: '
+                                 'must exceed runtime.request_deadline_s, which it wraps')
+    return values
+
+
 def _require_validation_version(config, path):
     """Refuse legacy requests before any version-dependent field or schema read."""
     if not isinstance(config, dict) or type(config.get('schema_version')) is not int or config['schema_version'] != 2:
@@ -2078,6 +2153,8 @@ def _validate_loaded_config(config, command, root, path, sources):
         validate_writer_reads(config, path, sources, root)
         validate_validation_reads(config, path, sources, root)
         validate_pipeline_reads(config, path, sources, root)
+        if command == 'enhance serve':
+            validate_serving(config, path, sources, root)
         if config['rag']['enabled']:
             validate_index_reads(config, path, sources, root)
             validate_candidates_reads(config, path, sources, root)

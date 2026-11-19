@@ -8,8 +8,8 @@ from pathlib import Path
 
 from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_card_reads
 from .k2_naming import _digest, _validate_reply, failure_code, record_probe_failure
-from .k1_embed import MODEL_TOOL_MODULES, tool_revision
-from .model_client import ModelCallError, ModelClientRun, run_concurrency, semantic_role_settings
+from .model_client import (MODEL_CALL_REVISION, ModelCallError, ModelClientRun, run_concurrency,
+                           semantic_role_settings)
 from .model_resources import CapacityLog, await_owned, flow
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id
@@ -22,6 +22,9 @@ from .storage.tables import SPECS
 REPLY_SCHEMA = 'card_builder_reply.v0'
 STORED_SCHEMA = 'concept_card.v0'
 LAYOUT = 1
+# declared revision of the code that shapes a K3 grouping bundle or card (KBS-S3-1); keys the artifacts in place of a
+# hash of module source. Bump it with any edit to a function its guard pins (tests/test_stage_revisions.py).
+K3_CARD_REVISION = 'k3-card-2'
 VISIBLE = frozenset(('clear', 'partial'))
 
 
@@ -161,6 +164,20 @@ def assemble_card(concept, rows, payload, reply, curated, override, images, card
             'lint_findings': findings, 'revisions': revisions}
 
 
+def _grouping_bundle(revisions, payload, key, reply, record):
+    """The stored layout of one completed grouping call."""
+    return {'version': LAYOUT, 'revisions': revisions, 'payload': payload, 'key': key, 'reply': reply,
+            'record': record}
+
+
+def _card_revisions(record, role, config, snapshot_id):
+    """The provenance block stored in every card."""
+    return {'model_revision': record['model_revision'], 'prompt_id': role['prompt_id'],
+            'facet_schema_version': config['observe']['facet_schema_version'],
+            'stability_policy_version': config['cards']['stability_policy']['version'],
+            'snapshot_id': snapshot_id}
+
+
 def _curated(concept, handoff, override):
     statements = []
     folders = {row['folder_id']: row for row in handoff['folders']}
@@ -244,7 +261,7 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
                  'prompt': _digest({'id': role['prompt_id'], 'sha256': hashlib.sha256(prompt).hexdigest()}),
                  'schema': _digest({'layout': LAYOUT, 'reply': _schema(root, REPLY_SCHEMA),
                                    'configured': _schema(root, role['output']['schema_id']),
-                                   'tool': tool_revision('k3_cards', 'k2_naming', *MODEL_TOOL_MODULES)})}
+                                   'stage_revision': K3_CARD_REVISION, 'model_call': MODEL_CALL_REVISION})}
     effective = {concept_id(name): value for name, value in overrides['data'].items()}
     unknown = [name for name in overrides['data'] if concept_id(name) not in concepts]
     report = {'built': 0, 'reused_grouping': 0, 'failed': {}, 'lint_findings': [], 'unmatched_overrides': sorted(unknown)}
@@ -296,15 +313,11 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
                         if value is None:
                             raise ValueError(record['status'])
                         reply = parse_card_reply(value, payload, project_root=root)
-                        bundle = {'version': LAYOUT, 'revisions': revisions, 'payload': payload,
-                                  'key': key, 'reply': reply, 'record': record}
+                        bundle = _grouping_bundle(revisions, payload, key, reply, record)
                         grouping.commit(key, 'k3_grouping', canonical_json(bundle).encode('utf-8'),
                                         revisions=revisions, call_records=[record])
                     artifact = grouping.state(key)['output_key']
-                    card_revisions = {'model_revision': record['model_revision'], 'prompt_id': role['prompt_id'],
-                                      'facet_schema_version': config['observe']['facet_schema_version'],
-                                      'stability_policy_version': config['cards']['stability_policy']['version'],
-                                      'snapshot_id': snapshot_id}
+                    card_revisions = _card_revisions(record, role, config, snapshot_id)
                     card = assemble_card(concept, rows, payload, reply, curated, override, images,
                                          config['cards'], card_revisions)
                     _validate_reply(root, STORED_SCHEMA, card)

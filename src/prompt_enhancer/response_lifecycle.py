@@ -19,6 +19,16 @@ class DeliveryTicket:
         self.delivered = True
         await self.lifecycle._deliver(self)
 
+    async def abandon(self):
+        """The response will never be delivered: finalise it now as `delivery_unacknowledged`, with no monitor run.
+
+        A long-lived caller (`enhance serve`) must not keep the trace slot and the model-client owner of every response
+        it failed to deliver until `close()`. A no-op once delivered, finalised or closed, so it is safe on every path."""
+        if self.delivered or self.finalized or self.lifecycle.closed:
+            return
+        self.delivered = True
+        await self.lifecycle._deliver(self, abandoned=True)
+
 
 class ResponseLifecycle:
     def __init__(self, runtime, sink):
@@ -76,15 +86,16 @@ class ResponseLifecycle:
                 self.errors.append('TRACE_WRITE_FAILED')
         future.add_done_callback(finished)
 
-    async def _deliver(self, ticket):
+    async def _deliver(self, ticket, *, abandoned=False):
         if ticket.finalized:
             return
         settings = self.settings.get('monitoring')
         work = None
-        if settings is not None and len(self._monitors) < settings['queue_limit']:
+        if not abandoned and settings is not None and len(self._monitors) < settings['queue_limit']:
             work = asyncio.create_task(self._monitor(ticket, settings))
             self._monitors.add(work)
-        delivery = asyncio.create_task(self._finish_delivery(ticket, work, 'capacity'))
+        delivery = asyncio.create_task(
+            self._finish_delivery(ticket, work, 'delivery_unacknowledged' if abandoned else 'capacity'))
         self._deliveries.add(delivery)
         delivery.add_done_callback(self._deliveries.discard)
         if work is None:

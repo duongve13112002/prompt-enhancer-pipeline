@@ -14,9 +14,9 @@ from .config import (ConfigurationError, _EXACT_INTEGERS, _StrictSafeLoader, _le
                      _resolve_within, _schema, validate_naming_reads)
 from .k0 import parse_info, trim_info_token
 from .k0_scan import decode_info, read_source_file
-from .k1_embed import MODEL_TOOL_MODULES, _read_verified, tool_revision
-from .model_client import (ModelCallError, ModelClientRun, run_concurrency, semantic_role_settings, safe_model_code,
-                           safe_probe_events)
+from .k1_embed import _read_verified
+from .model_client import (MODEL_CALL_REVISION, ModelCallError, ModelClientRun, run_concurrency,
+                           semantic_role_settings, safe_model_code, safe_probe_events)
 from .model_resources import CapacityLog, OrderedTurns, await_owned, flow
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id, normalise_name
@@ -25,7 +25,14 @@ from .storage.identity import canonical_json, check_folder_id, is_image_id
 
 # Artifact-bound: checkpoint layout/stages, independent of deployment choices.
 LAYOUT = 1
-DRAW_REVISION = {'model': 'none', 'prompt': 'none', 'schema': 'k2-draw-v1'}
+# artifact-bound: declared revision of the code that shapes a K2 naming artifact (KBS-S3-1); keys the artifacts in
+# place of a hash of module source. Bump it with any edit to a function its guard pins (tests/test_stage_revisions.py).
+K2_NAMING_REVISION = 'k2-naming-2'
+# artifact-bound: declared revision of the code that shapes draw, redraw, override and applied-name artifacts (KBS-S3-1).
+# Its value is unchanged, so persisted draws stay authoritative; bump it with any edit to a function the `k2_draw` guard
+# pins (tests/test_stage_revisions.py).
+K2_DRAW_REVISION = 'k2-draw-v1'
+DRAW_REVISION = {'model': 'none', 'prompt': 'none', 'schema': K2_DRAW_REVISION}
 TABLES = ('folders', 'concepts', 'folder_concepts')
 ROLE_SCHEMAS = {'info_assessor': 'info_assessment.v0', 'folder_namer': 'folder_naming.v0'}
 
@@ -297,8 +304,8 @@ def _role_revisions(config, name, prompt, root):
             'prompt': _digest({'id': role['prompt_id'], 'sha256': hashlib.sha256(prompt).hexdigest()}),
             'schema': _digest({'layout': LAYOUT, 'contract': _schema(root, ROLE_SCHEMAS[name]),
                                'configured': _schema(root, role['output']['schema_id']),
-                               'pillow': processor, 'tool': tool_revision(
-                                   'k2_naming', 'k0', 'k1_embed', *MODEL_TOOL_MODULES)})}
+                               'pillow': processor, 'stage_revision': K2_NAMING_REVISION,
+                               'model_call': MODEL_CALL_REVISION})}
 
 
 def _naming_payload(context):
@@ -306,6 +313,12 @@ def _naming_payload(context):
     if 'sampled_image_ids' in context:
         payload['image_labels'] = list(range(len(context['sampled_image_ids'])))
     return payload
+
+
+def _naming_result(value, record, context):
+    """The stored layout of one validated assessment or naming reply."""
+    return {'reply': value, 'origin': 'generated', 'model_revision': record['model_revision'],
+            'sampled_image_ids': context.get('sampled_image_ids', [])}
 
 
 def _naming_key(stage, context, revisions):
@@ -566,8 +579,7 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
             diagnostic = writer.checkpoints('k2_call_failure')
             _save(diagnostic, key, {'status': 'SCHEMA_INVALID'}, revisions[name], [dict(record, status='SCHEMA_INVALID')])
             raise
-        result = {'reply': value, 'origin': 'generated',
-                  'model_revision': record['model_revision'], 'sampled_image_ids': text.get('sampled_image_ids', [])}
+        result = _naming_result(value, record, text)
         artifacts.append(_save(checkpoints, key, result, revisions[name], [record]))
         return result
 

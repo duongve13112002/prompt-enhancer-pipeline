@@ -36,4 +36,11 @@ serving:
   max_concurrency: fit_from_bench
   queue_limit: design_required
   total_deadline_s: fit_from_bench
-  http: {max_request_bytes: deploy_required}   # set per deployment: the largest source image as base64 plus the prompt
+  host: deploy_required
+  port: deploy_required
+  http:
+    max_request_bytes: deploy_required   # set per deployment: the largest source image as base64 plus the prompt
+    max_connections: deploy_required
+    read_timeout_s: deploy_required
+    write_timeout_s: deploy_required
+    shutdown_timeout_s: deploy_required

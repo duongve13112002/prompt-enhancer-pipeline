@@ -36,6 +36,9 @@ class PipelineResponse:
     async def after_delivery(self):
         await self.ticket.after_delivery()
 
+    async def abandon(self):
+        await self.ticket.abandon()
+
 
 async def monitor_output(s0, planned, assembled, checked, owner, *, project_root):
     """One text-only calibrated check after delivery; no repair or delivered-envelope mutation."""

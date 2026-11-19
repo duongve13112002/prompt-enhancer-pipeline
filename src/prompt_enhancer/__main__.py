@@ -53,7 +53,7 @@ def build_parser():
     enhance_actions = enhance.add_subparsers(dest='action', required=True)
     once = _common(enhance_actions.add_parser('once', help='one request file in, one envelope on stdout'))
     once.add_argument('--request', required=True, help='request.v0 JSON file inside the project root')
-    _common(enhance_actions.add_parser('serve', help='not yet implemented in this build'))
+    _common(enhance_actions.add_parser('serve', help='S0 to S6 over HTTP on serving.host and serving.port; Ctrl+C or SIGTERM stops it'))
     evaluation = commands.add_parser('eval', help='evaluation: build, run, import, fit')
     eval_actions = evaluation.add_subparsers(dest='action', required=True)
     for name in ('build', 'run', 'import', 'fit'):
@@ -68,6 +68,9 @@ def main(argv=None):
     if args.command == 'enhance' and args.action == 'once':
         from .cli_enhance import run_once
         return run_once(args, root)
+    if args.command == 'enhance' and args.action == 'serve':
+        from .cli_serve import run_serve
+        return run_serve(args, root)
     if args.command == 'kb' and args.action == 'sync' and args.only is not None:
         from .cli_commands import run_command
         return run_command(args, root)

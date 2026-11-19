@@ -2,9 +2,7 @@
 
 from collections import Counter, defaultdict
 import hashlib
-import inspect
 import json
-from pathlib import Path
 import sys
 import unicodedata
 
@@ -23,6 +21,11 @@ from .storage.tables import check_embedding_space
 # Artifact/protocol-bound layout and file names; no content text selects a path.
 LAYOUT = 1
 SCHEMA = 'serving_index.v0'
+# artifact-bound: declared revision of the code that shapes the index files and their name normalisation (KBS-S3-1);
+# stored as `tools.code`, it replaces a hash of this module's bytes. Bump it with any edit to a function its guard pins
+# (tests/test_stage_revisions.py), `normalise_name` included.
+K5_INDEX_REVISION = 'k5-index-2'
+NORMALISATION_RULE = 'nfkc-casefold'  # protocol-bound: contracts/README.md Identity; stored as `tools.normalization`
 MANIFEST = 'index/manifest.arrow'
 INPUTS = ('concepts', 'folders', 'folder_concepts', 'images', 'aliases', 'cards',
           'concept_text_embeddings', 'image_embeddings')
@@ -98,9 +101,7 @@ def _source_hash(table, name, block_rows):
 
 def _tools(catalog):
     return {'numpy': np.__version__, 'arrow': pa.__version__,
-            'unicode': unicodedata.unidata_version,
-            'code': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-            'normalization': hashlib.sha256(inspect.getsource(normalise_name).encode('utf-8')).hexdigest(),
+            'unicode': unicodedata.unidata_version, 'code': K5_INDEX_REVISION, 'normalization': NORMALISATION_RULE,
             'schema': _digest(catalog.schema(SCHEMA))}
 
 
@@ -114,6 +115,12 @@ def _metadata(tables, settings, catalog):
     value = {'layout': LAYOUT, 'settings': settings, 'sources': sources, 'tools': _tools(catalog),
              'embedding': embedding}
     return dict(value, key=_digest(value), parts=[])
+
+
+def _part_entry(path, kind, table, data, artifact):
+    """One unit's entry in the manifest's `parts`."""
+    return {'path': path, 'kind': kind, 'rows': table.num_rows, 'sha256': hashlib.sha256(data).hexdigest(),
+            'size_bytes': len(data), 'artifact': artifact}
 
 
 def _checked_tables(tables, catalog):
@@ -331,9 +338,7 @@ def build_index(builder, config):
             built += 1
         builder.reference_artifacts([artifact])
         builder.add_file(path, data)
-        metadata['parts'].append({'path': path, 'kind': kind, 'rows': table.num_rows,
-                                  'sha256': hashlib.sha256(data).hexdigest(), 'size_bytes': len(data),
-                                  'artifact': artifact})
+        metadata['parts'].append(_part_entry(path, kind, table, data, artifact))
     # Validate saved units before the complete checkpoint exists.
     _validate(metadata, _building_reader(builder), tables, catalog, metadata)
     data = _document(metadata)

@@ -243,3 +243,58 @@ def test_skipped_monitor_closes_its_owned_client():
         await life.close()
         assert len(closed) == 2
     asyncio.run(run())
+
+
+def test_abandon_finalizes_an_undelivered_monitored_ticket_at_once():
+    """T-016 P3 F2: the slot, the owned client and the row are released now, not at `close()`; no monitor runs."""
+    async def run():
+        rows, closed, ran = [], [], []
+        life = ResponseLifecycle(settings(), rows.append)  # trace.queue_limit is 1
+
+        async def monitor():
+            ran.append(True)
+
+        async def cleanup():
+            closed.append(True)
+        ticket = life.submit(life.reserve(), {'body': {}}, monitor=monitor, cleanup=cleanup)
+        with pytest.raises(LifecycleFull):
+            life.reserve()  # the undelivered ticket holds the only place
+        await ticket.abandon()
+        assert closed == [True] and not ran
+        await asyncio.wait_for(_until(lambda: life._used == 0 and len(rows) == 1), 2)  # the trace write is joined by the pool
+        assert rows[0]['body']['monitoring'] == {'status': 'skipped', 'reason': 'delivery_unacknowledged'}
+        life.cancel(life.reserve())  # the place is free again
+        await ticket.abandon()  # idempotent: a second call writes nothing more
+        await ticket.after_delivery()  # and a late acknowledgement is ignored
+        await life.close()
+        assert len(rows) == 1 and closed == [True] and not ran and not life.errors
+    asyncio.run(run())
+
+
+def test_abandon_after_delivery_or_close_changes_nothing():
+    async def run():
+        rows, closed = [], []
+        config = settings()
+        config['trace']['queue_limit'] = 2
+        life = ResponseLifecycle(config, rows.append)
+
+        async def monitor():
+            return {'status': 'checked'}
+
+        async def cleanup():
+            closed.append(True)
+        delivered = life.submit(life.reserve(), {'body': {}}, monitor=monitor, cleanup=cleanup)
+        await delivered.after_delivery()
+        await delivered.abandon()  # already delivered
+        pending = life.submit(life.reserve(), {'body': {}}, monitor=monitor, cleanup=cleanup)
+        await life.close()  # finalises the pending one as delivery_unacknowledged
+        await pending.abandon()  # already closed
+        await asyncio.sleep(0)
+        statuses = sorted(row['body']['monitoring']['status'] for row in rows)
+        assert statuses == ['checked', 'skipped'] and len(rows) == 2 and closed == [True, True]
+    asyncio.run(run())
+
+
+async def _until(condition):
+    while not condition():
+        await asyncio.sleep(0)

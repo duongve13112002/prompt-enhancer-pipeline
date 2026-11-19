@@ -8,8 +8,8 @@ from pathlib import Path
 
 from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_alias_reads
 from .k2_naming import _digest, _validate_reply, failure_code, record_probe_failure
-from .k1_embed import MODEL_TOOL_MODULES, tool_revision
-from .model_client import ModelCallError, ModelClientRun, run_concurrency, semantic_role_settings
+from .model_client import (MODEL_CALL_REVISION, ModelCallError, ModelClientRun, run_concurrency,
+                           semantic_role_settings)
 from .model_resources import CapacityLog, await_owned, flow
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id, normalise_name
@@ -20,6 +20,9 @@ from .storage.identity import canonical_json
 LAYOUT = 1
 REPLY_SCHEMA = 'alias_generator_reply.v0'
 STORED_SCHEMA = 'alias_set.v0'
+# declared revision of the code that shapes a K4 generation bundle or alias row (KBS-S3-1); keys the artifacts in
+# place of a hash of module source. Bump it with any edit to a function its guard pins (tests/test_stage_revisions.py).
+K4_ALIAS_REVISION = 'k4-alias-2'
 
 
 def parse_alias_reply(value, *, project_root):
@@ -62,6 +65,36 @@ def _record_revisions(record, config):
             or revision != config['vlm']['backends'][backend]['model']['revision']):
         raise ValueError('alias call record has an invalid model revision')
     return {'model_revision': revision, 'prompt_id': record['prompt_id']}
+
+
+def _alias_payload(concept, descriptions, summary, config):
+    """The user text of one alias-generator call."""
+    return {'concept_name': concept['display_name'], 'descriptions': sorted(descriptions), 'card_summary': summary,
+            'languages': deepcopy(config['aliases']['languages'])}
+
+
+def _generation_bundle(revisions, payload, key, reply, record):
+    """The stored layout of one completed generation call."""
+    return {'version': LAYOUT, 'revisions': revisions, 'payload': payload, 'key': key, 'reply': reply,
+            'record': record}
+
+
+def _alias_rows(ordered, candidates, effective):
+    """Alias rows before collision marking: generated candidates, then author aliases, per concept."""
+    rows = []
+    for concept in ordered:
+        identity = concept['concept_id']
+        merged = {}
+        aliases, provenance = candidates.get(identity, ([], None))
+        for item in aliases:
+            # Same raw spelling can occur repeatedly in a model reply; deterministic first candidate wins.
+            merged.setdefault(item['text'], {'concept_id': identity, 'alias_text': item['text'],
+                              'origin': 'generated', 'language': item['language'], 'revisions': provenance})
+        for text in effective.get(identity, {}).get('aliases', []):
+            merged[text] = {'concept_id': identity, 'alias_text': text, 'origin': 'author', 'language': None,
+                            'revisions': {'model_revision': None, 'prompt_id': None}}
+        rows.extend(merged[text] for text in sorted(merged))
+    return rows
 
 
 def _inputs(store, config, handoff, cards, overrides):
@@ -146,7 +179,7 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
                                    if generate else None),
                  'schema': _digest({'layout': LAYOUT, 'reply': _schema(root, REPLY_SCHEMA),
                                    'configured': _schema(root, role['output']['schema_id']),
-                                   'tool': tool_revision('k4_aliases', 'k2_naming', *MODEL_TOOL_MODULES)})}
+                                   'stage_revision': K4_ALIAS_REVISION, 'model_call': MODEL_CALL_REVISION})}
     candidates, artifacts = {}, []
     owned_run = None
     capacity = CapacityLog()
@@ -159,8 +192,7 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
             async def evaluate(concept):
                 nonlocal owned_run
                 identity = concept['concept_id']
-                payload = {'concept_name': concept['display_name'], 'descriptions': sorted(descriptions[identity]),
-                           'card_summary': summaries[identity], 'languages': deepcopy(config['aliases']['languages'])}
+                payload = _alias_payload(concept, descriptions[identity], summaries[identity], config)
                 content = {'concept_id': identity, 'name_hash': _digest(payload['concept_name']),
                            'description_hash': _digest(payload['descriptions']),
                            'summary_hash': _digest(payload['card_summary']), 'languages_hash': _digest(payload['languages'])}
@@ -196,8 +228,7 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
                             raise ValueError(record['status'])
                         reply = parse_alias_reply(value, project_root=root)
                         provenance = _record_revisions(record, config)
-                        bundle = {'version': LAYOUT, 'revisions': revisions, 'payload': payload,
-                                  'key': key, 'reply': reply, 'record': record}
+                        bundle = _generation_bundle(revisions, payload, key, reply, record)
                         artifact = generated.commit(key, 'k4_generation', canonical_json(bundle).encode('utf-8'),
                                                     revisions=revisions, call_records=[record])
                         report['generated'] += 1
@@ -215,20 +246,7 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
             ordered = [concepts[key] for key in sorted(concepts)]
             if generate:  # per-item flow (decision 149); a fatal error drains the calls in flight before it is raised
                 await flow(ordered, evaluate, config['vlm']['backends'][role['backend']]['max_concurrency'])
-            rows = []
-            for concept in ordered:
-                identity = concept['concept_id']
-                merged = {}
-                aliases, provenance = candidates.get(identity, ([], None))
-                for item in aliases:
-                    # Same raw spelling can occur repeatedly in a model reply; deterministic first candidate wins.
-                    merged.setdefault(item['text'], {'concept_id': identity, 'alias_text': item['text'],
-                                      'origin': 'generated', 'language': item['language'], 'revisions': provenance})
-                for text in effective.get(identity, {}).get('aliases', []):
-                    merged[text] = {'concept_id': identity, 'alias_text': text, 'origin': 'author', 'language': None,
-                                    'revisions': {'model_revision': None, 'prompt_id': None}}
-                rows.extend(merged[text] for text in sorted(merged))
-            rows, findings = mark_collisions(ordered, rows)
+            rows, findings = mark_collisions(ordered, _alias_rows(ordered, candidates, effective))
             report['lint_findings'] = findings
             report['lint_findings'].extend({'code': 'UNMATCHED_OVERRIDE', 'message': name, 'refs': []}
                                            for name in report['unmatched_overrides'])

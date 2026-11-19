@@ -12,9 +12,10 @@ import PIL
 import pyarrow as pa
 
 from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_observation_reads
-from .k1_embed import MODEL_TOOL_MODULES, _read_verified, tool_revision
+from .k1_embed import _read_verified
 from .k2_naming import _digest, _validate_reply, failure_code, record_probe_failure
-from .model_client import ModelCallError, ModelClientRun, run_concurrency, semantic_role_settings
+from .model_client import (MODEL_CALL_REVISION, ModelCallError, ModelClientRun, run_concurrency,
+                           semantic_role_settings)
 from .model_resources import CapacityLog, await_owned, flow
 from .profile_prompt import load_prompt
 from .storage import StorageError, artifact_key, concept_id
@@ -27,6 +28,9 @@ LAYOUT = 1
 GROUPING = 'cosine-components-v1'
 STORED_SCHEMA = 'image_observation.v0'
 REPLY_SCHEMA = 'observer_reply.v1'
+# declared revision of the code that shapes a K2 observation (KBS-S3-1); keys the artifacts in place of a hash of
+# module source. Bump it with any edit to a function its guard pins (tests/test_stage_revisions.py).
+K2_OBSERVE_REVISION = 'k2-observe-2'
 
 
 def group_images(images, vectors, distance, *, revision, dim):
@@ -141,8 +145,31 @@ def observation_revisions(config, prompt, root):
                               'stored': _schema(root, STORED_SCHEMA),
                               'configured': _schema(root, role['output']['schema_id']),
                               'facet_schema_version': config['observe']['facet_schema_version'],
-                              'processor': PIL.__version__, 'tool': tool_revision(
-                                  'k2_observe', 'k2_naming', 'k1_embed', *MODEL_TOOL_MODULES)})}
+                              'processor': PIL.__version__, 'stage_revision': K2_OBSERVE_REVISION,
+                              'model_call': MODEL_CALL_REVISION})}
+
+
+def _member(row):
+    """One declared concept of a folder; the stored bundle keeps this layout in `concepts`."""
+    return {'name': row['name_as_written'], 'concept_id': row['concept_id']}
+
+
+def _declared(members):
+    """A folder's declared concepts in name order; their positions are what the observer sees and answers with."""
+    return sorted(members, key=lambda row: row['name'])
+
+
+def _observation_payload(declared, config, root):
+    """The user text of one observer call: positioned concept names and the facet groups the stored schema allows."""
+    return {'concept_names': [{'concept_position': index, 'name': item['name']} for index, item in enumerate(declared)],
+            'facet_schema': {'version': config['observe']['facet_schema_version'],
+                             'groups': _schema(root, STORED_SCHEMA)['properties']['observations']['items']
+                                       ['properties']['facet_group']['enum']}}
+
+
+def _observation_bundle(revisions, declared, reply, document):
+    """The stored layout of one completed image-call bundle."""
+    return {'version': LAYOUT, 'revisions': revisions, 'concepts': declared, 'reply': reply, 'document': document}
 
 
 def observation_key(image_id, names, revisions):
@@ -200,7 +227,7 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
             raise ValueError('folder concept references an unknown folder or concept')
         if concept_id(row['name_as_written']) != row['concept_id']:
             raise ValueError('folder concept name disagrees with its concept identity')
-        members.setdefault(row['folder_id'], []).append({'name': row['name_as_written'], 'concept_id': row['concept_id']})
+        members.setdefault(row['folder_id'], []).append(_member(row))
     all_images = {row['image_id'] for row in images}
     for row in folder_images:
         if row['folder_id'] not in folders or row['image_id'] not in all_images:
@@ -214,7 +241,7 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
               'skipped_folders': [], 'ineligible_images': sorted(all_images - set(groups)), 'representatives': {}}
     tasks = {}
     for folder_id, folder in sorted(folders.items()):
-        declared = sorted(members.get(folder_id, []), key=lambda row: row['name'])
+        declared = _declared(members.get(folder_id, []))
         if folder['error'] or folder['name_source'] is None or not declared:
             report['skipped_folders'].append(folder_id)
             continue
@@ -278,11 +305,7 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
                         bound = await owned_run.for_role('observer')
                     else:
                         bound = await client.for_role('observer')
-                    payload = {'concept_names': [{'concept_position': index, 'name': item['name']}
-                                                for index, item in enumerate(declared)],
-                               'facet_schema': {'version': config['observe']['facet_schema_version'],
-                                   'groups': _schema(root, STORED_SCHEMA)['properties']['observations']['items']
-                                             ['properties']['facet_group']['enum']}}
+                    payload = _observation_payload(declared, config, root)
                     value, record = await bound.call(prompt, canonical_json(payload),
                                                      images=[('knowledge_reference', data)])
                     if value is None:
@@ -297,8 +320,7 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
                     checkpoints.fail(key, failure_code(error), revisions=revisions)
                     report['failed'][key] = failure_code(error)
                     return
-                bundle = {'version': LAYOUT, 'revisions': revisions, 'concepts': declared,
-                          'reply': value, 'document': document}
+                bundle = _observation_bundle(revisions, declared, value, document)
                 artifact = checkpoints.commit(key, STAGE, canonical_json(bundle).encode('utf-8'),
                                                revisions=revisions, call_records=[record])
                 artifacts.append(artifact)
