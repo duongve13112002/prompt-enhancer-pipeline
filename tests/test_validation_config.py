@@ -334,6 +334,7 @@ def test_writer_budget_fallback_can_be_the_verifier_model(model_test_profile, tm
                  call_budget=1, on_budget_exhausted='fallback_to_default_backend', allow_images=False,
                  api_key_file='.secrets/synthetic.key', anthropic_version='2025-01-01', anthropic_workspace_id='none')
     cloud['model']['id'] = 'synthetic-cloud-writer'
+    cloud.pop('addendum_layout')  # a cloud backend refuses the openai_compatible addendum keys (T017-FIX)
     env.config['vlm']['backends']['cloud-writer'] = cloud
     env.config['vlm']['roles']['writer'].update(backend='cloud-writer', image='none')
     env.config['vlm']['roles']['verifier']['backend'] = 'main'

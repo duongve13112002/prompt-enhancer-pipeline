@@ -770,7 +770,8 @@ def _overlay(overlay, path):
         if not isinstance(backend, dict):
             raise ConfigurationError(f'{path}: vlm.backends.{name}: expected a mapping')
         invalid = set(backend) - {'provider', 'engine', 'base_urls', 'model', 'extra_body', 'max_concurrency', 'endpoints',
-                                  'http', 'probe', 'image', 'anthropic_version', 'anthropic_workspace_id'}
+                                  'http', 'probe', 'image', 'anthropic_version', 'anthropic_workspace_id',
+                                  'addendum_layout', 'addendum_separator'}
         if invalid:
             raise ConfigurationError(f'{path}: vlm.backends.{name}.{sorted(invalid)[0]}: not a deployment value')
 
@@ -864,6 +865,47 @@ def _command_reads(command, config):
         return (*keys, 'index', 'storage.kb_store', 'storage.lock')
     return tuple('rag.enabled' if key == 'rag' else key for key in keys
                  if key not in ('candidates', 'embedding', 'assembly'))
+
+
+ADDENDUM_LAYOUTS = ('separate_system_message', 'joined_system_message')  # protocol-bound: model_mapping.system_messages
+NO_SEPARATOR = 'none'  # protocol-bound profile value (decision 193): the separate layout sends no separator
+
+
+def _validate_addendum_layout(name, backend, path):
+    """T017-FIX: the addendum keys exist exactly where a request builder reads them.
+
+    An OpenAI-compatible backend with a chat route needs `addendum_layout` (a chat template may refuse a second system
+    message, J4a2 call 18); cloud backends send native system blocks and chat-less backends never chat, so the keys
+    would be settings nothing reads and are refused. The separate layout takes no separator or the reserved `none`
+    (decision 193: a child profile cannot delete an inherited separator, so it states `none`); any other separator
+    there would be ignored and is refused. The joined layout needs a real separator, so `none` is refused there. A
+    sentinel layout or separator passes here and is refused by the start gate (`_sentinel`), never defaulted.
+    """
+    key = f'{path}: vlm.backends.{name}'
+    provider, endpoints = backend['provider'], backend['endpoints']
+    if provider in SENTINELS:
+        return
+    chats = provider == 'openai_compatible' and (not isinstance(endpoints, dict) or 'chat' in endpoints)
+    present = [field for field in ('addendum_layout', 'addendum_separator') if field in backend]
+    if not chats:
+        if present:
+            reason = (f'{provider} sends native system blocks' if provider != 'openai_compatible'
+                      else 'the backend has no endpoints.chat, so it never receives an addendum')
+            raise ConfigurationError(f'{key}.{present[0]}: refused: {reason}')
+        return
+    if 'addendum_layout' not in backend:
+        raise ConfigurationError(f'{key}.addendum_layout: missing key: an openai_compatible chat backend must state '
+                                 f'how it receives the runtime addendum ({" or ".join(ADDENDUM_LAYOUTS)})')
+    layout = backend['addendum_layout']
+    if layout == 'joined_system_message' and 'addendum_separator' not in backend:
+        raise ConfigurationError(f'{key}.addendum_separator: missing key: required by addendum_layout '
+                                 'joined_system_message')
+    if layout == 'joined_system_message' and backend['addendum_separator'] == NO_SEPARATOR:
+        raise ConfigurationError(f'{key}.addendum_separator: refused: none sends no separator, and addendum_layout '
+                                 'joined_system_message needs one between the admin prompt and the addendum')
+    if layout == 'separate_system_message' and backend.get('addendum_separator', NO_SEPARATOR) != NO_SEPARATOR:
+        raise ConfigurationError(f'{key}.addendum_separator: refused: addendum_layout separate_system_message '
+                                 f'sends no separator (state {NO_SEPARATOR} or leave the key out)')
 
 
 def image_probe_backend(vlm, role):
@@ -975,6 +1017,9 @@ def _validate_model_bindings(config, path, project_root=None):
 
     vlm = config['vlm']
     backends = vlm['backends']
+    for name, backend in backends.items():
+        if isinstance(backend, dict):
+            _validate_addendum_layout(name, backend, path)
     default = vlm['default_backend']
     if default not in SENTINELS:
         if default not in backends:

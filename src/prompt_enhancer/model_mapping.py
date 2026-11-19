@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 import base64
+import hashlib
+import json
 
 
 # Source columns O and G. Missing A sampling fields are deliberately absent.
@@ -45,6 +47,56 @@ def map_generation_fields(provider, role, capabilities=None, *, mapped=False, en
     return fields, warnings
 
 
+def system_messages(backend, system_prompt, addendum):
+    """The leading system messages; with an addendum, laid out by `addendum_layout` (T017-FIX, R-004).
+
+    Without an addendum the layout is not read, so planner, offline and probe bodies are unchanged. The admin text is
+    always first and byte-for-byte unchanged: `separate_system_message` adds the addendum as a second system message;
+    `joined_system_message` sends one message `admin + addendum_separator + addendum`, for chat templates that refuse
+    a system message after the first.
+    """
+    from .config import NO_SEPARATOR, ConfigurationError, SENTINELS  # lazy: config imports SAMPLING from this module
+
+    messages = [] if system_prompt is None else [{'role': 'system', 'content': system_prompt}]
+    if addendum is None:
+        return messages
+    layout = backend.get('addendum_layout')
+    if layout == 'separate_system_message':
+        messages.append({'role': 'system', 'content': addendum})
+    elif layout == 'joined_system_message':
+        separator = backend.get('addendum_separator')
+        # `none` (decision 193) belongs to the separate layout only; it is never concatenated into a message.
+        if type(separator) is not str or not separator or separator in SENTINELS or separator == NO_SEPARATOR:
+            raise ConfigurationError('addendum_separator: joined_system_message needs a '
+                                     'non-empty configured separator')
+        if system_prompt is None:
+            raise ValueError('joined_system_message needs the admin system prompt')
+        messages[0] = {'role': 'system', 'content': system_prompt + separator + addendum}
+    else:
+        raise ConfigurationError('addendum_layout: missing or unresolved; an addendum needs '
+                                 'separate_system_message or joined_system_message')
+    return messages
+
+
+def system_texts(provider, body):
+    """The system texts a built body sends, in order: OpenAI system messages, the Anthropic `system` string or
+    blocks, the Gemini `systemInstruction` parts."""
+    if provider == 'openai_compatible':
+        return [message['content'] for message in body['messages'] if message['role'] == 'system']
+    if provider == 'anthropic':
+        system = body.get('system')
+        return [] if system is None else [system] if isinstance(system, str) else [block['text'] for block in system]
+    if provider == 'gemini':
+        return [part['text'] for part in body.get('systemInstruction', {}).get('parts', [])]
+    raise ValueError('unsupported provider')
+
+
+def effective_system_hash(provider, body):
+    """`sha256:` of the canonical JSON array of the system texts the body sends (one entry when joined)."""
+    data = json.dumps(system_texts(provider, body), ensure_ascii=False, separators=(',', ':'))
+    return 'sha256:' + hashlib.sha256(data.encode('utf-8')).hexdigest()
+
+
 def openai_request(backend, role, system_prompt, user_text, *, schema=None, images=(),
                    capabilities=None, mapped=False, addendum=None):
     """One body builder for challenges and real calls; acceptance is not semantic proof.
@@ -80,10 +132,7 @@ def openai_request(backend, role, system_prompt, user_text, *, schema=None, imag
                                               + base64.b64encode(data).decode('ascii')}}
             for mime, data in images]]
     body['model'] = backend['model']['id']
-    body['messages'] = ([] if system_prompt is None else [{'role': 'system', 'content': system_prompt}])
-    if addendum is not None:
-        # T-015: the S4 addendum follows the admin's verbatim system prompt as its own system message (R-004).
-        body['messages'].append({'role': 'system', 'content': addendum})
+    body['messages'] = system_messages(backend, system_prompt, addendum)
     body['messages'].append({'role': 'user', 'content': content})
     output = role['output']
     if output['format'] == 'json_object':

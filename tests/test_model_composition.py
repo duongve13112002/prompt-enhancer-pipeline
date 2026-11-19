@@ -182,7 +182,9 @@ def test_loaded_profile_composes_role_client(tmp_path, project_root, monkeypatch
                        endpoints={'chat': 'chat', 'health': 'health'}, max_concurrency=2,
                        http=dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
                                  max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[]),
-                       probe=dict(max_requests=20, timeout_s=1, image_attempts=1), image=dict(max_decode_pixels=1000, max_side='none'), extra_body={})
+                       probe=dict(max_requests=20, timeout_s=1, image_attempts=1), image=dict(max_decode_pixels=1000, max_side='none'), extra_body={},
+                       addendum_layout='separate_system_message',  # test-only layout (T017-FIX)
+                       addendum_separator='none')  # the base example states deploy_required (decision 193)
         backend['model'].update(id='model-base', revision='revision-base')
         if observation in retry_cases:
             backend['http'].update(max_retries=1, retry_statuses=[503], backoff_initial_s=0.2, backoff_max_s=2)
@@ -365,9 +367,13 @@ def test_cloud_budget_is_shared_by_roles_from_same_run(tmp_path, project_root, p
                      endpoints={'chat': 'chat', 'health': 'health'}, max_concurrency=1,
                      http=dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
                                max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[]),
-                     probe=dict(max_requests=1, timeout_s=1, image_attempts=1), image=dict(max_decode_pixels=1000, max_side='none'))
+                     probe=dict(max_requests=1, timeout_s=1, image_attempts=1), image=dict(max_decode_pixels=1000, max_side='none'),
+                     addendum_layout='separate_system_message',  # test-only layout (T017-FIX)
+                     addendum_separator='none')  # the base example states deploy_required (decision 193)
         local['model'].update(id='local', revision='revision')
         cloud = deepcopy(local)
+        cloud.pop('addendum_layout')  # a cloud backend refuses the openai_compatible addendum keys
+        cloud.pop('addendum_separator')
         cloud.update(provider='anthropic', engine={'name': 'anthropic'}, api_key_file='.secrets/synthetic.key', anthropic_version='2025-01-01', anthropic_workspace_id='none',
                      endpoints={'chat': 'cloud', 'health': 'health'},
                      call_budget=3, on_budget_exhausted=('stop' if policy.startswith('image_') else policy),

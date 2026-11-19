@@ -169,6 +169,9 @@ def test_dev_alias_languages_resolve_and_base_sync_refuses(k2_env):
     # Resolve unrelated settings with labelled synthetic values; languages inherit the actual example lineage.
     resolved = deepcopy(k2_env.config)
     del resolved['aliases']
+    # T017-FIX: the dev parent sets joined_system_message with a separator, which a child cannot delete; keep the
+    # labelled test layout coherent with both parents.
+    resolved['vlm']['backends']['main'].update(addendum_layout='joined_system_message', addendum_separator='\n\n')
     for profile, parent in (('dev', 'enhancer.dev.example.yaml'), ('base', 'enhancer.example.yaml')):
         path = profiles / f'alias-{profile}-test.yaml'
         path.write_text(yaml.safe_dump(dict(resolved, extends=parent)), encoding='utf-8')

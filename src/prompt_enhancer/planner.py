@@ -2,7 +2,7 @@
 
 The model refers to shortlist entries, variant groups and variants only by position (`planner_reply.v0`); code checks
 every position, reference and verbatim span, makes the family and variant identities concrete, picks among family
-candidates (decisions 15, 69) and builds `intent_ir.v0` inside `plan_result.v0`. All shortlist, card and prompt text
+candidates (decisions 15, 69) and builds `intent_ir.v0` inside `plan_result.v1`. All shortlist, card and prompt text
 goes to the model as one JSON data message; the system message is the prompt file's bytes, unchanged.
 """
 
@@ -18,7 +18,7 @@ from jsonschema import ValidationError
 
 from .candidates import build_candidates, validate_shortlist
 from .config import _EXACT_INTEGERS, validate_planner_reads
-from .model_client import ModelCallError
+from .model_client import ModelCallError, safe_model_code
 from .model_resources import flow
 from .model_schemas import cached_registry
 from .profile_prompt import load_prompt
@@ -26,7 +26,10 @@ from .profile_prompt import load_prompt
 ROLE = 'planner'  # protocol-bound VLM role name (contracts/vlm-request.md)
 FIT_ORDER = ('fits', 'neutral', 'conflicts')  # protocol-bound preference tiers (decisions 15, 69)
 EDIT_FIELDS = ('edit_targets', 'delta', 'preserve', 'dependent_effects')  # intent_ir.v0 fields empty for generate
-RESULT_SCHEMA = 'plan_result.v0'  # artifact-bound
+RESULT_SCHEMA = 'plan_result.v1'  # artifact-bound
+REPLY_SCHEMA = 'planner_reply.v0'  # artifact-bound: the configured role schema (config.PLANNER_REPLY_SCHEMA)
+# artifact-bound (T017-FIX): planner_reply.v0 with the edit fields structurally empty, sent for generate requests
+GENERATE_REPLY_SCHEMA = 'planner_reply_generate.v0'
 SEED_BITS = 63  # protocol-bound: seeds stay inside the schema's non-negative 64-bit integer range
 
 
@@ -73,13 +76,14 @@ def _require(condition, message):
         raise InvalidReply(message)
 
 
-def check_integers(reply, registry):
+def check_integers(reply, registry, schema_id=REPLY_SCHEMA):
     """Reply integers are native ints in their schema domain.
 
     Draft 2020-12 counts an integral float such as `1.0` as an integer, and positions index Python lists below, so the
-    reply is revalidated with exact integers (as S1 does); a failure joins the invalid-reply path (R-013).
+    reply is revalidated with exact integers (as S1 does) against the schema the request sent; a failure joins the
+    invalid-reply path (R-013).
     """
-    schema, _ = registry.get('planner_reply.v0')
+    schema, _ = registry.get(schema_id)
     try:
         _EXACT_INTEGERS(schema).validate(reply)
     except ValidationError as error:
@@ -251,7 +255,7 @@ def build_plan(reply, task, entries, variants, config, warnings):
 
 
 async def plan(intake_result, shortlist, client, *, project_root, embedder=None):
-    """Return plan_result.v0 for one request; never pins, closes the pin or builds a model client.
+    """Return plan_result.v1 for one request; never pins, closes the pin or builds a model client.
 
     `shortlist` is S1's `candidate_shortlist.v0` with retrieval on and None with retrieval off (R-009). `client` is
     the caller's planner-bound model client. A schema- or invariant-invalid reply is retried once, then the result
@@ -302,44 +306,54 @@ async def plan(intake_result, shortlist, client, *, project_root, embedder=None)
     if task == 'edit' and role['image'] != 'none':
         images = (('source_image', base64.b64decode(payload['source_image']['data'], validate=True)),)
     manifest = intake_result.profile.manifest
+    # T017-FIX (F2): a generate request is sent the schema whose edit fields are empty, so the shared schema's
+    # unbounded `preserve` cannot carry the payload's `creativity.preserve` categories into the reply; edit requests
+    # keep the configured schema and the old call shape. check_reply keeps the invariant as a defence.
+    reply_schema = GENERATE_REPLY_SCHEMA if task == 'generate' else REPLY_SCHEMA
+    options = {'schema_id': GENERATE_REPLY_SCHEMA} if task == 'generate' else {}
 
     async def ask(shortlist_entries):
         text = _data(payload, config, manifest, shortlist_entries, variants)
         for _ in range(2):  # one retry, and only for an invalid reply (docs/stages/S2-planner.md)
             try:
-                value, record = await client.call(system, text, images=images)
-            except ModelCallError:
-                return None, 'PLANNER_CALL_FAILED'
+                value, record = await client.call(system, text, images=images, **options)
+            except ModelCallError as error:
+                return None, ('PLANNER_CALL_FAILED', error.code)  # T017-FIX (F3): the cause code survives
             calls.append(_plain(record))
             if value is None:
                 if record['status'] != 'SCHEMA_INVALID':
-                    return None, 'PLANNER_CALL_FAILED'
+                    return None, ('PLANNER_CALL_FAILED', safe_model_code(record['status']))
                 _warn('SCHEMA_INVALID')
                 continue
             try:
-                check_integers(value, registry)
+                check_integers(value, registry, reply_schema)
                 return check_reply(value, prompt, task, shortlist_entries, variants, groups), None
             except InvalidReply:
                 calls[-1]['reply_check'] = 'INVARIANT_INVALID'
                 _warn('SCHEMA_INVALID')
-        return None, 'PLANNER_REPLY_INVALID'
+        return None, ('PLANNER_REPLY_INVALID', None)
 
     def _warn(code):
         if code not in warnings:
             warnings.append(code)
 
     def result(state, ir=None, selections=(), ratings=(), error=None):
+        detail = None
+        if error is not None:
+            code, cause = error
+            detail = {'code': code, 'message': {
+                'PLANNER_REPLY_INVALID': 'S2: the planner reply was invalid after one retry',
+                'PLANNER_CALL_FAILED': 'S2: the planner call failed'}[code]}
+            if cause is not None:
+                detail['cause'] = cause  # a model-call code only (plan_result.v1), never reply or prompt text
         value = {'state': state, 'intent_ir': ir, 'selections': list(selections), 'variant_ratings': list(ratings),
-                 'warnings': warnings, 'calls': calls,
-                 'error': None if error is None else {'code': error, 'message': {
-                     'PLANNER_REPLY_INVALID': 'S2: the planner reply was invalid after one retry',
-                     'PLANNER_CALL_FAILED': 'S2: the planner call failed'}[error]}}
+                 'warnings': warnings, 'calls': calls, 'error': detail}
         registry.validate(RESULT_SCHEMA, value)
         return value
 
     reply, error = await ask(entries)
     if reply is None:
-        return result('failed' if error == 'PLANNER_CALL_FAILED' else 'degraded', error=error)
+        return result('failed' if error[0] == 'PLANNER_CALL_FAILED' else 'degraded', error=error)
     for _ in range(config['planner']['second_chance_rounds']):
         mentions = sorted({link['mention'] for link in reply['links']
                            if link['needs_lookup'] and link['status'] == 'no_match'})

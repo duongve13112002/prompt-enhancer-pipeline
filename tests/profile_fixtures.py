@@ -44,6 +44,8 @@ def config_data(tmp_path):
                            max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[])
     backend['probe'] = dict(max_requests=1, timeout_s=1, image_attempts=1)
     backend['image'] = dict(max_decode_pixels=1000, max_side='none')
+    backend['addendum_layout'] = 'separate_system_message'  # test-only layout (T017-FIX)
+    backend.pop('addendum_separator', None)
     config['profiles'].update(root=str(tmp_path / 'profiles'), exclude=['_example'], default_profile_id='p1')
     return config
 

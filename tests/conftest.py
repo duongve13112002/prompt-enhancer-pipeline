@@ -31,7 +31,9 @@ def model_test_profile():
                    base_urls=['http://127.0.0.1:8080'], endpoints={'chat': 'chat', 'health': 'health'},
                    max_concurrency=1, http=dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1,
                    pool_timeout_s=1, max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[]),
-                   probe={'max_requests': 1, 'timeout_s': 1, 'image_attempts': 1}, image={'max_decode_pixels': 1000, 'max_side': 'none'})
+                   probe={'max_requests': 1, 'timeout_s': 1, 'image_attempts': 1}, image={'max_decode_pixels': 1000, 'max_side': 'none'},
+                   addendum_layout='separate_system_message')  # test-only layout (T017-FIX)
+    backend.pop('addendum_separator', None)
     backend['model'].update(id='synthetic', revision='test')
     for name in ('observer', 'info_assessor', 'folder_namer', 'card_builder', 'alias_generator'):
         role = profile['vlm']['roles'][name]
@@ -52,6 +54,7 @@ def model_test_profile():
     # T-008: kb sync reads the embedder; a synthetic local embedding backend with every K1 field resolved.
     embedder = deepcopy(backend)
     embedder['endpoints'] = {'embeddings': 'v1/embeddings', 'health': 'health'}
+    embedder.pop('addendum_layout', None)  # a chat-less backend refuses the addendum keys (T017-FIX)
     embedder['model'] = dict(backend['model'], id='synthetic-embedder', revision='test')
     profile['vlm']['backends']['embedder'] = embedder
     profile['embedding'].update(chosen='embeddinggemma-2', revision='test', backend='embedder', dimension=4,

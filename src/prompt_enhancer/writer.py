@@ -17,7 +17,7 @@ from .profile_prompt import ProfileError, load_prompt, placeholders, sha256_tag
 from .profile_validators import validate_artifact
 
 
-RESULT_SCHEMA = 'writer_result.v0'  # artifact-bound stage contract
+RESULT_SCHEMA = 'writer_result.v1'  # artifact-bound stage contract
 ROLE = 'writer'  # protocol-bound model role
 
 
@@ -121,7 +121,7 @@ def prepare_write(intake_result, plan_result, assembly_result, *, project_root, 
     if not config['rag']['enabled'] and assembly_result is not None:
         raise ValueError('S4: retrieval off has no assembly result')
     registry = SchemaRegistry(root / 'contracts' / 'schemas')
-    registry.validate('plan_result.v0', plan_result)
+    registry.validate('plan_result.v1', plan_result)
     if config['rag']['enabled']:
         if assembly_result is None:
             raise ValueError('S4 requires the assembly result with retrieval on')
@@ -190,6 +190,8 @@ async def write(intake_result, plan_result, assembly_result, client, *, project_
               'warnings': warnings, 'error': None if okay else {'code': status if status != 'OK' else 'OUTPUT_INVALID',
                                                                'message': 'S4: no complete writer draft'},
               'brief_hash': sha256_tag(text.encode('utf-8')), 'system_prompt_hash': sha256_tag(system),
-              'addendum_hash': None if addendum is None else sha256_tag(addendum)}
+              'addendum_hash': None if addendum is None else sha256_tag(addendum),
+              # T017-FIX: the hash of the system texts the request actually sent, after the backend's addendum layout
+              'effective_system_hash': record.get('effective_system_hash')}
     prepared.registry.validate(RESULT_SCHEMA, result)
     return result

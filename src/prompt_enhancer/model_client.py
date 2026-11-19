@@ -13,7 +13,7 @@ from .config import (ConfigurationError, NO_MEDIA_TYPE, _sentinel, attempt_seed_
                      resolve_backend_engine, resolve_writer_format)
 from .model_cloud import cloud_headers, cloud_request
 from .model_json import strict_json
-from .model_mapping import openai_request
+from .model_mapping import effective_system_hash, openai_request
 from .model_image import configure_decode_backstop, prepare_image
 from .model_probe import (ProbeResult, probe_backend, probe_local_image_pair, probe_local_thinking_pair,
                          probe_local_multiple_images_pair, multiple_images_plan, multiple_images_probe_cases,
@@ -29,7 +29,7 @@ from pathlib import Path
 # artifact-bound: declared revision of the shared model-call path (request mapping, image preparation, reply parsing)
 # that every K2, K3 and K4 artifact passes through (KBS-S3-1). It keys those artifacts in place of a hash of module
 # source; bump it in the same change that edits a function its guard pins (tests/test_stage_revisions.py).
-MODEL_CALL_REVISION = 'model-call-3'
+MODEL_CALL_REVISION = 'model-call-4'
 
 # Protocol-bound public failure codes; never expose arbitrary exception/model text.
 MODEL_CODES = frozenset(('MODEL_CALL_FAILED', 'MODEL_CALL_INVALID', 'CAPABILITY_UNAVAILABLE',
@@ -255,8 +255,11 @@ class BoundModelClient:
         self.run = run
         self.role_name = role_name
 
-    async def call(self, system_prompt, user_text, *, manifest=None, images=(), addendum=None, seed=None):
+    async def call(self, system_prompt, user_text, *, manifest=None, images=(), addendum=None, schema_id=None,
+                   seed=None):
         options = {} if addendum is None else {'addendum': addendum}
+        if schema_id is not None:
+            options['schema_id'] = schema_id
         if seed is not None:  # a retry attempt (decisions 183, 188); absent for attempt 0, so doubles stay valid
             options['seed'] = seed
         return await self.run.client.call(self.role_name, system_prompt, user_text, manifest=manifest, images=images,
@@ -702,10 +705,11 @@ class RoleClient:
         self.probes[backend_name] = result
         return await self._extend_multiple_images(backend_name, production_pair)
 
-    async def call(self, role_name, system_prompt, user_text, *, manifest=None, images=(), addendum=None, seed=None):
+    async def call(self, role_name, system_prompt, user_text, *, manifest=None, images=(), addendum=None,
+                   schema_id=None, seed=None):
         try:
             return await self._call(role_name, system_prompt, user_text, manifest=manifest, images=images,
-                                    addendum=addendum, seed=seed)
+                                    addendum=addendum, reply_schema=schema_id, seed=seed)
         except ModelCallError as error:
             error.probe_evidence = safe_probe_events(self.probe_events)
             if error.__cause__ is not None or error.code != 'MODEL_CALL_FAILED':
@@ -728,7 +732,8 @@ class RoleClient:
         except Exception as error:
             raise ModelCallError('MODEL_CALL_FAILED: model call could not be completed') from error
 
-    async def _call(self, role_name, system_prompt, user_text, *, manifest=None, images=(), addendum=None, seed=None):
+    async def _call(self, role_name, system_prompt, user_text, *, manifest=None, images=(), addendum=None,
+                    reply_schema=None, seed=None):
         if seed is not None and (type(seed) is not int or seed < 0):
             raise ValueError('seed must be a non-negative integer')
         if addendum is not None and not isinstance(addendum, bytes):
@@ -736,6 +741,13 @@ class RoleClient:
         addendum_text = None if addendum is None else addendum.decode('utf-8')
         role = deepcopy(self.config['vlm']['roles'][role_name])
         configured_output = deepcopy(role['output'])
+        if reply_schema is not None:
+            # T017-FIX: a caller may send a registered, narrower reply schema (the planner's generate schema). It is
+            # applied after the probes, so the probe proof key and challenges stay those of the configured role.
+            if (type(reply_schema) is not str or configured_output['schema_id'] in ('none', 'from_profile_manifest')
+                    or configured_output['format'] == 'from_profile_manifest'):
+                raise ValueError('a reply schema override needs a role with a concrete schema')
+            self.schemas.get(reply_schema)
         if role_name == 'writer':
             if manifest is None:
                 raise ModelCallError('writer requires a profile manifest')
@@ -798,7 +810,7 @@ class RoleClient:
                 backend_name = fallback
                 await self.start_backend(backend_name, role_name=role_name)
                 continue
-            output = role['output']
+            output = role['output'] if reply_schema is None else dict(role['output'], schema_id=reply_schema)
             if output['format'] != 'none' and output['validate_response'] is not True:
                 raise ModelCallError('structured output requires response validation')
             required = ['text'] if self._production else []
@@ -872,6 +884,7 @@ class RoleClient:
                                                      schema=cloud_schema, images=cloud_images, addendum=addendum_text)
                 warnings.extend(cloud_warnings)
             body_hash = _digest(body)
+            system_hash = effective_system_hash(provider, body)  # T017-FIX: over the system texts of the posted body
             image_config = role['image']
             vision_config = None
             if isinstance(image_config, dict):
@@ -895,6 +908,7 @@ class RoleClient:
                       'provider': provider, 'engine': engine, 'model_id': backend['model']['id'],
                       'model_revision': backend['model']['revision'], 'schema_id': schema_id,
                       'schema_hash': schema_hash, 'effective_body_hash': body_hash, 'request_hash': request_hash,
+                      'effective_system_hash': system_hash,
                       'image_roles': [image_role for image_role, _ in images],
                       'warnings': warnings, 'previous_attempts': attempts}
             if self._production:

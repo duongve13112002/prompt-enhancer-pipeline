@@ -20,6 +20,8 @@ vlm:
       http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
       probe: {max_requests: design_required, timeout_s: design_required, image_attempts: fit_from_bench}
       image: {max_decode_pixels: deploy_required, max_side: none}   # max_side: the server's own longest-side cap, decision 144
+      addendum_layout: deploy_required   # T017-FIX: set from the served model's chat template; Qwen-family templates refuse a second system message (J4a2 call 18), which needs joined_system_message
+      addendum_separator: deploy_required   # a non-empty string with joined_system_message; none with separate_system_message (decision 193)
       endpoints:
         chat: deploy_required
         health: deploy_required

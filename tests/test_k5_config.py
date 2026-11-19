@@ -104,6 +104,8 @@ def test_real_example_lineages_refuse_each_index_sentinel(k2_env):
         (profiles / name).write_bytes((repo / 'configs' / name).read_bytes())
     resolved = deepcopy(k2_env.config)
     del resolved['index']  # unrelated fields are labelled synthetic; index inherits the actual examples
+    # T017-FIX: the dev parent sets joined_system_message with a separator, which a child cannot delete.
+    resolved['vlm']['backends']['main'].update(addendum_layout='joined_system_message', addendum_separator='\n\n')
     for parent in ('enhancer.example.yaml', 'enhancer.dev.example.yaml'):
         for overrides, refused in [({}, 'engine'), ({'engine': 'numpy_exact'}, 'metric'),
                                    ({'engine': 'numpy_exact', 'metric': 'inner_product'}, 'build'),

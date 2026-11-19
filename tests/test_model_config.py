@@ -267,7 +267,9 @@ def test_role_values_through_command_load(tmp_path, project_root, key, override,
                    http=dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1,
                              pool_timeout_s=1, max_retries=0, backoff_initial_s=0,
                              backoff_max_s=0, retry_statuses=[]),
-                   probe=dict(max_requests=1, timeout_s=1, image_attempts=1), image=dict(max_decode_pixels=1000, max_side='none'))
+                   probe=dict(max_requests=1, timeout_s=1, image_attempts=1), image=dict(max_decode_pixels=1000, max_side='none'),
+                   addendum_layout='separate_system_message',  # test-only layout (T017-FIX)
+                   addendum_separator='none')  # the base example states deploy_required; separate takes none (decision 193)
     backend['model'].update(id='local-model', revision='revision')
     profile['vlm']['backends']['alternate'] = deepcopy(backend)
     keys = key.split('.')

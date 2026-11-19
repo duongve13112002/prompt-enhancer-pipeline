@@ -59,6 +59,8 @@ def prepare(config, path):
     elif path == ('embedding', 'backend'):  # T-008: the embedder is a named backend with an embeddings route
         config['vlm']['backends']['alternate'] = deepcopy(config['vlm']['backends']['main'])
         config['vlm']['backends']['alternate']['endpoints'] = {'embeddings': 'v1/embeddings', 'health': 'health'}
+        for key in ('addendum_layout', 'addendum_separator'):  # T017-FIX: refused on a chat-less backend
+            config['vlm']['backends']['alternate'].pop(key, None)
 
 
 def set_candidate(config, path, candidate):
@@ -89,6 +91,7 @@ def options(value):
             'openai_input_content', 'native', 'numpy_exact', 'cosine', 'inner_product', 'char_ngram',
             'user_reference',  # T-014: role image.source is a closed enum of five values
             'include', 'omit',  # T-014 P2: assembly.default_outfit and resolution.on_variant_unspecified enums
+            'separate_system_message', 'joined_system_message',  # T017-FIX: backend addendum_layout enum
             [],
             ['alternative'], ['generate'], ['edit'],
             ['identity'],  # T-014 P2: scope-matrix rows are lists of facet groups
@@ -189,6 +192,8 @@ def test_config_override_and_refusal(path, tmp_path):
         parent[key] = 'png' if original != 'png' else 'jpeg'
     if path[-1] == 'api_key_file' and path[:2] == ('vlm', 'backends'):
         parent[key] = '.secrets/alternative.key'
+    if path[-1] == 'addendum_layout' and parent[key] == 'separate_system_message':
+        parent.pop('addendum_separator', None)  # T017-FIX: the separate layout refuses a separator
     if path[-1] == 'base_urls' and path[:2] == ('vlm', 'backends'):
         parent[key] = ['https://example.org/alternative']
     if path == ('vlm', 'backends', 'cloud_gemini', 'endpoints'):

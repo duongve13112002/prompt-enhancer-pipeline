@@ -157,7 +157,7 @@ creativity:                              # decision 8: example policy; the value
 
 writer:                                  # S4
   system_prompt_verbatim: true           # R-004: the admin's text is never edited
-  runtime_addendum: true                 # a separate message after the system prompt, never inside it
+  runtime_addendum: true                 # appended after the admin's verbatim system prompt, never inside it; the layout is vlm.backends.<name>.addendum_layout
   knowledge_block: delimited_data        # R-026
 
 validation:                              # S5
@@ -205,6 +205,8 @@ vlm:                                     # R-018: rules name no model; models ar
       http: &model_http {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
       probe: &model_probe {max_requests: design_required, timeout_s: design_required, image_attempts: fit_from_bench}   # image_attempts: requests per challenge of the plain `image` probe on a malformed reply (decision 188); fitted by the seed experiment
       image: &model_image {max_decode_pixels: deploy_required, max_side: none}   # max_side (decision 144): this backend's longest image side; a chat call uses the smaller of it and the role's side; none = no backend limit; embedder backends keep none until K1 includes it
+      addendum_layout: deploy_required   # T017-FIX: separate_system_message (the addendum as a second system message) or joined_system_message (one system message: admin bytes unchanged and first, then addendum_separator, then the addendum); depends on the deployment model's chat template (a Qwen3.5 template refuses a second system message, docs/stages/S4-writer.md)
+      addendum_separator: deploy_required   # T017-FIX, decision 193: joined_system_message needs a non-empty string (e.g. "\n\n") and refuses none; separate_system_message takes only none (any other value is refused); cloud and embedding-only backends take neither key; a sentinel here is refused at start, never defaulted
     embedder_qwen3vl8b:                  # T-018: Qwen3-VL-Embedding-8B on this project's embedding server (decision 137); selected with embedding.backend, never run on the dev machine
       provider: openai_compatible
       engine: {name: embed_server, version: pin_required}

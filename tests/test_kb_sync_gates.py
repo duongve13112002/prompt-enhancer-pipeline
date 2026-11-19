@@ -237,6 +237,7 @@ def test_unverified_cloud_sync_refused_before_k0(k2_env, monkeypatch, provider):
                    on_budget_exhausted='fallback_to_default_backend', allow_images=False)
     if provider == 'anthropic':
         backend.update(anthropic_version='2025-01-01', anthropic_workspace_id='none')
+    backend.pop('addendum_layout', None)  # T017-FIX: a cloud backend refuses the openai_compatible addendum keys
     cfg['vlm']['backends']['selected_cloud'] = backend
     cfg['vlm']['roles']['alias_generator']['backend'] = 'selected_cloud'
     monkeypatch.setattr(coordinator, 'open_knowledge_store', lambda *a, **k: pytest.fail('store before refusal'))

@@ -105,6 +105,8 @@ vlm:
       http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
       probe: {max_requests: design_required, timeout_s: design_required, image_attempts: fit_from_bench}
       image: {max_decode_pixels: deploy_required, max_side: none}
+      addendum_layout: joined_system_message   # T017-FIX: the Qwen3.5 chat template refuses a second system message (J4a2 call 18: HTTP 500 "System message must be at the beginning")
+      addendum_separator: "\n\n"         # decision 190 (a child that switches to separate_system_message states none, decision 193)
     embedder:                            # K1 embedding server: EmbeddingGemma 2 from its original weights (T-018); the weights sit under models/ and are verified against models/manifest.json
       provider: openai_compatible
       engine: {name: embed_server, version: pin_required}   # python -m prompt_enhancer.embed_server serve, run in .venv-gpu

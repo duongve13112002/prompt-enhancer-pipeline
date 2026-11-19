@@ -7,7 +7,7 @@
 **Method.**
 1. `profile register`: the `manifest_drafter` model reads the system prompt once and drafts the manifest and the conflict list.
 2. The admin confirms or corrects the manifest; the pipeline never infers profile rules at run time.
-3. **Conflict lint** compares the profile with the configuration (creativity, validation, the rule that missing evidence is omitted, never invented). Each conflict gets one admin decision: `profile_wins` (the profile's rule applies), `config_wins` (a runtime addendum generated from configuration is appended after the admin's text, versioned and shown in the trace, [S4](S4-writer.md)), or `block_activation`.
+3. **Conflict lint** compares the profile with the configuration (creativity, validation, the rule that missing evidence is omitted, never invented). Each conflict gets one admin decision: `profile_wins` (the profile's rule applies), `config_wins` (a runtime addendum generated from configuration is appended after the admin's text, as a separate system message or after a separator inside the same one per the backend's `addendum_layout`, versioned and shown in the trace, [S4](S4-writer.md)), or `block_activation`.
 4. `profile check` runs the golden tests (at least one case per conflict) and activates the profile when every test passes and no conflict blocks.
 
 **System prompt file format [P].** The manifest declares `template_format`, `sectioned` or `plain`.

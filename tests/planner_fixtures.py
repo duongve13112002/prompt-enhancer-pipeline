@@ -20,8 +20,9 @@ class PlannerClientDouble:
         self.outcomes = list(outcomes)
         self.calls = []
 
-    async def call(self, system_prompt, user_text, *, manifest=None, images=()):
-        self.calls.append({'system': system_prompt, 'text': user_text, 'images': list(images)})
+    async def call(self, system_prompt, user_text, *, manifest=None, images=(), schema_id=None):
+        self.calls.append({'system': system_prompt, 'text': user_text, 'images': list(images),
+                           'schema_id': schema_id})  # T017-FIX: the per-request reply schema, None = the role's
         outcome = self.outcomes.pop(0) if len(self.outcomes) > 1 else self.outcomes[0]
         if isinstance(outcome, Exception):
             raise outcome

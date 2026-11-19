@@ -3559,6 +3559,10 @@
                               }
                             ]
                           },
+                          "addendum_layout": {"anyOf": [{"enum": ["separate_system_message", "joined_system_message"]}, {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}],
+                                              "description": "T017-FIX: how an OpenAI-compatible chat backend receives the S4 runtime addendum: as a second system message after the admin's system prompt, or joined to it in one system message (admin bytes unchanged and first, then addendum_separator, then the addendum). Required on openai_compatible backends with a chat route; refused on cloud and chat-less backends (config._validate_addendum_layout)."},
+                          "addendum_separator": {"anyOf": [{"type": "string", "minLength": 1}, {"const": "none"}, {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}],
+                                                 "description": "T017-FIX: the bytes between the admin's system prompt and the addendum in joined_system_message; required with that layout, where none is refused. With separate_system_message only the reserved none is accepted (decision 193; a child profile cannot delete an inherited separator), any other value is refused (config._validate_addendum_layout)."},
                           "anthropic_version": {"anyOf": [{"type": "string", "minLength": 10, "maxLength": 10, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}, {"const": "deploy_required"}]},
                           "anthropic_workspace_id": {"type": "string", "minLength": 1, "not": {"pattern": "[^!-~]"}},
                           "http": {

@@ -20,6 +20,8 @@ MODEL_CALL = [
     ('model_client', '_usage'),  # the token counts stored with a call record
     ('model_mapping', 'map_generation_fields'), ('model_mapping', 'openai_request'),
     ('model_mapping', 'map_cloud_reasoning'), ('model_cloud', 'cloud_request'),  # request bodies
+    ('model_mapping', 'system_messages'),  # T017-FIX: the system messages and the addendum layout of a request body
+    ('model_mapping', 'system_texts'), ('model_mapping', 'effective_system_hash'),  # the system hash in a call record
     ('model_mapping', 'SAMPLING'), ('model_mapping', 'LOCAL_REASONING_EFFORT'),  # their fixed request values
     ('model_json', 'check_json_depth'), ('model_json', 'strict_json'), ('model_json', 'MAX_JSON_DEPTH'),  # reply parsing
     ('model_image', 'prepare_image'), ('model_image', 'prepare_image_with_info'), ('model_image', '_stored_size'),

@@ -609,6 +609,13 @@ def _writer_brief(config, root, code):
         raise ProfileError(code, 'the writer brief is unavailable; check its configured prompt') from error
 
 
+def _failure_code(code):
+    """A runner exception's code (ModelCallError, ProfileError) as a protocol token; other text is dropped (R-026)."""
+    from .pipeline import diagnostic_code
+
+    return diagnostic_code(code)
+
+
 def _writer_binding(brief):
     from .pipeline import GoldenAdapter
 
@@ -663,20 +670,32 @@ async def _check_locked(config, profile_id, runner, bundle, root):
     results = []
     for case, image in cases:
         request = {'task': case['request']['task'], 'prompt': case['request']['prompt'], 'source_image': image}
-        entry = {'id': case['id'], 'status': None, 'passed': False, 'envelope_sha256': None}
+        entry = {'id': case['id'], 'status': None, 'passed': False, 'envelope_sha256': None, 'diagnostics': None}
+        # T017-FIX (F3): the production runner also returns the case's stage codes (GoldenAdapter.run_case); a
+        # runner without run_case (a test double) records null diagnostics.
+        run_case = getattr(runner, 'run_case', None)
         try:
-            envelope = await runner.run(view, request)
+            if run_case is not None:
+                envelope, diagnostics = await run_case(view, request)
+            else:
+                envelope, diagnostics = await runner.run(view, request), None
             check_json_depth(envelope)
+            check_json_depth(diagnostics)
         except Exception as error:  # a runner failure fails the case; it never activates the profile
             entry['error'] = type(error).__name__
+            code = getattr(error, 'code', None)
+            if code is not None:
+                entry['code'] = _failure_code(code)
             results.append(entry)
             continue
+        entry['diagnostics'] = diagnostics if isinstance(diagnostics, dict) else None
         errors = (_errors(schemas[ENVELOPE_SCHEMA][1], envelope) if isinstance(envelope, dict)
                   else ['root: not an object'])
         if errors:
             entry['error'] = 'ENVELOPE_INVALID'
         else:
             entry['status'] = envelope['status']
+            entry['warnings'] = list(envelope['warnings'])  # schema enum codes (response_envelope.v0)
             structural_failures = [] if envelope['output'] is None else check_output(
                 envelope['output'], view.validator_artifacts, project_root=root,
                 output_format=output_format(view.manifest, view.validator_artifacts))

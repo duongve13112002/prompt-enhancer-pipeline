@@ -32,6 +32,7 @@ class State:
         self.limit, self.failing, self.inflight, self.peak, self.snapshot = limit, set(failing), 0, 0, snapshot
         self.capacity = set(capacity)  # prompts the fake refuses with LifecycleFull, as a full trace store does
         self.full, self.calls, self.delivered, self.abandoned = asyncio.Event(), [], 0, 0
+        self.failure = None  # T017-FIX: the exception a failing prompt raises (default RuntimeError)
 
 
 def fake_pipeline(state):
@@ -56,6 +57,8 @@ def fake_pipeline(state):
                 await asyncio.sleep(0)
             state.inflight -= 1
             if request['prompt'] in state.failing:
+                if state.failure is not None:
+                    raise state.failure
                 raise RuntimeError('a model call failed')
             if request['prompt'] in state.capacity:
                 raise LifecycleFull('trace capacity unavailable before generation')
@@ -118,6 +121,47 @@ def test_a_failed_call_is_counted_apart_marked_and_retried_alone_by_the_next_inv
     summary = refresh_summary(run, keys, stats)
     assert summary['units'] == {'total': 12, 'skipped': 0, 'selected': 12, 'completed': 12, 'failed': 0, 'not_run': 0}
     assert again.peak <= 2
+
+
+MARKER = 'ZQX-T017-MARKER-7f3a'  # unique synthetic text; must never reach a marker, a metric row or the summary
+
+
+def test_failure_marker_keeps_the_model_code_and_no_text(monkeypatch, tmp_path, project_root, model_test_profile):
+    """T017-FIX F3 and R-026: a failed unit's marker carries the exception class and its protocol code; the failing
+    unit's prompt and exception message (both holding MARKER) reach no stored artifact. A completed unit's row keeps its
+    envelope by contract (eval_result_metrics.v0), so only the failing scenario carries the marker."""
+    from prompt_enhancer.model_client import ModelCallError
+
+    prompts = [record(f's{number}', f'Prompt {number}' + (f' {MARKER}' if number == 1 else ''), linked=False,
+                      split='test') for number in range(3)]
+    state = State(1, failing={f'Prompt 1 {MARKER}'})
+    state.failure = ModelCallError(f'PROBE_MALFORMED: reply said {MARKER}')
+    monkeypatch.setattr(eval_run, 'Pipeline', fake_pipeline(state))
+    run, _ = synthetic_run(tmp_path, project_root, model_test_profile, prompts, concurrency=1, fill=False)
+    counts = execute_once(run)
+    assert counts['failed'] == 2 and counts['completed'] == 4
+    names = run.store.list_sidecars(run.relative('incomplete'))
+    markers = [json.loads(run.store.read_sidecar(run.relative('incomplete/' + name), 1 << 20)) for name in names]
+    assert [(item['reason'], item['code']) for item in markers] == [('ModelCallError', 'PROBE_MALFORMED')] * 2
+    keys, stats = scan_results(run)
+    summary = refresh_summary(run, keys, stats)
+    for part in (markers, run.store.read_rows('eval_results'), summary):
+        text = json.dumps(part, ensure_ascii=False, default=str)
+        assert MARKER not in text, text[max(0, text.find(MARKER) - 300):text.find(MARKER) + 60]
+
+
+def test_failure_marker_code_is_a_checked_token(monkeypatch, tmp_path, project_root, model_test_profile):
+    """A code that is not a protocol token (here text) is stored as UNRECOGNISED, never verbatim."""
+    error = RuntimeError('boom')
+    error.code = f'free text {MARKER}'
+    state = State(1, failing={'Prompt 0'})
+    state.failure = error
+    monkeypatch.setattr(eval_run, 'Pipeline', fake_pipeline(state))
+    run, _ = synthetic_run(tmp_path, project_root, model_test_profile, records(1), concurrency=1, fill=False)
+    execute_once(run)
+    name = run.store.list_sidecars(run.relative('incomplete'))[0]
+    marker = json.loads(run.store.read_sidecar(run.relative('incomplete/' + name), 1 << 20))
+    assert marker['code'] == 'UNRECOGNISED' and MARKER not in json.dumps(marker)
 
 
 def test_a_unit_refused_for_trace_capacity_is_not_run_with_its_reason_and_retried_on_resume(

@@ -71,7 +71,7 @@ def draft(env, output='kept', status='OK'):
             'calls': [{'status': status, 'record_json': json.dumps(record(env.config, 'writer', status))}],
             'warnings': [], 'error': None if okay else {'code': status, 'message': 'test-only failure'},
             'brief_hash': sha256_tag(b'fixture'), 'system_prompt_hash': sha256_tag(env.s0.profile.system_message),
-            'addendum_hash': None}
+            'addendum_hash': None, 'effective_system_hash': None}  # writer_result.v1 (T017-FIX)
 
 
 def calibrate(env):

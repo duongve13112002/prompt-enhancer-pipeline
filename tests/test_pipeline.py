@@ -289,6 +289,7 @@ def test_golden_adapter_passes_view_and_acknowledges_delivery():
     profile = SimpleNamespace(profile_id='p1')
     class ResponseDouble:
         envelope = {'status': 'success'}
+        diagnostics = {'planner': None}  # T017-FIX: PipelineResponse.diagnostics
         async def after_delivery(self):
             events.append('delivered')
     class PipelineDouble:
@@ -296,7 +297,9 @@ def test_golden_adapter_passes_view_and_acknowledges_delivery():
             assert view is profile and request['source_image'] == 'aW1hZ2U='
             return ResponseDouble()
     assert asyncio.run(GoldenAdapter(PipelineDouble()).run(profile, {'source_image': b'image'})) == {'status': 'success'}
-    assert events == ['delivered']
+    assert asyncio.run(GoldenAdapter(PipelineDouble()).run_case(profile, {'source_image': b'image'})) == (
+        {'status': 'success'}, {'planner': None})
+    assert events == ['delivered', 'delivered']
 
 
 def test_monitor_uses_one_independent_client_with_no_repairs(model_test_profile, tmp_path, project_root):

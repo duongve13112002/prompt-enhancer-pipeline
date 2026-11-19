@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "validation_result.v1",
+  "$comment": "v1 (T017-FIX): validation_result.v0 with calls referring to writer_result.v1 (contracts/README.md: a change is a new version); the call entry shape is unchanged. v0 stays as a superseded file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "output", "verdicts", "repair_count", "fallback", "fallback_attempts", "calls", "warnings",
+               "error", "attempts", "monitoring_selected"],
+  "properties": {
+    "status": {"enum": ["success", "repaired", "degraded", "failed"]},
+    "output": {"type": ["string", "object", "array", "null"]},
+    "verdicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "verdict", "method", "evidence_span", "note"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "verdict": {"enum": ["pass", "fail", "unverified"]},
+          "method": {"enum": ["structural", "verifier"]},
+          "evidence_span": {"type": ["string", "null"]},
+          "note": {"type": "string"}
+        }
+      }
+    },
+    "repair_count": {"type": "integer", "minimum": 0},
+    "fallback": {"type": ["string", "null"]},
+    "fallback_attempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "available"],
+        "properties": {"name": {"type": "string"}, "available": {"type": "boolean"}}
+      }
+    },
+    "calls": {"$ref": "writer_result.v1#/properties/calls"},
+    "warnings": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "error": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {"code": {"type": "string"}, "message": {"type": "string"}}
+        },
+        {"type": "null"}
+      ]
+    },
+    "attempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["round", "verdicts"],
+        "properties": {
+          "round": {"type": "integer", "minimum": 0},
+          "verdicts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "verdict", "method", "evidence_span", "note"],
+              "properties": {
+                "id": {"type": "string", "minLength": 1},
+                "verdict": {"enum": ["pass", "fail", "unverified"]},
+                "method": {"enum": ["structural", "verifier"]},
+                "evidence_span": {"type": ["string", "null"]},
+                "note": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "monitoring_selected": {"type": "boolean"}
+  }
+}

@@ -17,11 +17,16 @@
 
 **Decisions and configuration keys.** `planner.*` (prompt revision, thinking, sampling, token limits: `fit_from_bench` and E10, E11), `resolution.on_family_match`, `clarification.mode`, `creativity.*`, `edit.source_entity_linking`, `vlm.roles.planner`.
 
-**Compute.** One call to the `planner` backend; text only for `generate`, with the source image for `edit` (role `image.source: edit_source_only`, or `image: none` for a text-only planner). Implemented in `src/prompt_enhancer/planner.py` (T-014 P1); the model returns `planner_reply.v0` with shortlist positions and code builds the IR inside `plan_result.v0` ([contracts](../../contracts/README.md#planner-contract-s2)). At most `2 * (1 + planner.second_chance_rounds)` planner calls per request. Nothing measured.
+**Compute.** One call to the `planner` backend; text only for `generate`, with the source image for `edit` (role `image.source: edit_source_only`, or `image: none` for a text-only planner). Implemented in `src/prompt_enhancer/planner.py` (T-014 P1); the model returns `planner_reply.v0` with shortlist positions (for `generate` the request sends `planner_reply_generate.v0`, the same schema with `edit_kind` null and the four edit lists empty, so a constrained decoder cannot emit edit fields; the code invariant stays as a defence, T017-FIX) and code builds the IR inside `plan_result.v1` ([contracts](../../contracts/README.md#planner-contract-s2)). At most `2 * (1 + planner.second_chance_rounds)` planner calls per request. Nothing measured.
 
 **Depends on.** S0, S1.
 
-**Failure modes.** Output that fails the schema is retried once, then the request takes the path without knowledge with status `degraded`; a wrong resolution (measured in E1); a missed negation (caught by the ledger in S5); an unreadable source image is an error.
+**Failure modes.** A planner failure leaves the request without an Intent IR, and there is no fallback path without knowledge (decision 192; `planner.py` `plan`, `pipeline.py` `_run_request`):
+- **Invalid reply** (it fails the reply schema or a code invariant such as a non-verbatim literal): retried once. If the retry is also invalid, the plan has state `degraded`, no IR, error `PLANNER_REPLY_INVALID` and warning `SCHEMA_INVALID`.
+- **Failed call** (a raised model-call error, or a call record with a status other than `OK` or `SCHEMA_INVALID`, such as `HTTP_ERROR` or `INCOMPLETE_OR_REFUSED`): not retried. The plan has state `failed`, no IR and error `PLANNER_CALL_FAILED`; `error.cause` keeps the call's model code (`plan_result.v1`, codes only, R-026), and the case diagnostics in `golden_results.json` carry it.
+- **Either way S4 does not run** (writer state `failed`, `INTENT_UNAVAILABLE`), and S5 runs no verifier or repair. It walks the profile's `validation.fallbacks` instead: a fallback that yields contract-valid output (an admin-confirmed minimal template, or the raw prompt when it passes the profile's output contract) is returned with envelope status `degraded`; otherwise the envelope is `failed`, as in profile check J4a2.
+- **A failed second-chance lookup** keeps the earlier plan (`SECOND_CHANCE_FAILED`).
+- **Other failure modes:** a wrong resolution (measured in E1); a missed negation (caught by the ledger in S5); an unreadable source image is an error. The `degraded` state for an ambiguous edit target under `best_effort` (Method above) is a usable plan, not a failure.
 
 **Experiments.** E1, E3 (planner versus a reranker before resolution), E6 (planner and writer merged on the path without knowledge), E10, E11, E12.
 

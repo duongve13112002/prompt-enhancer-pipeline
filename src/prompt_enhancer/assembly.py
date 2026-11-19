@@ -18,7 +18,7 @@ from .model_schemas import cached_registry
 from .planner import SEED_BITS, _seed, pick
 
 RESULT_SCHEMA = 'assembly_result.v0'  # artifact-bound
-PLAN_SCHEMA = 'plan_result.v0'  # artifact-bound: the S2 result S3 consumes
+PLAN_SCHEMA = 'plan_result.v1'  # artifact-bound: the S2 result S3 consumes
 # protocol-bound: left-out reasons in precedence order, the first that applies wins (docs/stages/S3-knowledge.md)
 REASONS = ('OUT_OF_SCOPE', 'NEGATED_BY_USER', 'USER_LOCKED', 'UNSTABLE', 'VARIANT_NOT_CHOSEN', 'BUDGET')
 # protocol-bound: K3 labels used as facts. stable_low_diversity stays UNSTABLE until E9 names the facets a role

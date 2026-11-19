@@ -15,7 +15,7 @@ from .candidates import build_candidates, query_embedder_settings
 from .config import ConfigurationError, effective_request_config, validate_pipeline_reads
 from .envelope import build_envelope, build_trace_row
 from .intake import RETENTION_MESSAGE, AttachmentRetentionUnavailable, intake, refuse_attachments
-from .model_client import ModelCallError, compose_model_client
+from .model_client import MODEL_CODES, ModelCallError, compose_model_client, safe_model_code, safe_probe_events
 from .model_json import strict_json
 from .planner import plan
 from .profile_prompt import load_prompt, sha256_tag
@@ -32,12 +32,74 @@ class PipelineResponse:
     envelope: dict
     attachment_bytes: dict
     ticket: object
+    diagnostics: dict | None = None  # T017-FIX: case_diagnostics, codes and protocol labels only (R-026)
 
     async def after_delivery(self):
         await self.ticket.after_delivery()
 
     async def abandon(self):
         await self.ticket.abandon()
+
+
+def _token(value, letters):
+    """A protocol token of ASCII `letters`, digits and underscores, at most 64 characters and starting with a
+    letter, or None; anything else becomes UNRECOGNISED, so no free text can reach golden results or metrics
+    through a diagnostics field (R-026). A structural shape check, not a content rule."""
+    if value is None:
+        return None
+    if (isinstance(value, str) and 0 < len(value) <= 64 and value[0] in letters
+            and all(char in letters or char in '0123456789_' for char in value)):
+        return value
+    return 'UNRECOGNISED'
+
+
+def diagnostic_code(value):
+    return _token(value, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')  # protocol-bound: model, stage and warning codes
+
+
+_code = diagnostic_code
+
+
+def _label(value):
+    return _token(value, 'abcdefghijklmnopqrstuvwxyz')  # protocol-bound: stage states and fallback names
+
+
+def case_diagnostics(planned, written, checked, fatal_codes=(), probe_events=()):
+    """T017-FIX (F3): why a case ended as it did, per stage, as codes and protocol labels only.
+
+    No prompt, reply, brief, admin or knowledge text enters it: stage states and error codes, the planner's model-call
+    cause, warning codes, the S5 fallback names the configuration lists, fatal model-call codes and the probe events
+    `safe_probe_events` already reduces to labels and counters.
+    """
+    def error_code(stage):
+        error = stage.get('error') if isinstance(stage, dict) else None
+        return _code(error.get('code')) if isinstance(error, dict) else None
+
+    def warning_codes(stage):
+        return [_code(item['code'] if isinstance(item, dict) else item) for item in stage.get('warnings', [])]
+
+    planner = None
+    if planned is not None:
+        error = planned.get('error') if isinstance(planned.get('error'), dict) else {}
+        planner = {'state': _label(planned['state']), 'code': error_code(planned),
+                   'cause': _code(error.get('cause')), 'warnings': warning_codes(planned),
+                   'calls': [_code(call.get('status')) for call in planned.get('calls', [])]}
+    writer = None if written is None else {'state': _label(written['state']), 'code': error_code(written),
+                                           'calls': [_code(call.get('status')) for call in written.get('calls', [])]}
+    validation = None
+    if checked is not None:
+        validation = {'status': _label(checked['status']), 'code': error_code(checked),
+                      'warnings': warning_codes(checked),
+                      'fallback_attempts': [{'name': _label(item['name']), 'available': item['available'] is True}
+                                            for item in checked.get('fallback_attempts', [])]}
+    return {'planner': planner, 'writer': writer, 'validation': validation,
+            'fatal': [_code(code) for code in fatal_codes], 'probe_events': safe_probe_events(list(probe_events))}
+
+
+def _probe_events(client):
+    """The run's probe events of a bound client, or none for a client without a run (test doubles)."""
+    events = getattr(getattr(getattr(client, 'run', None), 'client', None), 'probe_events', None)
+    return list(events) if isinstance(events, list) else []
 
 
 async def monitor_output(s0, planned, assembled, checked, owner, *, project_root):
@@ -214,6 +276,7 @@ class Pipeline:
         handed_off = fatal = False
         shortlist = planned = assembled = written = checked = None
         diagnostics, attachments = [], {}
+        fatal_probe_events = []
         release_hold = brief = created_at = None
         try:
             try:
@@ -232,7 +295,8 @@ class Pipeline:
                                 written = {'state': 'failed', 'output': None, 'calls': [], 'warnings': [],
                                            'error': {'code': 'INTENT_UNAVAILABLE', 'message': 'S4: no usable plan'},
                                            'brief_hash': sha256_tag(b''),
-                                           'system_prompt_hash': sha256_tag(s0.profile.system_message), 'addendum_hash': None}
+                                           'system_prompt_hash': sha256_tag(s0.profile.system_message), 'addendum_hash': None,
+                                           'effective_system_hash': None}
                             else:
                                 if effective['rag']['enabled']:
                                     assembled = build_assembly(s0, planned, project_root=self.root)
@@ -266,11 +330,16 @@ class Pipeline:
                 if s0 is None:
                     raise
                 diagnostics.append('REQUEST_DEADLINE' if isinstance(error, TimeoutError) else type(error).__name__)
+                if isinstance(error, ModelCallError):
+                    # T017-FIX (F3): the model-call code, not only the class name, reaches the trace and diagnostics.
+                    diagnostics.append(safe_model_code(error.code))
+                    fatal_probe_events = list(error.probe_evidence or ())
                 fatal = True
             finally:
                 await _cleanup(diagnostics, embedder.close if embedder is not None else None,
                                s0.close if s0 is not None else None)
 
+            probe_events = _probe_events(owner) if owner is not None else fatal_probe_events  # before owner is closed
             monitor = None
             if not fatal and checked and checked['output'] is not None and checked['monitoring_selected'] and owner is not None:
                 monitor = partial(monitor_output, s0, planned, assembled, checked, owner, project_root=self.root)
@@ -298,9 +367,11 @@ class Pipeline:
             row['body']['attachments_retained'] = bool(attachments)
             if brief is not None:
                 row['body']['brief'] = brief
+            fatal_codes = [item for item in diagnostics if item in MODEL_CODES or item == 'REQUEST_DEADLINE']
+            case = case_diagnostics(planned, written, checked, fatal_codes, probe_events)  # before the hand-off
             ticket = self.lifecycle.submit(token, row, monitor=monitor, cleanup=owner.close if monitor is not None else None)
             handed_off = True
-            return PipelineResponse(envelope, attachments, ticket)
+            return PipelineResponse(envelope, attachments, ticket, case)
         finally:
             if not handed_off:
                 self.lifecycle.cancel(token)
@@ -309,15 +380,20 @@ class Pipeline:
 
 class GoldenAdapter:
     """Production golden runner for a confirmed ProfileView before its activation exists."""
-    identity = 's0-s6.v1'  # artifact-bound adapter revision
+    identity = 's0-s6.v2'  # artifact-bound adapter revision (v2, T017-FIX: run_case returns per-case diagnostics)
 
     def __init__(self, pipeline):
         self.pipeline = pipeline
 
-    async def run(self, profile, request):
+    async def run_case(self, profile, request):
+        """The envelope and the case's stage codes (`case_diagnostics`) for golden_results.json."""
         request = dict(request, profile_id=profile.profile_id)
         if isinstance(request.get('source_image'), bytes):
             request['source_image'] = base64.b64encode(request['source_image']).decode('ascii')
         response = await self.pipeline._enhance(request, profile)
         await response.after_delivery()
-        return response.envelope
+        return response.envelope, response.diagnostics
+
+    async def run(self, profile, request):
+        envelope, _ = await self.run_case(profile, request)
+        return envelope

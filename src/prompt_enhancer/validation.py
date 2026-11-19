@@ -16,7 +16,7 @@ from .verifier_policy import bind_verifier, provenance_matches, require_calibrat
 from .writer import _substitute, write
 
 
-RESULT_SCHEMA = 'validation_result.v0'  # artifact-bound stage contract
+RESULT_SCHEMA = 'validation_result.v1'  # artifact-bound stage contract
 
 
 def _texts(value):
@@ -204,7 +204,7 @@ async def validate(intake_result, plan_result, assembly_result, writer_result, w
     if (writer_client is not None or may_repair) and getattr(writer_client, 'role_name', None) != 'writer':
         raise ValueError('S5 requires a writer-bound repair client')
     registry = cached_registry(root / 'contracts/schemas')
-    registry.validate('plan_result.v0', plan_result)
+    registry.validate('plan_result.v1', plan_result)
     try:
         check_json_depth(writer_result['output'])
     except ValueError:
@@ -212,7 +212,7 @@ async def validate(intake_result, plan_result, assembly_result, writer_result, w
                          'calls': [*writer_result['calls'], _record_call({'status': 'SCHEMA_INVALID'})],
                          'warnings': [*writer_result['warnings'], 'SCHEMA_INVALID'],
                          'error': {'code': 'SCHEMA_INVALID', 'message': 'S4: JSON nesting exceeds the supported depth'}}
-    registry.validate('writer_result.v0', writer_result)
+    registry.validate('writer_result.v1', writer_result)
     intent = plan_result['intent_ir']
     if intent is not None and (plan_result['state'] not in ('ready', 'degraded')
                               or intent['task'] != intake_result.payload['task']

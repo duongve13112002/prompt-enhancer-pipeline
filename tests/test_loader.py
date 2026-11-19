@@ -123,6 +123,8 @@ def test_command_role_and_backend_validation(config, tmp_path):
                            max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[])
     backend['probe'] = dict(max_requests=1, timeout_s=1, image_attempts=1)
     backend['image'] = dict(max_decode_pixels=1000, max_side='none')
+    backend['addendum_layout'] = 'separate_system_message'  # test-only layout (T017-FIX)
+    backend['addendum_separator'] = 'none'  # the base example states deploy_required; separate takes none (decision 193)
     path = save_config(tmp_path, config)
     assert load_config(path, 'profile register')['vlm']['roles']['manifest_drafter']['max_tokens'] == 128
     role['sampling']['temperature'] = 'design_required'

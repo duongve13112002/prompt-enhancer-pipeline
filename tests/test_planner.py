@@ -105,12 +105,20 @@ def test_invariant_failure_counts_as_invalid_and_a_valid_retry_wins(env):
     assert result['warnings'] == ['SCHEMA_INVALID'] and result['calls'][0]['reply_check'] == 'INVARIANT_INVALID'
 
 
-@pytest.mark.parametrize('outcome', [failure('HTTP_ERROR'), failure('INCOMPLETE_OR_REFUSED'), call_error()])
-def test_failed_call_is_not_retried(env, outcome):
+@pytest.mark.parametrize('outcome, cause', [(failure('HTTP_ERROR'), 'HTTP_ERROR'),
+                                            (failure('INCOMPLETE_OR_REFUSED'), 'INCOMPLETE_OR_REFUSED'),
+                                            (call_error(), 'BUDGET_EXHAUSTED')],
+                         ids=['http-error-record', 'incomplete-record', 'raised-model-call-error'])
+def test_failed_call_is_not_retried(env, outcome, cause):
+    """T017-FIX F3: the failed call's own code survives as `error.cause` (plan_result.v1), for a failed call record
+    (HTTP_ERROR, INCOMPLETE_OR_REFUSED: `_call` returns these without raising) and for a raised ModelCallError; the
+    cause is the code only, never the error text (R-026)."""
     client = PlannerClientDouble(outcome)
     result = run(env, client)
     assert len(client.calls) == 1 and result['state'] == 'failed'
     assert result['error']['code'] == 'PLANNER_CALL_FAILED' and result['intent_ir'] is None
+    assert result['error']['cause'] == cause
+    assert 'budget exhausted' not in json.dumps(result['error'])
 
 
 def test_programming_errors_raise_before_any_call(env):

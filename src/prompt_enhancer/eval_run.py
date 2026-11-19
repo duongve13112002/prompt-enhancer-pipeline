@@ -28,7 +28,7 @@ from .cli_input import Refusal
 from .config import ConfigurationError, validate_evaluation_settings
 from .eval_set import (VARIANTS, digest_tag, read_limited, read_records, selected, source_file, survey_set,
                        variants_for, check_snapshot_ids)
-from .pipeline import GoldenAdapter, Pipeline
+from .pipeline import GoldenAdapter, Pipeline, diagnostic_code
 from .profile_prompt import ProfileError, load_prompt
 from .profiles import resolve_profile
 from .response_lifecycle import LifecycleFull
@@ -377,7 +377,8 @@ async def execute(run):
                     except LifecycleFull:  # no trace slot, refused before any model call: not run, retried next time
                         outcome = (unit, None, ('not_run', TRACE_CAPACITY))
                     except Exception as error:  # an operational failure of one unit: counted, never a result
-                        outcome = (unit, None, ('failed', type(error).__name__))
+                        # T017-FIX (F3): the exception's protocol code too (a ModelCallError code), never its text.
+                        outcome = (unit, None, ('failed', type(error).__name__, getattr(error, 'code', None)))
                     acknowledged = loop.create_future()
                     await outcomes.put((outcome, acknowledged))
                     await acknowledged  # the slot is held until the writer has finished with the response
@@ -411,8 +412,9 @@ async def execute(run):
 
 async def record_outcome(run, unit, response, error, done, counts):
     """The writer's step for one finished unit: a result row and the acknowledgement, or a marker. `error` is None or
-    `(disposition, reason)`: ('failed', exception class) or ('not_run', reason); the marker (one file per unit, replaced
-    by a later one) carries the class or the reason only, never a message, a prompt or an output."""
+    `(disposition, reason[, code])`: ('failed', exception class, its protocol code or None) or ('not_run', reason); the
+    marker (one file per unit, replaced by a later one) carries the class or the reason and, when present, the code as a
+    checked token (T017-FIX), never a message, a prompt or an output."""
     scenario_id = unit.record.scenario['scenario_id']
     key = (run.run_id(unit.variant), scenario_id)
     if response is not None:
@@ -427,8 +429,10 @@ async def record_outcome(run, unit, response, error, done, counts):
     if response is None or error is not None:
         if response is not None:
             await response.abandon()
-        disposition, text = error
+        disposition, text, *rest = error
         marker = {'scenario_id': scenario_id, 'variant': unit.variant, 'disposition': disposition, 'reason': text}
+        if rest and rest[0] is not None:
+            marker['code'] = diagnostic_code(rest[0])
         await asyncio.to_thread(run.store.write_sidecar,
                                 run.relative(f'{INCOMPLETE_DIR}/{marker_name(unit.variant, scenario_id)}'), canonical(marker))
         counts[disposition] += 1

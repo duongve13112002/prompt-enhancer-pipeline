@@ -42,7 +42,9 @@ PINS = {
     'model_call': [('model-call-1', 'd343f8ab7bf36edd21b077e7152cf1e9c5404747d0e337e0d8f275e1b0842466'),
                    ('model-call-2', '9785be00c96416c3342fcff3bccf84c720e036d22e83aab58b9dec397219355c'),
                    # K3-RETRY: a per-request seed override on the request copy; the probe seed retry
-                   ('model-call-3', '6c2b6e8b5f92f8edb789bb60d75edbf87dfc703bc55b50dc978c01de1718ba29')],
+                   ('model-call-3', '6c2b6e8b5f92f8edb789bb60d75edbf87dfc703bc55b50dc978c01de1718ba29'),
+                   # T017-FIX on K3-RETRY: addendum_layout, the narrower reply schema, the posted system hash
+                   ('model-call-4', '3289be06c097f147e875604a7417bc884984ced2e0b9a312872566d479064a9b')],
     'k2_naming': [('k2-naming-1', 'f7c8bc6ccac88fd3bde0d29807ee60669e67b67f6e7b054ded05998ca6e11fa5'),
                   ('k2-naming-2', '9028bbc88242340042e849112324d30d03e9568f25384d5863bf5dac1976eba6')],
     'k2_draw': [('k2-draw-v1', '085e0f67f4a98374df27d6c6103d10119f223e71975675382c3e1763dc71117b')],

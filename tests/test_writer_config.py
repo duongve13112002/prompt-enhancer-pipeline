@@ -63,6 +63,7 @@ FIXED = {
 }
 PATHS = [*FIXED, *POLICY_OVERRIDES, *(WRITER + key for key in ROLE_OVERRIDES),
          *('vlm.backends.main.' + key for key in BACKEND_OVERRIDES), 'writer.runtime_addendum', 'rag.enabled',
+         'vlm.backends.main.addendum_layout',
          'vlm.roles.writer.backend', 'vlm.default_backend', 'vlm.backends.main.provider',
          'vision.max_image_side', 'vision.format', 'vision.alpha_policy.mode', 'vision.alpha_policy.background']
 
@@ -258,6 +259,7 @@ def cloud_configuration(model_test_profile, tmp_path, project_root):
     backend.update(provider='anthropic', engine={'name': 'anthropic'}, base_urls=['https://example.invalid'],
                    api_key_file='.secrets/never-read-test-key', call_budget=2, on_budget_exhausted='stop',
                    allow_images=False, anthropic_version='2025-01-01', anthropic_workspace_id='none')
+    backend.pop('addendum_layout')  # a cloud backend refuses the openai_compatible addendum keys (T017-FIX)
     config['vlm']['backends']['synthetic_cloud'] = backend
     config['vlm']['roles']['writer'].update(backend='synthetic_cloud', image='none')
     return config

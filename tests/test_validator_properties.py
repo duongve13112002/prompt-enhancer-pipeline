@@ -147,16 +147,18 @@ def test_schema_operator_property(notes):
     assert check_output(value, checks, project_root=ROOT, output_format='json') == ['s']
 
 
-@pytest.mark.parametrize('schema', ['writer_result.v0', 'validation_result.v0', 'profile_validator.v0',
-                                    'verifier_calibration.v0'])
+@pytest.mark.parametrize('schema', ['writer_result.v0', 'writer_result.v1', 'validation_result.v0',
+                                    'validation_result.v1', 'profile_validator.v0', 'verifier_calibration.v0'])
 @given(TEXT, JSON)
 def test_closed_result_schema_generated_extra_refusal(schema, key, payload):
     registry = cached_registry(ROOT / 'contracts/schemas')
     tag = 'sha256:' + 'a' * 64
-    if schema == 'writer_result.v0':
+    if schema.startswith('writer_result.'):
         value = {'state': 'draft', 'output': [payload], 'calls': [], 'warnings': [], 'error': None,
                  'brief_hash': tag, 'system_prompt_hash': tag, 'addendum_hash': None}
-    elif schema == 'validation_result.v0':
+        if schema == 'writer_result.v1':
+            value['effective_system_hash'] = tag
+    elif schema.startswith('validation_result.'):
         value = {'status': 'success', 'output': [payload], 'calls': [], 'warnings': [], 'error': None,
                  'verdicts': [], 'repair_count': 0, 'fallback': None, 'fallback_attempts': [],
                  'attempts': [], 'monitoring_selected': False}
