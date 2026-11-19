@@ -235,13 +235,14 @@ def _vectors(table, key, kind=None):
 def check_out_dir(config, project_root, out_dir):
     """The report directory: outside the protected project directories, the read-only knowledge root and the store,
     after resolving links (R-014; P3 fix round 1, F2). Checked before the store is opened or a request is sent."""
+    from ..config import ConfigurationError, resolve_knowledge_root
     from .reference import ReferenceCheckError, check_output_dir
 
     project = Path(project_root).resolve()
     try:
-        return check_output_dir(project, out_dir, (('knowledge.root', project / config['knowledge']['root']),
+        return check_output_dir(project, out_dir, (('knowledge.root', resolve_knowledge_root(config, project)),
                                                    ('storage.kb_store', project / config['storage']['kb_store'])))
-    except ReferenceCheckError as error:
+    except (ReferenceCheckError, ConfigurationError) as error:
         raise DevCompareError(str(error)) from None
 
 
@@ -250,6 +251,7 @@ def run_dev_compare(config, project_root, out_dir, top_k, *, transport=None):
     and returns the report. `transport` is a labelled-test seam of K1's client only."""
     from types import SimpleNamespace
 
+    from ..config import resolve_knowledge_root
     from ..k0_sync import sync
     from ..k1_embed import ConceptText, embed_concept_texts, embed_images, embedder_settings
     from ..storage import open_knowledge_store
@@ -259,11 +261,11 @@ def run_dev_compare(config, project_root, out_dir, top_k, *, transport=None):
     out_dir = check_out_dir(config, project_root, out_dir)
     project = Path(project_root).resolve()
     knowledge = config['knowledge']
-    source = project / knowledge['root']
+    source = resolve_knowledge_root(config, project, require_dir=True)  # the one physical root (decision 175)
     k1 = embedder_settings(config)
     store = open_knowledge_store(config, COMMAND, project_root=project)
     started = time.perf_counter()
-    scanned = sync(store, source, info_names=knowledge['info_file']['names'],
+    scanned = sync(store, source, _resolved_root=source, info_names=knowledge['info_file']['names'],
                    encoding=knowledge['info_file']['encoding'], extensions=knowledge['image_extensions'],
                    separator=knowledge['concept_separator'], workers=config['runtime']['cpu_workers'],
                    threshold=config['sync']['mass_deletion_guard']['max_removed_fraction'])

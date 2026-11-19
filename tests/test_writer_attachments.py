@@ -144,13 +144,14 @@ def test_retrieval_off_renders_no_knowledge_key():
     assert 'knowledge' not in parsed and 'img-0' not in rendered and 'black' not in rendered
 
 
-def test_profile_that_accepts_no_reference_images_gets_no_attachments():
-    # PM decision pending user review: S6 delivers nothing for such a profile, so S4 does not describe images.
+def test_writer_guard_refuses_attached_images_for_a_profile_that_accepts_none():
+    # Decision 177: `profiles._view` refuses this pair first; the writer keeps the guard as defence (a double here
+    # sets the manifest field after the profile was resolved).
     pack = pack_for(['black', ['green', 'blue']])
-    refused, parsed = brief(pack, accepts=False)
-    assert 'attachments' not in parsed['knowledge'] and '"image_id"' not in refused  # facts keep `image_ids`
-    plain, _ = brief(dict(pack, images=[]), accepts=False)  # today's brief: the same facts, no attach image
-    assert refused == plain
+    with pytest.raises(ValueError, match='accepts no reference images'):
+        brief(pack, accepts=False)
+    plain, parsed = brief(dict(pack, images=[]), accepts=False)  # no attach image: nothing to refuse
+    assert 'attachments' not in parsed['knowledge']
     accepted, parsed = brief(pack, accepts=True)
     assert [e['position'] for e in parsed['knowledge']['attachments']] == [1, 2] and accepted != plain
 

@@ -11,7 +11,8 @@ from pathlib import Path
 import PIL
 import pyarrow as pa
 
-from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_observation_reads
+from .config import (ConfigurationError, _lexical_path, _resolve_within, _schema, resolve_knowledge_root,
+                     same_physical_path, validate_observation_reads)
 from .k1_embed import _read_verified
 from .k2_naming import _digest, _validate_reply, failure_code, record_probe_failure
 from .model_client import (MODEL_CALL_REVISION, ModelCallError, ModelClientRun, run_concurrency,
@@ -196,12 +197,11 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
     forbidden = {os.path.normcase(name) for name in ('.secrets', 'models', '.git', '.venv')}
 
     def resolved(key, value):
-        # The knowledge root is read only (R-014): a link is followed to its target; every written path is strict.
-        return _resolve_within(_lexical_path(value, root, root, key), root, forbidden, root, key,
-                               links=key == 'knowledge.root')
+        # Every path the stage writes is strict (decision 174); the read-only knowledge root is not resolved here.
+        return _resolve_within(_lexical_path(value, root, root, key), root, forbidden, root, key)
 
-    source = resolved('knowledge.root', config['knowledge']['root'])
-    if Path(knowledge_root).resolve() != source:
+    source = resolve_knowledge_root(config, root)  # the one physical root (decision 175); read only (R-014)
+    if not same_physical_path(knowledge_root, source):
         raise ConfigurationError('knowledge.root: stage argument does not match configured root')
     target = resolved('storage.kb_store', config['storage']['kb_store'])
     if Path(store.root).resolve() != target:

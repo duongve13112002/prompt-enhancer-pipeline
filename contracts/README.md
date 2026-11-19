@@ -56,7 +56,7 @@ Values are exact strings; the schema files use the same spelling.
 
 | Enum | Values and meaning |
 | --- | --- |
-| task | `generate` (text prompt), `edit` (text prompt plus one source image) |
+| task | `generate` (text prompt), `edit` (text prompt plus one source image in `request.v0`; several in `request.v1`, added by MS-1, decision 176) |
 | edit kind | `local_edit` (change one object, attribute, region or text), `global_transform` (medium, style, weather, lighting of the whole image), `subject_recompose` (a new image of this subject) |
 | link status | `resolved` (one concept), `family` (the mention is broader than the knowledge base, several candidates), `no_match` |
 | context fit | `fits`, `neutral`, `conflicts`: how well a candidate suits the prompt's context; orders `family` and variant choices and never empties them (decisions 15, 16 and 69) |

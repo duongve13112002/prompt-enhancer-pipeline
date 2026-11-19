@@ -1119,3 +1119,66 @@ def test_ast_digest_property(doc, comment, blanks, literal, operator):
     assert _digest(base.replace(f'{operator} {literal}', f'{operator} {literal + 100}')) != _digest(base)
     other = {'+': '-', '-': '*', '*': '+'}[operator]
     assert _digest(base.replace(f'a {operator} ', f'a {other} ')) != _digest(base)
+
+
+# Decision 177: attaching knowledge images needs a renderer that accepts reference images ------------------
+
+def edit_data(tmp_path, attach):
+    data = config_data(tmp_path)
+    data['edit'].update(attach_kb_reference_images=attach, max_kb_reference_images=2)  # test-only count
+    return data
+
+
+def renderer_draft(tasks, accepts):
+    return draft(supported_tasks=tasks, edit_output_semantics='whole_edited_image' if 'edit' in tasks else None,
+                 renderer={'accepts_reference_images': accepts, 'image_reference_syntax': 'none'})
+
+
+@pytest.mark.parametrize('tasks', [['generate'], ['edit'], ['generate', 'edit']])
+@pytest.mark.parametrize('accepts', [True, False])
+@pytest.mark.parametrize('attach', [True, False])
+def test_attaching_needs_a_renderer_that_accepts_reference_images(tmp_path, project_root, tasks, accepts, attach):
+    refused = 'edit' in tasks and attach and not accepts
+    data = edit_data(tmp_path, attach)
+    if not refused:
+        folder, config = activate(tmp_path, project_root, data=data, value=renderer_draft(tasks, accepts))
+        assert resolve_profile(config, 'p1', project_root=project_root).supported_tasks == tuple(tasks)
+        return
+    with pytest.raises(profiles.AttachmentRendererMismatch) as error:
+        activate(tmp_path, project_root, data=data, value=renderer_draft(tasks, accepts))
+    message = str(error.value)
+    assert isinstance(error.value, ConfigurationError) and message == profiles.AttachmentRendererMismatch.MESSAGE
+    assert all(part in message for part in ('renderer.accepts_reference_images is false',
+                                            'edit.attach_kb_reference_images is true', 'set '))
+    assert str(project_root) not in message and str(tmp_path) not in message  # no file path, no profile id
+    assert 'p1' not in message
+    assert not (tmp_path / 'profiles' / 'p1' / 'activation.json').exists()  # a refused check activates nothing
+
+
+def test_resolving_refuses_a_request_that_turns_attachments_on_for_such_a_profile(tmp_path, project_root):
+    """The request's effective configuration (here a deep copy with the override applied) is checked on every resolve."""
+    folder, config = activate(tmp_path, project_root, data=edit_data(tmp_path, False),
+                              value=renderer_draft(['generate', 'edit'], False))
+    assert resolve_profile(config, 'p1', project_root=project_root).profile_id == 'p1'
+    effective = json.loads(json.dumps(config))
+    effective['edit']['attach_kb_reference_images'] = True
+    with pytest.raises(profiles.AttachmentRendererMismatch, match='renderer.accepts_reference_images is false but '
+                                                                   'edit.attach_kb_reference_images is true'):
+        resolve_profile(effective, 'p1', project_root=project_root)
+
+
+def test_resolving_accepts_the_override_for_a_generate_only_profile(tmp_path, project_root):
+    folder, config = activate(tmp_path, project_root, data=edit_data(tmp_path, False),
+                              value=renderer_draft(['generate'], False))
+    effective = json.loads(json.dumps(config))
+    effective['edit']['attach_kb_reference_images'] = True
+    assert resolve_profile(effective, 'p1', project_root=project_root).supported_tasks == ('generate',)
+
+
+def test_the_example_profile_and_the_example_configuration_are_a_valid_pair():
+    """The shipped example renderer accepts no images and the shipped configuration attaches none."""
+    manifest = yaml.safe_load((EXAMPLE / 'manifest.yaml').read_bytes())
+    config = yaml.safe_load((ROOT / 'configs' / 'enhancer.example.yaml').read_bytes())
+    profiles._require_attachable_renderer(manifest, config)
+    assert manifest['renderer']['accepts_reference_images'] is False
+    assert config['edit']['attach_kb_reference_images'] is False

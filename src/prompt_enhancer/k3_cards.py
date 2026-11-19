@@ -6,7 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 
-from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_card_reads
+from .config import (ConfigurationError, _lexical_path, _resolve_within, _schema, resolve_knowledge_root,
+                     validate_card_reads)
 from .k2_naming import _digest, _validate_reply, failure_code, record_probe_failure
 from .model_client import (MODEL_CALL_REVISION, ModelCallError, ModelClientRun, run_concurrency,
                            semantic_role_settings)
@@ -207,11 +208,12 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
     check_snapshot_id(snapshot_id)
     forbidden = {'.secrets', 'models', '.git', '.venv'}
 
-    def resolved(key):
+    def resolved(key):  # an owned path: strict, no link (decision 174)
         return _resolve_within(_lexical_path(config[key.split('.')[0]][key.split('.')[1]], root, root, key),
-                               Path(root), forbidden, Path(root), key, links=key == 'knowledge.root')  # read only (R-014)
+                               Path(root), forbidden, Path(root), key)
 
-    source, target = resolved('knowledge.root'), resolved('storage.kb_store')
+    source = resolve_knowledge_root(config, root)  # the one physical root (decision 175); read only (R-014)
+    target = resolved('storage.kb_store')
     if Path(store.root).resolve() != target:
         raise ConfigurationError('storage.kb_store: stage store does not match configured root')
     for key, actual, configured in (

@@ -53,7 +53,7 @@ def _mutated(path: list[str], value: Any) -> dict[str, Any]:
         (["python", "venv_dir"], "/abs/.venv", "relative"),
         (["python", "src_dir"], "../other/src", "relative"),
         (["python", "src_dir"], "C:/x", "relative"),
-        (["python", "runtime_config_module"], "pkg.config", "needs python.package"),
+        (["python", "package"], None, "needs python.package"),  # the bound runtime module needs its package
         (["python", "package"], "bad-name", "invalid form"),
         (["python", "min_version"], "3", "invalid form"),
         (["git", "default_branch"], "-x", "invalid form"),

@@ -16,7 +16,7 @@ status: template
 purpose: production                      # production | smoke (dev results never fit a sentinel, R-020)
 
 knowledge:                               # docs/stages/K0-sync.md, kb/README.md
-  root: deploy_required                  # the user's real knowledge base; the dev profile points at database/ (decision 61)
+  root: deploy_required                  # the user's real knowledge base, read only; may be on another drive or behind a link (decision 175), never the project root or models/, .secrets/, .git, .venv*, storage.data_root, storage.kb_store, nor inside or containing them; the dev profile points at database/ (decision 61)
   info_file:
     names: [infor.txt, info.txt]         # accepted names are configuration; this default is a PM proposal [P]
     encoding: utf-8
@@ -137,7 +137,7 @@ assembly:                                # S3
   fact_order: need_then_support          # IR need order, then support count, then value; position matters, N078, N116
 
 edit:
-  attach_kb_reference_images: false      # true requires a snapshot republished with retained image copies
+  attach_kb_reference_images: false      # true requires a snapshot republished with retained image copies, and a profile whose renderer.accepts_reference_images is true when it supports edit (decision 177; refused otherwise)
   max_kb_reference_images: fit_from_gt   # read only when attach_kb_reference_images is true
   source_entity_linking: false           # the source image is not linked to knowledge-base concepts by default
   default_preservation:                  # per edit kind (R-002); name what stays instead of describing it, N100

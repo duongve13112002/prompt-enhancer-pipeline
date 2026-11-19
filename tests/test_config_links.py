@@ -1,5 +1,6 @@
 """P3-SWEEP-2 item 7: the loader refuses a link on every path the project owns or writes (AGENTS.md section 6) and still
-resolves the read-only knowledge root through one. Real links, generated path shapes, no mocks."""
+resolves the read-only knowledge root through one (decision 174; since decision 175 the root may also lie outside the
+project: tests/test_knowledge_root.py). Real links, generated path shapes, no mocks."""
 
 import os
 import shutil
@@ -10,7 +11,8 @@ import pytest
 from hypothesis import HealthCheck, given, settings, strategies as st
 
 from link_fixtures import drop_link, make_link
-from prompt_enhancer.config import ConfigurationError, LinkedPath, _configured_path, _inside, _resolve_within, validate_sync_config
+from prompt_enhancer.config import (ConfigurationError, LinkedPath, _configured_path, _inside, _resolve_within,
+                                    resolve_knowledge_root, validate_sync_config)
 
 LINK = 'is a link or another spelling of a stored name'
 SEGMENT = st.sampled_from(['a', 'b', 'c', 'd'])
@@ -47,8 +49,8 @@ def run_kind(kind, root, candidate):
         return _inside(candidate, root)
     if kind == 'owned':
         return _configured_path(str(candidate.relative_to(root)), root, 'config.yaml', 'storage.data_root')
-    _configured_path(str(candidate.relative_to(root)), root, 'config.yaml', 'knowledge.root', links=True)
-    return _resolve_within(candidate, root, set(), 'config.yaml', 'knowledge.root', links=True)
+    config = {'knowledge': {'root': str(candidate)}, 'storage': {'data_root': 'data', 'kb_store': 'data/kb'}}
+    return resolve_knowledge_root(config, root, 'config.yaml')  # read only: resolved through links (decision 175)
 
 
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
@@ -86,7 +88,9 @@ def test_a_link_through_a_directory_that_does_not_exist_yet_is_still_refused(are
         drop_link(area / 'data')
 
 
-def test_the_knowledge_root_link_is_resolved_and_its_target_still_has_to_be_a_directory_inside_the_project(area):
+def test_resolve_within_follows_a_link_only_when_asked_and_only_inside_the_root_it_is_given(area):
+    """`links=True` is now taken only by `storage._fs.inside`; the knowledge root goes through `resolve_knowledge_root`
+    (tests/test_knowledge_root.py), so a link leaving this root stays refused here."""
     make_link(area / 'kb', area / 'real')
     try:
         resolved = _resolve_within(area / 'kb', area, set(), 'config.yaml', 'knowledge.root', links=True)

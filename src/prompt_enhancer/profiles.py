@@ -485,7 +485,34 @@ async def _acquire(lock, profile_id):
         await asyncio.sleep(lock.poll_s)
 
 
+class AttachmentRendererMismatch(ConfigurationError):
+    """Decision 177: the profile's renderer takes no reference images but the configuration attaches knowledge images.
+
+    The text is fixed (two keys, two booleans, the remedy; no path, profile id or other configured value), so `intake`
+    can pass it through its redacting boundary and every command shows the same message.
+    """
+
+    MESSAGE = ('renderer.accepts_reference_images is false but edit.attach_kb_reference_images is true: a profile whose '
+               'renderer accepts no reference images cannot receive knowledge images; set '
+               'renderer.accepts_reference_images to true or edit.attach_kb_reference_images to false')
+
+    def __init__(self):
+        super().__init__(self.MESSAGE)
+
+
+def _require_attachable_renderer(manifest, config):
+    """Decision 177: attaching KB images needs a renderer that takes reference images; a mismatch is refused, not degraded.
+
+    Only an edit-capable profile is checked: attachments exist only for edit (writer.render_brief).
+    """
+    accepts = manifest['renderer']['accepts_reference_images']
+    attaches = config['edit']['attach_kb_reference_images']
+    if 'edit' in manifest['supported_tasks'] and attaches is True and accepts is False:
+        raise AttachmentRendererMismatch()
+
+
 def _view(profile_id, manifest, manifest_raw, prompt, config, root, activation):
+    _require_attachable_renderer(manifest, config)
     structure = _structure(prompt)
     fmt = manifest['template_format']
     template = user_template(prompt, fmt, structure)

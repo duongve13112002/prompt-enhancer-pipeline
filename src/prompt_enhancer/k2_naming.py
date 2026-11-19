@@ -11,7 +11,7 @@ from random import Random, SystemRandom
 import PIL
 
 from .config import (ConfigurationError, _EXACT_INTEGERS, _StrictSafeLoader, _lexical_path, _load_yaml,
-                     _resolve_within, _schema, validate_naming_reads)
+                     _resolve_within, _schema, resolve_knowledge_root, same_physical_path, validate_naming_reads)
 from .k0 import parse_info, trim_info_token
 from .k0_scan import decode_info, read_source_file
 from .k1_embed import _read_verified
@@ -487,9 +487,8 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
     validate_naming_reads(config, project_root=root)
     project = Path(root).resolve()
     forbidden = {os.path.normcase(name) for name in ('.secrets', 'models', '.git', '.venv')}
-    source = _resolve_within(_lexical_path(config['knowledge']['root'], project, project, 'knowledge.root'),
-                            project, forbidden, project, 'knowledge.root', links=True)  # read only (R-014)
-    if Path(knowledge_root).resolve() != source:
+    source = resolve_knowledge_root(config, project)  # the one physical root (decision 175); read only (R-014)
+    if not same_physical_path(knowledge_root, source):
         raise ConfigurationError('knowledge.root: stage argument does not match configured root')
     for target in (Path(store.root).resolve(),
                    _resolve_within(_lexical_path(config['storage']['data_root'], project, project, 'storage.data_root'),

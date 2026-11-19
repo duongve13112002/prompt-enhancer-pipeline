@@ -5,7 +5,7 @@ from collections import Counter
 from contextlib import AsyncExitStack
 import hashlib
 
-from .config import COMMAND_READS, _get, _schema, validate_sync_config
+from .config import COMMAND_READS, _get, _schema, resolve_knowledge_root, validate_sync_config
 from .k0 import guard_removals
 from .k0_scan import read_source_file
 from .k0_checkpoint import K0_SCAN_REVISION, _REVISION, _VERSION, _bytes, _key, _matching
@@ -30,7 +30,7 @@ LAYOUT = 'kb-sync-v2-retained-images'
 # artifact-bound: declared revision of the sync assembly that shapes a snapshot (KBS-S3-1); it enters the sync
 # identity with the stage revisions, so a stage edit or this module's edit replans the sync but changes no stage key.
 # Bump it with any edit to a function its guard pins (tests/test_stage_revisions.py).
-KB_SYNC_REVISION = 'kb-sync-5'
+KB_SYNC_REVISION = 'kb-sync-6'
 ROLES = ('info_assessor', 'folder_namer', 'observer', 'card_builder', 'alias_generator')
 
 
@@ -214,11 +214,12 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
         return {'status': 'skipped', 'reason': 'retrieval_disabled'}
     project = Path(project_root).resolve()
     knowledge = config['knowledge']
-    source = project / knowledge['root']
+    # The one physical root (decision 175, read only): every stage below reads this value, none re-resolves the key.
+    source = resolve_knowledge_root(config, project, require_dir=True)
     store = open_knowledge_store(config, 'kb sync', project_root=project)
 
     def scan():
-        return sync(store, source, info_names=knowledge['info_file']['names'],
+        return sync(store, source, _resolved_root=source, info_names=knowledge['info_file']['names'],
                     encoding=knowledge['info_file']['encoding'], extensions=knowledge['image_extensions'],
                     separator=knowledge['concept_separator'], workers=config['runtime']['cpu_workers'],
                     threshold=config['sync']['mass_deletion_guard']['max_removed_fraction'], plan=True, force=force)
@@ -237,7 +238,7 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
         # Scan/source failures cannot become a partially refreshed serving snapshot.
         if any(scanned['report'][key] for key in ('unreadable', 'protected_folders', 'protected_info')):
             raise StorageError('k0: SOURCE_READ_FAILED')
-        overrides = _read_overrides(knowledge, source.resolve(), project)
+        overrides = _read_overrides(knowledge, source, project)
         identity = sync_identity(config, scanned, overrides, store)
         current = store.current()
         recorded = {} if current is None else store._registry()[current[0]]['source_scan_summary']
@@ -263,12 +264,12 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
             return result
 
         image = accept('k1_image', await embed_images(store, config, scanned['handoff']['k1'],
-                       knowledge_root=source.resolve(), transport=transport, writer=writer))
+                       knowledge_root=source, transport=transport, writer=writer))
         if {row['image_id'] for row in image['images']} != expected:  # the published table promises exactly the copies
             raise StorageError('retained images: table differs from retained copies')
         rows = dict(scanned['rows'], images=image['images'], image_embeddings=image['image_embeddings'])
         named = accept('k2_naming', await name_folders(store, config, scanned['handoff']['k2'],
-                       images=rows['images'], folder_images=rows['folder_images'], knowledge_root=source.resolve(),
+                       images=rows['images'], folder_images=rows['folder_images'], knowledge_root=source,
                        client=client, writer=writer))
         if named['overrides'] != overrides:
             raise StorageError('k2_naming: SOURCE_CHANGED: overrides')
@@ -276,7 +277,7 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
         handoff = {name: rows[name] for name in ('folders', 'concepts', 'folder_concepts')}
         observed = accept('k2_observation', await observe_images(store, config, handoff, images=rows['images'],
                           folder_images=rows['folder_images'], image_embeddings=rows['image_embeddings'],
-                          embedder_revision=image['embedder_revision'], dim=image['dim'], knowledge_root=source.resolve(),
+                          embedder_revision=image['embedder_revision'], dim=image['dim'], knowledge_root=source,
                           client=client, writer=writer))
         rows.update(observed['rows'])
         cards = accept('k3', await build_cards(store, config, handoff, observations=rows['observations'],
@@ -300,7 +301,7 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
             return {'status': 'unchanged', 'publish_skipped': 'identical', 'snapshot_id': current[0],
                     'report': scanned['report'], 'alias_failures': failures}
         # The copy needs the source files, so it runs only for a snapshot that is really published (P3-SWEEP-2).
-        if retain_images(builder, source.resolve(), scanned['rows'], config['sync']['retained_images']) != expected:
+        if retain_images(builder, source, scanned['rows'], config['sync']['retained_images']) != expected:
             raise StorageError('retained images: table differs from retained copies')
         items = concept_texts(rows)
         text = accept('k1_text', await embed_concept_texts(store, config, items, transport=transport, writer=writer))

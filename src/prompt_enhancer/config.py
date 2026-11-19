@@ -159,7 +159,8 @@ def _resolve_within(candidate, root, forbidden, path, key, *, links=False):
 
     A component that is a link (symlink, junction) or another spelling of a stored name is refused, so a path the project
     owns or writes never reaches its target through one (AGENTS.md section 6, P3-SWEEP-2). `links=True` follows links
-    that stay inside the root; only the read-only knowledge root takes it, because a user's knowledge base may be one."""
+    that stay inside the root; only the store-relative `storage._fs.inside` takes it. The knowledge root, which may lie
+    outside the project (decision 175), is not resolved here but by `resolve_knowledge_root`."""
     pending = list(candidate.relative_to(root).parts)
     current = root
     visited = set()
@@ -470,7 +471,7 @@ def _lexical_path(value, root, path, key):
     return candidate
 
 
-def _configured_path(value, root, path, key, *, protected=True, secret=False, links=False):
+def _configured_path(value, root, path, key, *, protected=True, secret=False):
     if isinstance(value, str) and value in SENTINELS:
         return
     if secret and value == 'none':
@@ -486,12 +487,129 @@ def _configured_path(value, root, path, key, *, protected=True, secret=False, li
     forbidden = {os.path.normcase(name) for name in ('.secrets', '.git', '.venv')}
     if protected:
         forbidden.add(os.path.normcase('models'))
-    resolved = _resolve_within(candidate, root, forbidden, path, key, links=links)
+    resolved = _resolve_within(candidate, root, forbidden, path, key)
     if resolved == root:
         raise ConfigurationError(f'{path}: {key}: must not be the project root')
     parts = resolved.relative_to(root).parts
     if parts and os.path.normcase(parts[0]) in forbidden:
         raise ConfigurationError(f'{path}: {key}: protected project directory')
+
+
+# safety-bound: the project's protected top-level names and the prefix of every environment directory (`.venv`,
+# `.venv-gpu`, ...). `resolve_knowledge_root` is their one reader for the knowledge root (decision 175).
+PROTECTED_NAMES = ('.secrets', '.git', 'models')
+PROTECTED_VENV_PREFIX = '.venv'
+
+
+def _folded(path):
+    return tuple(os.path.normcase(part) for part in Path(path).parts)
+
+
+def _overlaps(first, second):
+    """True when the paths are equal or one lies inside the other, compared by components (so `data` and `database`
+    differ) and case-insensitively where the platform is (`os.path.normcase`)."""
+    first, second = _folded(first), _folded(second)
+    size = min(len(first), len(second))
+    return first[:size] == second[:size]
+
+
+def _contains(outer, inner):
+    outer, inner = _folded(outer), _folded(inner)
+    return inner[:len(outer)] == outer
+
+
+def _physical(path):
+    return Path(_strip_extended_prefix(os.path.realpath(path)))
+
+
+def same_physical_path(first, second):
+    """True when both paths name the same directory after links (case-insensitive where the platform is)."""
+    return _folded(_physical(first)) == _folded(_physical(second))
+
+
+def _protected_entries(root):
+    """`(name, paths)` of the protected directories, each as spelled under the root and, except `.secrets`, as its
+    target after links (a `models/` junction to another drive protects that drive's directory). `.secrets` is compared
+    lexically and never resolved, stat-ed, opened or listed: a `.secrets` that is itself a link is a known limit."""
+    try:
+        with os.scandir(root) as listing:
+            names = [entry.name for entry in listing]
+    except OSError as error:
+        raise ConfigurationError(f'{root}: cannot inspect the project root: {error.strerror or error}') from error
+    fold_prefix = os.path.normcase(PROTECTED_VENV_PREFIX)
+    entries = [('.secrets', [root / '.secrets'])]
+    wanted = [name for name in PROTECTED_NAMES if name != '.secrets']
+    # `.venv` is protected whether or not it exists yet; every other environment directory by its prefix.
+    wanted += sorted({PROTECTED_VENV_PREFIX, *(name for name in names if os.path.normcase(name).startswith(fold_prefix))})
+    for name in wanted:
+        entries.append((name, [root / name, _physical(root / name)]))
+    return entries
+
+
+def resolve_knowledge_root(config, project_root, path='configuration', *, require_dir=False, sources=None):
+    """The one physical knowledge root every stage reads (decision 175; R-014 read only).
+
+    The root may lie anywhere (another drive, a link pointing out of the project). It is resolved once with
+    `os.path.realpath`, so a link whose target holds `..` is followed as the OS reads it, and then refused when it equals
+    or contains the project root, or equals, lies inside or contains `models/`, `.secrets/`, `.git`, any `.venv*`,
+    `storage.data_root` or `storage.kb_store`, each side resolved first (a root inside the project outside those stays
+    valid). `require_dir` also demands an existing directory. Callers ask only with retrieval on (R-009); a sentinel
+    value is refused here, so a caller that tolerates one skips this call. Paths the project owns stay strict."""
+    sources = sources or {}
+    key = 'knowledge.root'
+    root = Path(project_root).resolve()
+    where = _source(sources, key, path)
+
+    def refuse(message):
+        raise ConfigurationError(f'{where}: {key}: {message}')
+
+    value = _get(config, key, path)
+    if not isinstance(value, str) or not value or '\x00' in value:
+        refuse('expected a non-empty path')
+    if value in SENTINELS:
+        refuse(f'unresolved sentinel {value}')
+    if PureWindowsPath(value).drive and os.name != 'nt':
+        refuse('a Windows drive path on this platform')
+    _validate_segments(value, where, key)
+    supplied = Path(value.replace('\\', '/'))
+    candidate = supplied if supplied.is_absolute() else root / supplied
+    # Lexical pre-check: the spelled path never reaches `.secrets` or the project root, so `realpath` is not asked to
+    # touch `.secrets` for the direct spellings. The physical check below is the authority.
+    spelled = Path(_strip_extended_prefix(os.path.abspath(candidate)))  # a `\\?\` spelling compares like its plain form
+    if _contains(spelled, root) or _overlaps(spelled, root / '.secrets'):
+        refuse('must not be the project root, contain it, or lie in a protected project directory')
+    try:
+        physical = _physical(candidate)
+    except (OSError, ValueError) as error:
+        refuse(f'cannot be resolved: {type(error).__name__}')
+    if _is_deleted_name(physical):
+        refuse('changed while it was resolved')
+    if not physical.is_absolute():
+        refuse('resolves to a path form that is not absolute (a volume mount point?): use a drive letter or a directory path')
+    if _contains(physical, root):
+        refuse('must not be the project root or contain it')
+    for name, paths in _protected_entries(root):
+        if any(_overlaps(physical, protected) for protected in paths):
+            refuse(f'must not be, lie inside or contain the protected project directory {name}')
+    physical_parts, root_parts = _folded(physical), _folded(root)
+    if (physical_parts[:len(root_parts)] == root_parts and len(physical_parts) > len(root_parts)
+            and physical_parts[len(root_parts)].startswith(os.path.normcase(PROTECTED_VENV_PREFIX))):
+        refuse('must not lie in an environment directory (.venv*) of the project')  # also one not created yet
+    forbidden = {os.path.normcase(name) for name in (*PROTECTED_NAMES, '.venv')}
+    for store_key in ('storage.data_root', 'storage.kb_store'):
+        try:
+            raw = _get(config, store_key, path)
+        except ConfigurationError:
+            continue
+        if isinstance(raw, str) and raw in SENTINELS:
+            continue
+        store_where = _source(sources, store_key, path)
+        target = _resolve_within(_lexical_path(raw, root, store_where, store_key), root, forbidden, store_where, store_key)
+        if _overlaps(physical, target):
+            raise ConfigurationError(f'{store_where}: {store_key} overlaps knowledge.root')
+    if require_dir and not physical.is_dir():
+        refuse('not an existing directory')
+    return physical
 
 
 def _filename(value, path, key):
@@ -503,15 +621,23 @@ def _filename(value, path, key):
 
 
 def _validate_configured_paths(config, root, path, sources, *, knowledge_access=True):
-    for key in ('knowledge.root', 'storage.data_root', 'storage.kb_store', 'profiles.root'):
-        if not knowledge_access and key in ('knowledge.root', 'storage.kb_store'):
+    for key in ('storage.data_root', 'storage.kb_store', 'profiles.root'):
+        if not knowledge_access and key == 'storage.kb_store':
             continue
         try:
             value = _get(config, key, path)
         except ConfigurationError:
             continue
-        # The knowledge root is the user's read-only input and may be a link; every other path here is the project's own.
-        _configured_path(value, root, _source(sources, key, path), key, links=key == 'knowledge.root')
+        _configured_path(value, root, _source(sources, key, path), key)  # the project's own: strict, no link
+    if knowledge_access:
+        try:
+            value = _get(config, 'knowledge.root', path)
+        except ConfigurationError:
+            value = None
+        # The knowledge root is the user's read-only input: it may lie outside the project (decision 175). It is
+        # resolved after the owned paths, which it is compared with; a sentinel is left to the command's own check.
+        if value is not None and not (isinstance(value, str) and value in SENTINELS):
+            resolve_knowledge_root(config, root, path, sources=sources)
     knowledge = config.get('knowledge')
     if isinstance(knowledge, dict):
         key = 'knowledge.overrides_file'
@@ -1618,8 +1744,8 @@ def validate_sync_config(config, *, project_root):
     # The run itself is about to read the knowledge root, so its resolved target must be a directory; a configuration that is
     # only loaded for its shape (`load_config`) may name a knowledge base that does not exist yet. With retrieval off the
     # run reads nothing of the knowledge base, so nothing of it is resolved either (R-009).
-    if config['rag']['enabled'] and not _resolved_knowledge_root(config, root, 'configuration').is_dir():
-        raise ConfigurationError('configuration: knowledge.root: not an existing directory')
+    if config['rag']['enabled']:
+        resolve_knowledge_root(config, root, 'configuration', require_dir=True)
     return validated
 
 
@@ -2264,11 +2390,11 @@ def _validate_loaded_config(config, command, root, path, sources):
         validate_observation_reads(config, path, sources, root)
         validate_card_reads(config, path, sources, root)
         validate_alias_reads(config, path, sources, root)
-        _validate_k0_reads(config, root, path, sources, ('storage.kb_store', 'storage.data_root'))
+        _validate_k0_reads(config, root, path, sources)
     if command == 'embed dev-compare':  # DEV-ONLY (T-018 P3): K0's and K1's own checks, nothing of K2 to K5
         _validate_store_reads(config, command, root, path, sources)
         validate_embedder_reads(config, path, sources, root)
-        _validate_k0_reads(config, root, path, sources, ('storage.kb_store',))
+        _validate_k0_reads(config, root, path, sources)
     return config
 
 
@@ -2284,24 +2410,11 @@ def _validate_store_reads(config, command, root, path, sources):
         raise ConfigurationError(f'{path}: {error}') from None
 
 
-def _resolved_knowledge_root(config, root, path):
-    """The knowledge root with its links resolved: it is read only (R-014), so a link to a directory inside the project
-    is followed and its target is what every check below sees (P3-SWEEP-2 item 7). Every path the project writes is
-    resolved without this allowance."""
-    return _resolve_within(_lexical_path(config['knowledge']['root'], root, path, 'knowledge.root'), root,
-                           {os.path.normcase('.secrets'), os.path.normcase('models')}, path, 'knowledge.root',
-                           links=True)
-
-
-def _validate_k0_reads(config, root, path, sources, stores):
-    """K0's scan settings (`kb sync`, `embed dev-compare`): the knowledge root inside the project (never `models/`
-    or `.secrets/`) and apart from every key in `stores`, the info-file codec, the worker count, the extensions."""
-    source = _resolved_knowledge_root(config, root, path)
-    for key in stores:
-        target = _resolve_within(_lexical_path(_get(config, key, path), root, path, key), root,
-                                 {os.path.normcase('.secrets'), os.path.normcase('models')}, path, key)
-        if source == target or source in target.parents or target in source.parents:
-            raise ConfigurationError(f'{path}: {key} overlaps knowledge.root')
+def _validate_k0_reads(config, root, path, sources):
+    """K0's scan settings (`kb sync`, `embed dev-compare`): the knowledge root through `resolve_knowledge_root` (it may lie
+    outside the project; apart from the protected directories and both stores), the info-file codec, the worker
+    count, the extensions."""
+    resolve_knowledge_root(config, root, path, sources=sources)
     key = 'knowledge.info_file.encoding'
     try:
         codecs.lookup(config['knowledge']['info_file']['encoding'])

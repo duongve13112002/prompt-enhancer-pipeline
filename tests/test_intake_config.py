@@ -140,12 +140,38 @@ def test_rag_off_skips_knowledge_path_resolution(intake_config, tmp_path, projec
 
     original = module._configured_path
 
+    retrieval_off = [True]
+
     def guard(value, root, path, key, **kwargs):
-        assert key not in ('knowledge.root', 'storage.kb_store')
+        assert not retrieval_off[0] or key not in ('knowledge.root', 'storage.kb_store')
         return original(value, root, path, key, **kwargs)
 
+    def forbidden(*args, **kwargs):
+        pytest.fail('retrieval off resolved the knowledge root (R-009)')
+
     monkeypatch.setattr(module, '_configured_path', guard)
+    # decision 175: the root now goes through one resolver and its physical step (labelled spies). The root must be a
+    # real value here: a sentinel is skipped before the resolver whatever `knowledge_access` says.
+    intake_config['knowledge']['root'] = str(tmp_path / 'no-external-knowledge-base')
+    intake_config['rag']['enabled'] = False
+    monkeypatch.setattr(module, 'resolve_knowledge_root', forbidden)
+    monkeypatch.setattr(module, '_physical', forbidden)
     load(intake_config, tmp_path, project_root)
+    # control: the spy sees the call once retrieval is on (the load may stop at the root's own refusal or pass)
+    calls = []
+
+    def counting(*args, **kwargs):
+        calls.append(args)
+        return tmp_path
+
+    retrieval_off[0] = False
+    monkeypatch.setattr(module, 'resolve_knowledge_root', counting)
+    intake_config['rag']['enabled'] = True
+    try:
+        load(intake_config, tmp_path, project_root)
+    except ConfigurationError:
+        pass  # other retrieval keys may be unresolved in this fixture; only the call matters here
+    assert calls, 'with retrieval on the loader resolves the knowledge root'
 
 
 def test_policy_is_required(intake_config, tmp_path, project_root):

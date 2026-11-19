@@ -4,7 +4,7 @@ Source: the PM's design specification v2.2 ([N000](note/N000-design-provenance.m
 
 ## Goal
 
-Take a user's text prompt (task `generate`) or a text prompt plus one source image (task `edit`) and write an enhanced prompt or edit instruction for a downstream image model, in the style and output format the admin's system prompt defines (R-002, R-004). With retrieval on, add correct knowledge about the concepts the user named, taken from a knowledge base of concept folders with images (R-007), and only where the user left the content open (R-012). The enhancer writes text; it never renders or edits pixels.
+Take a user's text prompt (task `generate`) or a text prompt plus one or more source images (task `edit`; several sources give one edited image with a planner-named base image, decisions 176 and 179, built in MS-1 to MS-7; today's code accepts one) and write an enhanced prompt or edit instruction for a downstream image model, in the style and output format the admin's system prompt defines (R-002, R-004). With retrieval on, add correct knowledge about the concepts the user named, taken from a knowledge base of concept folders with images (R-007), and only where the user left the content open (R-012). The enhancer writes text; it never renders or edits pixels.
 
 ## Principles
 
@@ -50,7 +50,7 @@ flowchart TB
     SP[Admin system prompt] --> P[P Profiles: manifest, conflict lint, golden tests]
   end
   subgraph ON["Online: per request"]
-    REQ[Prompt, optional source image, profile id] --> S0[S0 Intake: profile, config, image, pin snapshot]
+    REQ[Prompt, optional source images, profile id] --> S0[S0 Intake: profile, config, images, pin snapshot]
     S0 --> S1[S1 Candidates: no model call]
     S1 --> S2[S2 Planner: one call]
     S2 --> S3[S3 Knowledge: no model call]

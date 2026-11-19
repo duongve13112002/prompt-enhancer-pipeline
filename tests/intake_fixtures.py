@@ -47,9 +47,15 @@ def configuration(model_test_profile, tmp_path):
 
 
 def activate(config, project_root, *, tasks=('generate', 'edit'), profile_id='p1', renderer=None):
-    """Use real registration/check logic with labelled drafter and pipeline-runner doubles."""
+    """Use real registration/check logic with labelled drafter and pipeline-runner doubles.
+
+    A configuration that attaches knowledge images gets a renderer that accepts them unless `renderer` is given
+    (decision 177 refuses the other pair).
+    """
     install_prompts(project_root)
     folder = bundle(Path(config['profiles']['root']).parent, profile_id, SECTIONED)
+    if renderer is None and config['edit']['attach_kb_reference_images'] is True:
+        renderer = {'accepts_reference_images': True, 'image_reference_syntax': 'none'}
     extra = {} if renderer is None else {'renderer': renderer}
     value = draft(profile_id=profile_id, supported_tasks=list(tasks),
                   edit_output_semantics='whole_edited_image' if 'edit' in tasks else None, **extra)

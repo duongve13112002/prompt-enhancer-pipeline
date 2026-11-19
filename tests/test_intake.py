@@ -16,9 +16,10 @@ from referencing import Registry, Resource
 import yaml
 
 from intake_fixtures import activate, configuration
-from prompt_enhancer.config import load_config
+from prompt_enhancer.config import ConfigurationError, load_config
 from prompt_enhancer.intake import intake
 import prompt_enhancer.intake as module
+from prompt_enhancer.profiles import AttachmentRendererMismatch
 from prompt_enhancer.storage import KnowledgeStore, StorageError
 from storage_fixtures import make_store, publish
 
@@ -432,8 +433,61 @@ def test_missing_snapshot_is_degraded(env, project_root):
         assert payload['retrieval'] == {'state': 'failed', 'snapshot_id': None}
 
 
-def test_legacy_snapshot_refuses_edit_attachments_before_model_work(env, project_root):
+def test_attachments_with_a_renderer_that_accepts_no_images_are_refused_before_any_snapshot(env, project_root):
+    """Decision 177: the default test profile accepts no reference images, so this pair is refused at resolution."""
     config, _ = env
+    config['rag']['enabled'] = True
+    config['edit']['attach_kb_reference_images'] = True
+    config['edit']['max_kb_reference_images'] = 1
+    store = make_store(project_root, Path(config['storage']['kb_store']))
+    publish(store)
+    result = intake(request(task='edit', source_image=image()), config, project_root=project_root)
+    payload = checked(result, project_root)
+    assert payload['outcome'] == 'refused' and payload['error']['code'] == 'CONFIGURATION_INVALID'
+    assert payload['error']['message'] == AttachmentRendererMismatch.MESSAGE  # the same text `profile check` prints
+    assert result.snapshot is None and not list((store.root / 'leases').glob('*/*.lease'))
+    generate = intake(request(), config, project_root=project_root)
+    assert checked(generate, project_root)['outcome'] == 'refused'  # the profile supports edit, so any task is refused
+    assert generate.payload['error']['message'] == AttachmentRendererMismatch.MESSAGE
+
+
+def test_the_refusal_names_both_keys_and_leaks_nothing_else(env, project_root):
+    """Reproduction of review P2-1: attach is false when `profile check` runs and true afterwards, in the configuration
+    and through an allowed request override; the message is the fixed text with both keys and both values."""
+    config, _ = env
+    config['edit']['max_kb_reference_images'] = 1
+    assert intake(request(), config, project_root=project_root).payload['outcome'] == 'ready'  # attach false: served
+    config['request_overrides']['allowed_keys'] = ['edit.attach_kb_reference_images']
+    overridden = intake(request(task='edit', source_image=image(), overrides={'edit.attach_kb_reference_images': True}),
+                        config, project_root=project_root)
+    config['edit']['attach_kb_reference_images'] = True
+    changed = intake(request(task='edit', source_image=image()), config, project_root=project_root)
+    for result in (overridden, changed):
+        error = checked(result, project_root)['error']
+        assert result.payload['outcome'] == 'refused' and error['code'] == 'CONFIGURATION_INVALID'
+        message = error['message']
+        assert message == AttachmentRendererMismatch.MESSAGE
+        assert 'renderer.accepts_reference_images is false' in message
+        assert 'edit.attach_kb_reference_images is true' in message
+        assert str(project_root) not in message and 'p1' not in message and str(config['profiles']['root']) not in message
+
+
+def test_every_other_configuration_error_stays_redacted_at_intake(env, project_root, monkeypatch):
+    """Only the fixed subclass passes through: a plain `ConfigurationError` keeps the type-only message."""
+    config, _ = env
+
+    def broken(*args, **kwargs):
+        raise ConfigurationError(f'profiles.root: {project_root}/secret-location is not readable')
+
+    monkeypatch.setattr(module, 'resolve_profile', broken)
+    result = intake(request(), config, project_root=project_root)
+    assert checked(result, project_root)['error'] == {'code': 'CONFIGURATION_INVALID',
+                                                      'message': 'intake refused (ConfigurationError)'}
+
+
+def test_legacy_snapshot_refuses_edit_attachments_before_model_work(model_test_profile, tmp_path, project_root):
+    config = configuration(model_test_profile, tmp_path)
+    activate(config, project_root, renderer={'accepts_reference_images': True, 'image_reference_syntax': 'none'})
     config['rag']['enabled'] = True
     config['edit']['attach_kb_reference_images'] = True
     config['edit']['max_kb_reference_images'] = 1

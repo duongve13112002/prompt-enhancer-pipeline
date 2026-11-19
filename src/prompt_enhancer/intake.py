@@ -15,7 +15,7 @@ from .model_image import (
     ImageRejected, UndecodableImage, configure_decode_backstop, prepare_vision_image_with_info,
 )
 from .profile_prompt import ProfileError, sha256_tag
-from .profiles import resolve_profile
+from .profiles import AttachmentRendererMismatch, resolve_profile
 from .storage import StorageError, open_knowledge_store
 from .storage.store import RetainedFileError
 
@@ -145,7 +145,7 @@ def _refuse(payload, code, error):
         if error.stage in ('validation', 'profile start', 'profile end', 'image start', 'image end',
                            'snapshot start', 'snapshot end'):
             label += f' at {error.stage}'
-    fixed = isinstance(error, (AttachmentRetentionUnavailable, KnowledgeIndexDamaged))
+    fixed = isinstance(error, (AttachmentRetentionUnavailable, KnowledgeIndexDamaged, AttachmentRendererMismatch))
     message = str(error) if fixed else f'intake refused ({label})'
     payload['error'] = {'code': code, 'message': message}
     # These are schema-bound refusal fields, not model output or inferred retrieval success.

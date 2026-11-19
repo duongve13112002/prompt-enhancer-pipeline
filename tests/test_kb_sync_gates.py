@@ -17,13 +17,16 @@ from prompt_enhancer.storage import StorageError
 
 
 @pytest.mark.parametrize('plan', [False, True])
-def test_disabled_sync_never_accesses_knowledge(k2_env, monkeypatch, capsys, plan):
+@pytest.mark.parametrize('where', ['inside', 'outside'])
+def test_disabled_sync_never_accesses_knowledge(k2_env, monkeypatch, capsys, plan, where):
     from prompt_enhancer import config as module
+    from prompt_enhancer import kb_sync
     from prompt_enhancer import __main__ as cli
     cfg = deepcopy(k2_env.config)
     cfg['rag']['enabled'] = False
     cfg['embedding']['revision'] = 'pin_required'
-    cfg['knowledge']['root'] = 'missing-knowledge'
+    # decision 175: an external root, spelled absolutely, is never resolved, stat-ed or read with retrieval off either
+    cfg['knowledge']['root'] = 'missing-knowledge' if where == 'inside' else str(k2_env.root.parent / 'no-external-kb')
     path = k2_env.root / 'disabled-sync.yaml'
     path.write_text(yaml.safe_dump(cfg), encoding='utf-8')
 
@@ -31,6 +34,9 @@ def test_disabled_sync_never_accesses_knowledge(k2_env, monkeypatch, capsys, pla
         pytest.fail('disabled sync resolved/opened a knowledge path')
 
     monkeypatch.setattr(module, '_validate_configured_paths', forbidden)
+    for owner in (module, kb_sync):  # labelled spies: the one root resolver and its physical step
+        monkeypatch.setattr(owner, 'resolve_knowledge_root', forbidden)
+    monkeypatch.setattr(module, '_physical', forbidden)
     resolve = module._resolve_within
 
     def checked_resolve(candidate, root, protected, path, key, **options):  # labelled spy; `links=` is passed through

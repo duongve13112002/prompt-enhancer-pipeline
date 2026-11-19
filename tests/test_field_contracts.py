@@ -193,9 +193,10 @@ def test_config_override_and_refusal(path, tmp_path):
         parent[key] = ['https://example.org/alternative']
     if path == ('vlm', 'backends', 'cloud_gemini', 'endpoints'):
         parent[key] = {'chat': 'v1beta/models/example:generateContent', 'health': 'health'}
-    if path in {('knowledge', 'root'), ('storage', 'data_root'), ('storage', 'kb_store'),
-                ('profiles', 'root')}:
+    if path in {('storage', 'data_root'), ('storage', 'kb_store'), ('profiles', 'root')}:
         parent[key] = 'data/alternative'
+    if path == ('knowledge', 'root'):  # never inside `data_root` (decision 175: a protected directory)
+        parent[key] = 'alternative-kb'
     if path == ('knowledge', 'overrides_file'):
         parent[key] = 'alternative.yaml'
     if path == ('profiles', 'default_profile_id'):

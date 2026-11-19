@@ -1,6 +1,8 @@
 """Whole-flow CPU contract tests over real stages and labelled HTTP doubles."""
 
+import os
 from pathlib import Path
+import shutil
 import tempfile
 
 import pytest
@@ -10,6 +12,7 @@ from k2_fixtures import environment, folder, source_tree
 from kb_sync_fixtures import SyncServer, inventory, invoke
 from link_fixtures import drop_link, is_directory_link, make_link
 from prompt_enhancer import kb_sync as module
+from prompt_enhancer.config import ConfigurationError
 from prompt_enhancer.k5_index import ServingIndex
 from prompt_enhancer.storage import StorageError, concept_id
 from prompt_enhancer.storage.store import SnapshotBuilder, Writer
@@ -58,6 +61,90 @@ def test_a_sync_reads_the_knowledge_base_through_a_link_in_every_stage(k2_env):
             assert {row['concept_id'] for row in pin.read_rows('concepts')} == {concept_id('猫'), concept_id('Áo')}
     finally:
         drop_link(link)
+
+
+@pytest.fixture
+def outside(k2_env):
+    """A knowledge base directory outside the fake project root (a sibling of the pytest base directory), removed after."""
+    external = Path(tempfile.mkdtemp(prefix='kb-external-', dir=k2_env.root.parent)).resolve()
+    try:
+        assert k2_env.root not in external.parents and external != k2_env.root
+        yield external
+    finally:
+        shutil.rmtree(external, ignore_errors=True)
+
+
+@pytest.mark.parametrize('spelling', ['absolute', 'relative', 'link_inside', 'link_outside'])
+def test_a_sync_reads_a_knowledge_base_outside_the_project_root_in_every_stage(k2_env, outside, spelling):
+    """Decision 175: K0 to K5 all read the one validated physical root. A stage that still re-checked `knowledge.root` against
+    the project root (the P3-SWEEP-2 K4 miss) would fail after the paid stages before it, so the whole flow runs and
+    publishes, and a second run is unchanged (the identity holds for the same physical root)."""
+    env = k2_env
+    (env.source).rmdir()
+    env.source = outside
+    folder(env, 'f', '猫|Áo\nfirst|second')
+    before = source_tree(outside)
+    links = []
+    if spelling == 'absolute':
+        spelled = str(outside)
+    elif spelling == 'relative':
+        spelled = os.path.relpath(outside, env.root).replace('\\', '/')
+    else:
+        link = (env.root if spelling == 'link_inside' else outside.parent) / f'kb-link-{outside.name}'
+        make_link(link, outside)
+        links.append(link)
+        spelled = str(link)
+    try:
+        env.config['knowledge']['root'] = spelled
+        server = SyncServer()
+        result = invoke(env, server)
+        assert result['status'] == 'published'
+        assert {'observer', 'card_builder', 'alias_generator'} <= set(server.roles)
+        with env.store.pin() as pin:
+            assert {row['concept_id'] for row in pin.read_rows('concepts')} == {concept_id('猫'), concept_id('Áo')}
+            assert pin.read_rows('images')  # the retained copies were read from the outside root
+        assert invoke(env, server)['status'] == 'unchanged'
+        assert source_tree(outside) == before  # read only (R-014)
+    finally:
+        for link in links:
+            drop_link(link)
+
+
+@pytest.mark.parametrize('target', ['project', 'secrets_named'])
+def test_a_link_inside_an_outside_knowledge_base_is_reported_and_never_followed(k2_env, outside, target):
+    """K0 treats a link inside the knowledge base exactly as before decision 175: it is reported, its target is not read,
+    and the sync fails before any model call, wherever the link points (the project root, or a `.secrets`-named place)."""
+    env = k2_env
+    env.source.rmdir()
+    env.source = outside
+    folder(env, 'f', 'Name\ndescription')
+    decoy = outside.parent / (outside.name + '-decoy') / '.secrets'
+    decoy.mkdir(parents=True)
+    (decoy / 'marker.txt').write_bytes(b'must never be read')
+    link = outside / 'trap'
+    make_link(link, env.root if target == 'project' else decoy)
+    try:
+        env.config['knowledge']['root'] = str(outside)
+        server = SyncServer()
+        with pytest.raises(StorageError, match='k0: SOURCE_READ_FAILED'):
+            invoke(env, server)
+        assert not server.requests and not server.embedder.requests  # nothing was sent
+        assert (decoy / 'marker.txt').read_bytes() == b'must never be read'
+        plan = invoke(env, server, plan=True)  # the plan names the link as refused, it does not follow it
+        assert 'trap' in plan['report']['links'] and 'trap' in plan['report']['protected_folders']
+    finally:
+        drop_link(link)
+        shutil.rmtree(decoy.parent, ignore_errors=True)
+
+
+def test_a_sync_refuses_an_outside_root_that_holds_the_project_before_any_activity(k2_env):
+    env = k2_env
+    env.config['knowledge']['root'] = str(env.root.parent)
+    server = SyncServer()
+    before = inventory(env.store.root)
+    with pytest.raises(ConfigurationError, match='project root'):
+        invoke(env, server)
+    assert inventory(env.store.root) == before and not server.requests and not server.embedder.requests
 
 
 @settings(max_examples=3, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])

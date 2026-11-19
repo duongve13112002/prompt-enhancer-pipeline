@@ -33,7 +33,7 @@ def load(project_root, config):
 
 
 CASES = [
-    (('knowledge', 'root'), 'other-source', '../outside'),
+    (('knowledge', 'root'), 'other-source', '.'),  # outside is allowed (decision 175); the project root is not
     (('knowledge', 'info_file', 'names'), ['other.txt'], []),
     (('knowledge', 'info_file', 'encoding'), 'latin-1', 'not-a-real-codec'),
     (('knowledge', 'info_file', 'on_description_count_mismatch'), 'model_assigns', 'other'),

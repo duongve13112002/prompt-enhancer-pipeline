@@ -6,7 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 
-from .config import ConfigurationError, _lexical_path, _resolve_within, _schema, validate_alias_reads
+from .config import (ConfigurationError, _lexical_path, _resolve_within, _schema, resolve_knowledge_root,
+                     validate_alias_reads)
 from .k2_naming import _digest, _validate_reply, failure_code, record_probe_failure
 from .model_client import (MODEL_CALL_REVISION, ModelCallError, ModelClientRun, run_concurrency,
                            semantic_role_settings)
@@ -102,12 +103,13 @@ def _inputs(store, config, handoff, cards, overrides):
     root = store.catalog.root
     forbidden = {'.secrets', 'models', '.git', '.venv'}
 
-    def resolved(key):
+    def resolved(key):  # an owned path: strict, no link (decision 174)
         section, field = key.split('.')
         return _resolve_within(_lexical_path(config[section][field], root, root, key),
-                               Path(root), forbidden, Path(root), key, links=key == 'knowledge.root')  # read only (R-014)
+                               Path(root), forbidden, Path(root), key)
 
-    source, target, data = (resolved(key) for key in ('knowledge.root', 'storage.kb_store', 'storage.data_root'))
+    source = resolve_knowledge_root(config, root)  # the one physical root (decision 175); read only (R-014)
+    target, data = (resolved(key) for key in ('storage.kb_store', 'storage.data_root'))
     if Path(store.root).resolve() != target:
         raise ConfigurationError('storage.kb_store: stage store does not match configured root')
     for key, actual, configured in (
