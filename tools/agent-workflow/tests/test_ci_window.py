@@ -447,6 +447,66 @@ def test_no_run_appearing_times_out(world: Path, tmp_path: Path) -> None:
     assert code == cw.EXIT_FAILED and "within 5 s" in report["errors"][0] and fake.visibility == "private"
 
 
+NOT_FOUND_ERR = "failed to get run: HTTP 404: Not Found (https://api.github.com/repos/owner/repo/actions/runs/77)"
+
+
+def view_failures(errors: list[str]) -> Any:
+    """A `run view` hook that fails with each stderr in `errors` in turn, then serves the scripted views."""
+    pending = list(errors)
+
+    def hook(fake: FakeGh, args: list[str]) -> subprocess.CompletedProcess[str] | None:
+        return fake.done(code=1, err=pending.pop(0)) if pending else None
+
+    return hook
+
+
+def test_a_run_unknown_right_after_dispatch_is_viewed_again(world: Path, tmp_path: Path) -> None:
+    """CI 35: the first `gh run view` after dispatch answered HTTP 404; the window now waits within the dispatch
+    lookup window and watches the run to its end."""
+    clock = Clock()
+    fake = FakeGh(views=[("in_progress", None), ("completed", "success")],
+                  **{"run view": view_failures([NOT_FOUND_ERR, NOT_FOUND_ERR])})  # fmt: skip
+    code, report = window(world, config(tmp_path), fake, clock)
+    assert (code, report["result"], fake.visibility) == (cw.EXIT_OK, "success", "private")
+    assert fake.names().count("run view") == 4 and report["errors"] == []
+
+
+def test_a_run_unknown_past_the_lookup_window_fails_and_returns_private(world: Path, tmp_path: Path) -> None:
+    fake = FakeGh(**{"run view": view_failures([NOT_FOUND_ERR] * 1000)})
+    code, report = window(world, config(tmp_path, dispatch_lookup_timeout_seconds=5), fake)
+    assert code == cw.EXIT_FAILED and "HTTP 404" in report["errors"][0] and fake.visibility == "private"
+    assert fake.names().count("run view") < 1000  # bounded by the window, not by the script
+
+
+@pytest.mark.parametrize("err", ["HTTP 500: Internal Server Error", "HTTP 403: Forbidden", "could not resolve host"])
+def test_any_other_view_failure_is_not_retried(world: Path, tmp_path: Path, err: str) -> None:
+    fake = FakeGh(**{"run view": view_failures([err])})
+    code, report = window(world, config(tmp_path), fake)
+    assert code == cw.EXIT_FAILED and err in report["errors"][0] and fake.visibility == "private"
+    assert fake.names().count("run view") == 1
+
+
+def test_a_404_after_the_run_was_seen_is_not_retried(world: Path, tmp_path: Path) -> None:
+    served: list[str] = []
+
+    def hook(fake: FakeGh, args: list[str]) -> subprocess.CompletedProcess[str] | None:
+        served.append("view")
+        return fake.done(code=1, err=NOT_FOUND_ERR) if len(served) == 2 else None
+
+    fake = FakeGh(views=[("in_progress", None), ("in_progress", None)], **{"run view": hook})
+    code, report = window(world, config(tmp_path), fake)
+    assert code == cw.EXIT_FAILED and "HTTP 404" in report["errors"][0] and fake.visibility == "private"
+    assert len(served) == 2
+
+
+@pytest.mark.parametrize(("err", "status"), [(NOT_FOUND_ERR, 404), ("HTTP 502: Bad Gateway", 502), ("boom", None)])
+def test_gh_failures_carry_the_printed_http_status(err: str, status: int | None) -> None:
+    gh = cw.Gh(["gh"], SLUG, 5, lambda argv, timeout: subprocess.CompletedProcess(argv, 1, "", err))
+    with pytest.raises(cw.WindowError) as caught:
+        gh.run_view(77)
+    assert caught.value.http_status == status
+
+
 @pytest.mark.parametrize("field", ["head", "event"])
 def test_run_on_another_commit_or_event_fails(world: Path, tmp_path: Path, field: str) -> None:
     fake = FakeGh(head="f" * 40) if field == "head" else FakeGh(event="push")

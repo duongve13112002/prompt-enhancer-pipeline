@@ -69,6 +69,8 @@ OBJECT_ID = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")  # protocol-bound: SHA-
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 NAME = re.compile(r"^[A-Za-z0-9_.-]+$")  # protocol-bound: GitHub owner and repository names
 RUN_URL = re.compile(r"/actions/runs/(\d+)(?:\D|$)")  # protocol-bound: the run URL `gh workflow run` prints
+GH_HTTP_STATUS = re.compile(r"\bHTTP (\d{3})\b")  # protocol-bound: the status `gh` prints for a failed API call
+NOT_FOUND = 404  # protocol-bound: HTTP status of a run the API does not know yet right after dispatch
 USES = re.compile(r"^\s*(?:-\s+)?uses:\s*['\"]?([^\s'\"#]+)")  # protocol-bound: workflow `uses:` syntax
 PINNED = re.compile(r"@[0-9a-f]{40}$")
 EXIT_OK, EXIT_FAILED, EXIT_REFUSED, EXIT_EXPOSED = 0, 1, 2, 3
@@ -96,7 +98,13 @@ class Refusal(Exception):
 
 
 class WindowError(Exception):
-    """Something failed after the window may have opened; the return to the found visibility still runs."""
+    """Something failed after the window may have opened; the return to the found visibility still runs.
+
+    `http_status` is the HTTP status `gh` printed for a failed API call (None when it printed none)."""
+
+    def __init__(self, message: str, http_status: int | None = None) -> None:
+        super().__init__(message)
+        self.http_status = http_status
 
 
 class Cancelled(Exception):
@@ -284,7 +292,10 @@ class Gh:
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise WindowError(f"gh {' '.join(args[:2])}: {type(exc).__name__}") from None
         if proc.returncode != 0:
-            raise WindowError(f"gh {' '.join(args[:2])} exit {proc.returncode}: {(proc.stderr or '').strip()[:300]}")
+            err = (proc.stderr or "").strip()
+            status = GH_HTTP_STATUS.search(err)
+            raise WindowError(f"gh {' '.join(args[:2])} exit {proc.returncode}: {err[:300]}",
+                              int(status.group(1)) if status else None)  # fmt: skip
         return proc.stdout or ""
 
     def _json(self, *args: str) -> Any:
@@ -943,10 +954,22 @@ def find_run(gh: Gh, cfg: dict[str, Any], sha: str, before: set[int], printed: s
 
 def watch(gh: Gh, cfg: dict[str, Any], run_id: int, sha: str, clock: Callable[[], float],
           sleep: Callable[[float], None], report: dict[str, Any], cancel: Deferred) -> str:  # fmt: skip
-    deadline = clock() + cfg["run_timeout_seconds"]
+    start = clock()
+    deadline = start + cfg["run_timeout_seconds"]
+    seen = False
     while True:
         cancel.check("the next poll")
-        view = gh.run_view(run_id)
+        try:
+            view = gh.run_view(run_id)
+        except WindowError as exc:
+            # Right after dispatch the API may not know the run yet (CI 35: `HTTP 404: Not Found` on the first view).
+            # Until the run has been seen once, a 404 is retried within the dispatch lookup window; any other
+            # failure, and a 404 after the run was seen or past that window, is raised unchanged.
+            if seen or exc.http_status != NOT_FOUND or clock() >= start + cfg["dispatch_lookup_timeout_seconds"]:
+                raise
+            sleep(min(cfg["poll_interval_seconds"], cfg["dispatch_lookup_timeout_seconds"]))
+            continue
+        seen = True
         if view["headSha"].lower() != sha or view["event"] != "workflow_dispatch":
             raise WindowError(f"run {run_id} is {view['event']} on {view['headSha']}, not workflow_dispatch on {sha}")
         report["run"].update(status=view["status"], conclusion=view.get("conclusion"), url=view.get("url"))
