@@ -258,6 +258,37 @@ def test_alias_resume_and_failed_reply(k2_env):
     assert len(server.requests) == 3 and not result['report']['failed'] and result['report']['reused'] == 1
 
 
+@pytest.mark.parametrize('site', ['record_revisions', 'generation_bundle', 'commit'])
+def test_a_defect_after_the_reply_fails_the_stage_and_is_not_recorded_as_a_failed_concept(k2_env, monkeypatch, site):
+    """P3-SWEEP-2 item 1: only the call and the reply are per-concept failures. An internal error used to be caught,
+    mapped to SCHEMA_INVALID (a tolerated code) and published without the concept's aliases; now it propagates."""
+    import prompt_enhancer.k4_aliases as module
+
+    def defect(*args, **kwargs):
+        raise ValueError('labelled internal defect')
+    original = Checkpoints.commit
+    if site == 'commit':
+        monkeypatch.setattr(Checkpoints, 'commit', lambda self, *args, **kwargs: defect() if self.stage == 'k4_generation'
+                            else original(self, *args, **kwargs))
+    else:
+        monkeypatch.setattr(module, '_record_revisions' if site == 'record_revisions' else '_generation_bundle', defect)
+    with pytest.raises(ValueError, match='labelled internal defect'):
+        invoke_aliases(k2_env, inputs(), AliasServer())
+    assert not [row for row in states(k2_env) if row['state'] == 'failed']
+    assert states(k2_env, 'k4_call_failure') == []
+
+
+def test_a_model_call_failure_of_one_concept_is_still_a_per_concept_failure(k2_env):
+    """The narrowed `try` keeps decision 165: a failed call or reply is recorded for that concept and the rest go on."""
+    data = inputs(('One', 'Two'))
+    server = AliasServer(lambda payload, body: {'aliases': 'invalid'} if payload['concept_name'] == 'Two'
+                         else {'aliases': [{'text': 'first', 'language': None}]})
+    result = invoke_aliases(k2_env, data, server)
+    assert result['report']['failed'] == {concept_id('Two'): 'SCHEMA_INVALID'}
+    assert [row['state'] for row in states(k2_env)].count('failed') == 1
+    assert result['report']['generated'] == 1 and len(result['rows']['aliases']) == 1
+
+
 def test_bad_cached_bundle_is_refused(k2_env, monkeypatch):
     data, server = inputs(), AliasServer()
     invoke_aliases(k2_env, data, server)

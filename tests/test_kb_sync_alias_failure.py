@@ -9,6 +9,7 @@ from hypothesis import given, settings, strategies as st
 
 from k2_fixtures import folder
 from kb_sync_fixtures import SyncServer, invoke
+from prompt_enhancer.k2_naming import _digest
 from prompt_enhancer.kb_sync import _CLOSED_CODES, alias_failures, require_per_concept
 from prompt_enhancer.storage import StorageError, concept_id
 from prompt_enhancer.storage.identity import is_concept_id
@@ -50,7 +51,10 @@ def test_a_failed_alias_publishes_without_its_generated_rows_and_records_the_fai
     assert aliases[NAME] == [('author', 'author')]
     assert aliases[OTHER] == [('generated', 'Other alias')]
     assert texts.count((NAME, 'alias')) == 1 and texts.count((OTHER, 'alias')) == 1
-    assert summary(k2_env, result['snapshot_id'])['k4_failed'] == {'count': 1, 'codes': {'SCHEMA_INVALID': 1}}
+    # Count, closed codes and a digest of the sorted failed ids; the ids themselves are not stored (F5, P3-SWEEP-2).
+    assert summary(k2_env, result['snapshot_id'])['k4_failed'] == {
+        'count': 1, 'codes': {'SCHEMA_INVALID': 1}, 'concept_ids_hash': _digest([NAME])}
+    assert NAME not in json.dumps(summary(k2_env, result['snapshot_id']))
     assert result['stages']['k4']['failed'] == {NAME: 'SCHEMA_INVALID'}
     assert MARKER not in json.dumps(result, default=str) and MARKER not in json.dumps(
         k2_env.store._registry(), default=str)
@@ -131,6 +135,11 @@ def test_the_identity_check_needs_the_same_failures_and_the_same_alias_rows(k2_e
     assert not same(recorded={key: value for key, value in recorded.items() if key != 'k4_failed'})
     assert not same(failures=dict(failures, count=2))
     assert not same(failures=dict(failures, codes={'HTTP_ERROR': 1}))
+    # Same count, same codes, other concept (F5): a different failed concept is a different snapshot.
+    assert not same(failures=dict(failures, concept_ids=[OTHER]))
+    # A record from before the digest existed is never taken for identical; the next sync publishes once.
+    assert not same(recorded=dict(recorded, k4_failed={'count': 1, 'codes': {'SCHEMA_INVALID': 1}}))
+    assert not same(recorded=dict(recorded, k4_failed=dict(recorded['k4_failed'], concept_ids_hash=_digest([OTHER]))))
     assert not same(aliases=stored + [dict(stored[0], alias_text='an extra generated alias')])
     assert not same(aliases=stored[1:])
     assert not _publishes_the_same_snapshot(k2_env.store, None, recorded, recorded['sync_identity'], failures, stored)
@@ -165,7 +174,8 @@ def test_every_concept_failing_publishes_author_aliases_only(k2_env):
     result = invoke(k2_env, server)
     assert result['status'] == 'published'
     assert result['alias_failures'] == {'count': 2, 'codes': {'SCHEMA_INVALID': 2}, 'concept_ids': sorted([NAME, OTHER])}
-    assert summary(k2_env, result['snapshot_id'])['k4_failed'] == {'count': 2, 'codes': {'SCHEMA_INVALID': 2}}
+    assert summary(k2_env, result['snapshot_id'])['k4_failed'] == {
+        'count': 2, 'codes': {'SCHEMA_INVALID': 2}, 'concept_ids_hash': _digest(sorted([NAME, OTHER]))}
     aliases, texts = rows(k2_env, result['snapshot_id'])
     assert aliases == {NAME: [('author', 'author')]}  # no generated row for any concept
     assert texts.count((NAME, 'alias')) == 1 and (OTHER, 'alias') not in texts
@@ -259,3 +269,51 @@ def test_the_recorded_failure_holds_only_concept_ids_and_closed_codes(failed):
     assert set(record['codes']) <= _CLOSED_CODES | {'MODEL_CALL_FAILED'} and sum(record['codes'].values()) == len(failed)
     assert MARKER not in json.dumps(record)
     assert record['concept_ids'] == sorted(record['concept_ids'])
+
+
+def test_a_skipped_identical_publish_copies_no_retained_image_and_the_real_publish_does(k2_env, monkeypatch):
+    """P3-SWEEP-2 item 3: the copy (read, hash, write of every image) runs after the identity check, so a sync that
+    repeats the current snapshot reads no source image for it. A real publish still retains every image it lists."""
+    import prompt_enhancer.kb_sync as module
+    copies, reads = [], []
+    original_retain, original_read = module.retain_images, module.read_source_file
+    monkeypatch.setattr(module, 'retain_images', lambda *args, **kwargs: copies.append(1) or original_retain(*args, **kwargs))
+    monkeypatch.setattr(module, 'read_source_file', lambda *args, **kwargs: reads.append(1) or original_read(*args, **kwargs))
+    server = setup(k2_env)
+    first = invoke(k2_env, server)
+    assert first['status'] == 'published' and copies == [1] and reads
+    with k2_env.store.pin() as pin:
+        listed = [row['image_id'] for row in pin.read_rows('images')]
+        assert listed and all(pin.read_image(image_id) for image_id in listed)  # every listed image has its copy
+    copies.clear()
+    reads.clear()
+    second = invoke(k2_env, server)
+    assert second['status'] == 'unchanged' and second['publish_skipped'] == 'identical'
+    assert copies == [] and reads == []
+    server.fail_role = None
+    third = invoke(k2_env, server)
+    assert third['status'] == 'published' and copies == [1] and reads
+
+
+def test_a_scan_that_breaks_the_retention_limits_still_fails_before_any_model_call(k2_env):
+    """The cheap identity, size and limit check stays ahead of the model stages; only the copy moved."""
+    server = setup(k2_env)
+    k2_env.config['sync']['retained_images'] = dict(k2_env.config['sync']['retained_images'], max_image_bytes=1)
+    with pytest.raises(StorageError, match='retained images: byte limit exceeded'):
+        invoke(k2_env, server)
+    assert server.roles == [] and server.embedder.requests == []
+    assert k2_env.store.current() is None
+
+
+@pytest.mark.parametrize('site', ['_record_revisions', '_generation_bundle'])
+def test_a_k4_defect_fails_the_sync_instead_of_publishing_without_aliases(k2_env, monkeypatch, site):
+    """P3-SWEEP-2 item 1: an internal K4 error used to become SCHEMA_INVALID, a tolerated code, so the sync published
+    a snapshot without any generated alias. It now fails the stage and nothing is published."""
+    import prompt_enhancer.k4_aliases as module
+
+    def defect(*args, **kwargs):
+        raise ValueError('labelled internal defect')
+    monkeypatch.setattr(module, site, defect)
+    with pytest.raises(ValueError, match='labelled internal defect'):
+        invoke(k2_env, setup(k2_env))
+    assert k2_env.store.current() is None

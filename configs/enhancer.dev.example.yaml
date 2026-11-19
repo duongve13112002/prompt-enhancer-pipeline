@@ -1,4 +1,4 @@
-# Dev-machine profile: extends the full profile and overrides only what differs. Documentation only; nothing is implemented.
+# Dev-machine profile: extends the full profile and overrides only what differs. Built and tested on the CPU with labelled doubles; values stay sentinels until fitted. How to run: docs/run-guide.md.
 # Everything must work here first (R-020, decision 20). Dev results show that the code works; they never fit a sentinel
 # and never support a timing claim. The quantisation file below is a profile value: change it per run (experiment E15, N123).
 schema_version: 2

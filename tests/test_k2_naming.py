@@ -269,3 +269,12 @@ def test_removed_override_does_not_keep_stale_kind(k2_env):
     result = invoke(env, result=scanned)
     assert result['rows']['concepts'][0]['kind'] is None
     assert result['rows']['concepts'][0]['kind_origin'] is None
+
+
+def test_a_bad_naming_reply_is_still_a_per_folder_failure(k2_env):
+    env = k2_env
+    folder(env, 'bad')
+    folder(env, 'good')
+    server = NamingServer({('folder_namer', 'bad'): {'concepts': 'labelled invalid reply'}})
+    result = invoke(env, server)
+    assert set(result['report']['failed']) == {'bad'} and result['report']['failed']['bad'] == 'SCHEMA_INVALID'

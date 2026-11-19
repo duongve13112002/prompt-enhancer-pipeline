@@ -108,7 +108,8 @@ STAGES = {
         ('kb_sync', 'retain_images'), ('kb_sync', 'concept_texts'), ('kb_sync', '_checkpoint'),
         ('kb_sync', 'sync_knowledge'), ('kb_sync', 'alias_failures'), ('kb_sync', 'require_per_concept'),
         ('kb_sync', '_PER_CONCEPT_CODES'),  # which K4 failures publish and what the snapshot records (decision 165)
-        ('kb_sync', '_alias_content'), ('kb_sync', '_publishes_the_same_snapshot')]),  # identical-publish skip (P3-SWEEP-1)
+        ('kb_sync', '_alias_content'), ('kb_sync', '_publishes_the_same_snapshot'),  # identical-publish skip (P3-SWEEP-1)
+        ('kb_sync', 'retained_identities'), ('kb_sync', '_k4_failed_summary')]),  # P3-SWEEP-2: early check, failed-id digest
 }
 
 

@@ -11,7 +11,7 @@ import sys
 
 from .cli_input import Refusal, emit_json, refuse_linked_configuration
 from .config import ConfigurationError, load_config
-from .kb_audit import _audit_snapshot
+from .kb_audit import audit_snapshot
 from .model_client import ModelCallError, compose_model_client
 from .pipeline import GoldenAdapter, Pipeline
 from .profile_prompt import ProfileError
@@ -49,7 +49,7 @@ def kb_status(args, root):
     snapshots = [dict(row) for row in store.snapshots()]
     result = {'command': 'kb status', 'store_present': store.root.exists(), 'current': None, 'tables': None,
               'snapshots': snapshots, 'live_source_changes': 'not_checked'}
-    with _audit_snapshot(store) as pinned:
+    with audit_snapshot(store) as pinned:
         if pinned is not None:
             row = next((item for item in snapshots if item['snapshot_id'] == pinned.snapshot_id), None)
             result['current'] = {'snapshot_id': pinned.snapshot_id,
@@ -63,7 +63,7 @@ def kb_status(args, root):
 
 def kb_show(args, root):
     store = open_knowledge_store(_config(args, root, 'kb show'), 'kb show', project_root=root)
-    with _audit_snapshot(store) as pinned:
+    with audit_snapshot(store) as pinned:
         if pinned is None:
             raise Refusal('kb show: no published snapshot')
         wanted = normalise_name(args.concept)

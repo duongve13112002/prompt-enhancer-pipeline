@@ -8,6 +8,7 @@ from hypothesis import HealthCheck, given, settings, strategies as st
 
 from k2_fixtures import environment, folder, source_tree
 from kb_sync_fixtures import SyncServer, inventory, invoke
+from link_fixtures import drop_link, is_directory_link, make_link
 from prompt_enhancer import kb_sync as module
 from prompt_enhancer.k5_index import ServingIndex
 from prompt_enhancer.storage import StorageError, concept_id
@@ -37,6 +38,26 @@ def test_full_sync_uses_one_writer_and_target_snapshot_id(k2_env, monkeypatch):
             'name', 'description', 'alias', 'card_summary'}
         assert {row['concept_id'] for row in pin.read_rows('concepts')} == {concept_id('猫'), concept_id('Áo')}
     assert source_tree(k2_env.source) == before
+
+
+def test_a_sync_reads_the_knowledge_base_through_a_link_in_every_stage(k2_env):
+    """Fix round 1 (F1, F2; decision 174): `knowledge.root` may be a link. K0 to K4 each resolve it again, and one that
+    still refused it would fail after the paid stages before it, so the whole flow runs. The link is checked to be one."""
+    env = k2_env
+    folder(env, 'f', '猫|Áo\nfirst|second')
+    link = env.source.parent / 'kb-link'
+    make_link(link, env.source)
+    try:
+        assert is_directory_link(link)
+        env.config['knowledge']['root'] = link.relative_to(env.root).as_posix()
+        server = SyncServer()
+        result = invoke(env, server)
+        assert result['status'] == 'published'
+        assert {'observer', 'card_builder', 'alias_generator'} <= set(server.roles)  # K2 observe, K3 and K4 all ran
+        with env.store.pin() as pin:
+            assert {row['concept_id'] for row in pin.read_rows('concepts')} == {concept_id('猫'), concept_id('Áo')}
+    finally:
+        drop_link(link)
 
 
 @settings(max_examples=3, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])

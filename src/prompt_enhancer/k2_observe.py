@@ -196,7 +196,9 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
     forbidden = {os.path.normcase(name) for name in ('.secrets', 'models', '.git', '.venv')}
 
     def resolved(key, value):
-        return _resolve_within(_lexical_path(value, root, root, key), root, forbidden, root, key)
+        # The knowledge root is read only (R-014): a link is followed to its target; every written path is strict.
+        return _resolve_within(_lexical_path(value, root, root, key), root, forbidden, root, key,
+                               links=key == 'knowledge.root')
 
     source = resolved('knowledge.root', config['knowledge']['root'])
     if Path(knowledge_root).resolve() != source:
@@ -313,13 +315,15 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
                     document = parse_observation(value, image_id=identity, concepts=declared, context_key=key,
                         model_revision=record['model_revision'], prompt_id=role['prompt_id'],
                         facet_schema_version=config['observe']['facet_schema_version'], project_root=root)
-                    rows = _rows(document)
-                    store.catalog.build('observations', rows)
                 except (ValueError, TypeError, OverflowError, UnicodeError, ModelCallError) as error:
                     record_probe_failure(writer, key, error, revisions)
                     checkpoints.fail(key, failure_code(error), revisions=revisions)
                     report['failed'][key] = failure_code(error)
                     return
+                # The call, the source read and the reply are per-image failures; turning a validated reply into
+                # rows is this stage's own work, so an error there fails the stage (P3-SWEEP-2).
+                rows = _rows(document)
+                store.catalog.build('observations', rows)
                 bundle = _observation_bundle(revisions, declared, value, document)
                 artifact = checkpoints.commit(key, STAGE, canonical_json(bundle).encode('utf-8'),
                                                revisions=revisions, call_records=[record])

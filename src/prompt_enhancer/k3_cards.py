@@ -209,7 +209,7 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
 
     def resolved(key):
         return _resolve_within(_lexical_path(config[key.split('.')[0]][key.split('.')[1]], root, root, key),
-                               Path(root), forbidden, Path(root), key)
+                               Path(root), forbidden, Path(root), key, links=key == 'knowledge.root')  # read only (R-014)
 
     source, target = resolved('knowledge.root'), resolved('storage.kb_store')
     if Path(store.root).resolve() != target:

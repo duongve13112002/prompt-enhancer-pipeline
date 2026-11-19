@@ -14,7 +14,7 @@ import sys
 
 from jsonschema import Draft202012Validator
 
-from .config import REQUEST_LIMIT_KEY, ConfigurationError, _inside, _lexical_path, _schema
+from .config import REQUEST_LIMIT_KEY, ConfigurationError, LinkedPath, _inside, _lexical_path, _schema
 from .k0_scan import LinkRefused, ScanError, SourceTooLarge, read_source_file
 from .model_json import strict_json
 
@@ -36,6 +36,8 @@ def resolve_input(root, value, label):
     try:
         spelled = _lexical_path(str(value), root, value, 'path')
         resolved = _inside(value, root)
+    except LinkedPath:
+        raise Refusal(f'{label}: is a link or another spelling of a stored name') from None
     except ConfigurationError as error:
         raise Refusal(f'{label}: {error}') from None
     if str(resolved) != str(spelled):

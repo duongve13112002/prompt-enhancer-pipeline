@@ -488,7 +488,7 @@ async def name_folders(store, config, handoff, *, images, folder_images, knowled
     project = Path(root).resolve()
     forbidden = {os.path.normcase(name) for name in ('.secrets', 'models', '.git', '.venv')}
     source = _resolve_within(_lexical_path(config['knowledge']['root'], project, project, 'knowledge.root'),
-                            project, forbidden, project, 'knowledge.root')
+                            project, forbidden, project, 'knowledge.root', links=True)  # read only (R-014)
     if Path(knowledge_root).resolve() != source:
         raise ConfigurationError('knowledge.root: stage argument does not match configured root')
     for target in (Path(store.root).resolve(),

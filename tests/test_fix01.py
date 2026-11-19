@@ -112,7 +112,10 @@ def test_link_inspection_failure_is_refused(config, tmp_path, monkeypatch):
         load_config(write_config(tmp_path, config), 'kb status')
 
 
-def test_internal_link_is_resolved(config, tmp_path, project_root, monkeypatch):
+def test_internal_link_is_refused_for_a_stored_path_and_resolved_for_the_read_only_knowledge_root(
+        config, tmp_path, project_root, monkeypatch):
+    """P3-SWEEP-2 item 7 (PM decision pending user review): a path the project writes is never reached through a link,
+    also one that stays inside the root; the read-only knowledge root (R-014) is followed to its target."""
     import os
 
     link = tmp_path / 'simulated-internal-link'
@@ -128,7 +131,11 @@ def test_internal_link_is_resolved(config, tmp_path, project_root, monkeypatch):
 
     monkeypatch.setattr(os, 'readlink', fake_readlink)
     config['storage']['kb_store'] = str(link / 'kb')
-    assert load_config(write_config(tmp_path, config), 'kb status')['storage']['kb_store'] == str(link / 'kb')
+    with pytest.raises(ConfigurationError, match='storage.kb_store: is a link'):
+        load_config(write_config(tmp_path, config), 'kb status')
+    config['storage']['kb_store'] = 'kb-store'
+    config['knowledge']['root'] = str(link / 'kb')
+    assert load_config(write_config(tmp_path, config), 'kb status')['knowledge']['root'] == str(link / 'kb')
 
 
 def test_symlink_escape_refused(config, tmp_path, project_root):

@@ -30,15 +30,13 @@ LAYOUT = 'kb-sync-v2-retained-images'
 # artifact-bound: declared revision of the sync assembly that shapes a snapshot (KBS-S3-1); it enters the sync
 # identity with the stage revisions, so a stage edit or this module's edit replans the sync but changes no stage key.
 # Bump it with any edit to a function its guard pins (tests/test_stage_revisions.py).
-KB_SYNC_REVISION = 'kb-sync-3'
+KB_SYNC_REVISION = 'kb-sync-5'
 ROLES = ('info_assessor', 'folder_namer', 'observer', 'card_builder', 'alias_generator')
 
 
-def retain_images(builder, source, rows, limits):
-    """Copy each distinct scanned image once, checking the bytes actually stored; returns the retained ids."""
-    locations = {}
-    for membership in rows['folder_images']:
-        locations.setdefault(membership['image_id'], []).append(membership)
+def retained_identities(rows, limits):
+    """The ids of the scanned images a snapshot will retain, after the checks that need no file read: a valid identity
+    and size for each, each once, within the byte limits. Runs before any model call so a bad scan fails early."""
     total = 0
     seen = set()
     for row in sorted(rows['images'], key=lambda item: item['image_id']):
@@ -51,6 +49,17 @@ def retain_images(builder, source, rows, limits):
         total += size
         if size > limits['max_image_bytes'] or total > limits['max_total_bytes']:
             raise StorageError('retained images: byte limit exceeded')
+    return seen
+
+
+def retain_images(builder, source, rows, limits):
+    """Copy each distinct scanned image once, checking the bytes actually stored; returns the retained ids."""
+    seen = retained_identities(rows, limits)
+    locations = {}
+    for membership in rows['folder_images']:
+        locations.setdefault(membership['image_id'], []).append(membership)
+    for row in sorted(rows['images'], key=lambda item: item['image_id']):
+        image_id, size = row['image_id'], row['size_bytes']
         data = None
         for member in sorted(locations.get(image_id, []), key=lambda m: (m['folder_id'], m['relative_path'])):
             try:
@@ -104,10 +113,18 @@ def alias_failures(failed):
     """Structural record of the failed K4 keys (decision 165): concept ids and closed codes, never model text (R-026).
 
     `concept_ids` holds at most one id per concept, so it is bounded by the snapshot's own concept count; the
-    snapshot summary keeps only `count` and `codes` (bounded by the closed code set)."""
+    snapshot summary keeps `count`, `codes` (bounded by the closed code set) and `concept_ids_hash`, a digest of the
+    sorted ids (`_k4_failed_summary`), never the ids themselves."""
     codes = Counter(_closed_code(code) for code in failed.values())
     return {'count': len(failed), 'codes': dict(sorted(codes.items())),
             'concept_ids': sorted(key for key in failed if is_concept_id(key))}
+
+
+def _k4_failed_summary(failures):
+    """What a snapshot records of its failed K4 keys: how many, which closed codes, and a digest of the sorted failed
+    concept ids, so two runs that fail different concepts with the same codes are not taken for the same (R-017).
+    The ids themselves stay out of the summary (bounded size)."""
+    return {'count': failures['count'], 'codes': failures['codes'], 'concept_ids_hash': _digest(failures['concept_ids'])}
 
 
 def _alias_content(rows):
@@ -120,7 +137,7 @@ def _publishes_the_same_snapshot(store, current, recorded, identity, failures, a
     failures, and the same alias rows (the only table whose content depends on which keys failed). The identity covers
     the sources, settings, prompts, schemas and code revisions, so every other stage is a checkpoint hit (R-017)."""
     if (current is None or recorded.get('sync_identity') != identity or recorded.get('sync_layout') != LAYOUT
-            or recorded.get('k4_failed') != {'count': failures['count'], 'codes': failures['codes']}):
+            or recorded.get('k4_failed') != _k4_failed_summary(failures)):
         return False
     store.verify_snapshot(*current)
     with store.pin() as pin:
@@ -236,7 +253,7 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
             cleanup.push_async_callback(client.close)
         artifacts = {_checkpoint(writer, scanned, knowledge)}
         builder = writer.begin_snapshot(parent=current[0] if current else None)
-        retained = retain_images(builder, source.resolve(), scanned['rows'], config['sync']['retained_images'])
+        expected = retained_identities(scanned['rows'], config['sync']['retained_images'])
         reports = {}
 
         def accept(stage, result):
@@ -246,12 +263,12 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
             return result
 
         image = accept('k1_image', await embed_images(store, config, scanned['handoff']['k1'],
-                       knowledge_root=source, transport=transport, writer=writer))
-        if {row['image_id'] for row in image['images']} != retained:  # the published table promises exactly the copies
+                       knowledge_root=source.resolve(), transport=transport, writer=writer))
+        if {row['image_id'] for row in image['images']} != expected:  # the published table promises exactly the copies
             raise StorageError('retained images: table differs from retained copies')
         rows = dict(scanned['rows'], images=image['images'], image_embeddings=image['image_embeddings'])
         named = accept('k2_naming', await name_folders(store, config, scanned['handoff']['k2'],
-                       images=rows['images'], folder_images=rows['folder_images'], knowledge_root=source,
+                       images=rows['images'], folder_images=rows['folder_images'], knowledge_root=source.resolve(),
                        client=client, writer=writer))
         if named['overrides'] != overrides:
             raise StorageError('k2_naming: SOURCE_CHANGED: overrides')
@@ -259,7 +276,7 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
         handoff = {name: rows[name] for name in ('folders', 'concepts', 'folder_concepts')}
         observed = accept('k2_observation', await observe_images(store, config, handoff, images=rows['images'],
                           folder_images=rows['folder_images'], image_embeddings=rows['image_embeddings'],
-                          embedder_revision=image['embedder_revision'], dim=image['dim'], knowledge_root=source,
+                          embedder_revision=image['embedder_revision'], dim=image['dim'], knowledge_root=source.resolve(),
                           client=client, writer=writer))
         rows.update(observed['rows'])
         cards = accept('k3', await build_cards(store, config, handoff, observations=rows['observations'],
@@ -282,6 +299,9 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
             # `failed` by the next writer session, where GC collects it; the next sync retries the failed keys again.
             return {'status': 'unchanged', 'publish_skipped': 'identical', 'snapshot_id': current[0],
                     'report': scanned['report'], 'alias_failures': failures}
+        # The copy needs the source files, so it runs only for a snapshot that is really published (P3-SWEEP-2).
+        if retain_images(builder, source.resolve(), scanned['rows'], config['sync']['retained_images']) != expected:
+            raise StorageError('retained images: table differs from retained copies')
         items = concept_texts(rows)
         text = accept('k1_text', await embed_concept_texts(store, config, items, transport=transport, writer=writer))
         rows['concept_text_embeddings'] = text['concept_text_embeddings']
@@ -297,7 +317,7 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
             raise StorageError('k5: VALIDATION_REQUIRED')
         summary = {'sync_layout': LAYOUT, 'sync_identity': identity}
         if failures['count']:
-            summary['k4_failed'] = {'count': failures['count'], 'codes': failures['codes']}
+            summary['k4_failed'] = _k4_failed_summary(failures)
         snapshot_id = builder.finish(source_scan_summary=summary)
         writer.publish(snapshot_id)
         result = {'status': 'published', 'snapshot_id': snapshot_id, 'report': scanned['report'],

@@ -279,3 +279,35 @@ def test_grouping_refuses_bad_vectors(bad):
     with pytest.raises(ValueError):
         group_images([{'image_id': identity, 'decode_status': 'ok'}],
             [{'image_id': identity, 'embedder_revision': 'r', 'dim': 2, 'vector': bad}], 0.1, revision='r', dim=2)
+
+
+def test_a_defect_while_building_rows_fails_the_stage_instead_of_marking_the_image_failed(k2_env, monkeypatch):
+    """P3-SWEEP-2 item 1: the call, the source read and the reply are per-image failures; turning a validated reply
+    into rows is this stage's own work, so a defect there propagates and no failed checkpoint is written."""
+    import prompt_enhancer.k2_observe as module
+    env = k2_env
+    folder(env, 'f', 'A')
+
+    def defect(*args, **kwargs):
+        raise ValueError('labelled internal defect')
+    monkeypatch.setattr(module, '_rows', defect)
+    with pytest.raises(ValueError, match='labelled internal defect'):
+        invoke_observer(env, ObserverServer())
+    assert not [row for row in states(env) if row['state'] == 'failed']
+
+
+def test_a_defect_while_registering_observation_rows_fails_the_stage_too(k2_env, monkeypatch):
+    """P3-SWEEP-2 fix round 1 (F4): `catalog.build('observations', ...)` is stage work like `_rows`; a failure there
+    must not be written as a failed image."""
+    env = k2_env
+    folder(env, 'f', 'A')
+    real = env.store.catalog.build
+
+    def build(table, rows, *args, **kwargs):  # labelled fault injection on one table
+        if table == 'observations':
+            raise ValueError('labelled internal defect')
+        return real(table, rows, *args, **kwargs)
+    monkeypatch.setattr(env.store.catalog, 'build', build)
+    with pytest.raises(ValueError, match='labelled internal defect'):
+        invoke_observer(env, ObserverServer())
+    assert not [row for row in states(env) if row['state'] == 'failed']

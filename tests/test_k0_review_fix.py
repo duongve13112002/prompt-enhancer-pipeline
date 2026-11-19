@@ -252,7 +252,11 @@ def test_linked_storage_overlap_refused(project_root, tmp_path, config, key, dir
         except OSError as error:
             pytest.skip(f'synthetic symlink creation unavailable: {error}')
     try:
-        with pytest.raises(ValueError, match=rf'storage\.{key} overlaps knowledge\.root'):
+        # A linked store is refused as a link before its target is compared (P3-SWEEP-2 item 7); a linked knowledge root is
+        # followed, so its target still overlaps the store.
+        expected = (rf'storage\.{key}: is a link' if direction == 'storage_inside_source'
+                    else rf'storage\.{key} overlaps knowledge\.root')
+        with pytest.raises(ValueError, match=expected):
             load(project_root, config)
         after = {p.relative_to(source).as_posix(): p.read_bytes() for p in source.rglob('*') if p.is_file()}
         assert after == before

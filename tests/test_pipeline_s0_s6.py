@@ -274,7 +274,7 @@ def test_published_image_attaches_after_source_removed_and_corrupt_copy_refuses_
         assert response.attachment_bytes == {}
         assert not writer_calls  # refused after S3 and before S4: the writer was never called
         assert rows[0]['body']['intake_error'] == {'code': 'KNOWLEDGE_FAILED',
-                                                   'message': 'image copies unavailable; run kb sync to republish'}
+                                                   'message': 'image copies unavailable in the current snapshot'}
         assert outcome['holds_at_delivery'] == []
         return
     assert writer_calls

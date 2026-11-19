@@ -1,4 +1,4 @@
-# Overlay for the production deployment: a vLLM-style server the user runs. Documentation only; nothing is implemented.
+# Overlay for the production deployment: a vLLM-style server the user runs. Built and tested on the CPU with labelled doubles; values stay sentinels until fitted. How to run: docs/run-guide.md.
 # Applied over configs/enhancer.example.yaml. The user deploys and runs the server; the agent never starts the production
 # server and only writes the run guide. Facts: decision 20, N102, N121, N057.
 schema_version: 1

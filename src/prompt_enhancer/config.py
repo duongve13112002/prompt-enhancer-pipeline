@@ -107,6 +107,10 @@ class ConfigurationError(ValueError):
     """Invalid configuration with its source and key."""
 
 
+class LinkedPath(ConfigurationError):
+    """A path the project owns or writes has a link (symlink, junction) or another spelling of a stored name on its way."""
+
+
 def _validate_segments(value, path, key, *, allow_navigation=True):
     """Enforce a portable spelling before any platform normalization."""
     if not isinstance(value, str) or not value or '\x00' in value:
@@ -150,8 +154,12 @@ def _is_deleted_name(resolved):
     return parts[1:3] == ['$extend', '$deleted']
 
 
-def _resolve_within(candidate, root, forbidden, path, key):
-    """Resolve links component by component without touching protected targets."""
+def _resolve_within(candidate, root, forbidden, path, key, *, links=False):
+    """Resolve a path under the project root component by component without touching protected targets.
+
+    A component that is a link (symlink, junction) or another spelling of a stored name is refused, so a path the project
+    owns or writes never reaches its target through one (AGENTS.md section 6, P3-SWEEP-2). `links=True` follows links
+    that stay inside the root; only the read-only knowledge root takes it, because a user's knowledge base may be one."""
     pending = list(candidate.relative_to(root).parts)
     current = root
     visited = set()
@@ -178,6 +186,8 @@ def _resolve_within(candidate, root, forbidden, path, key):
                 parts = current.relative_to(root).parts
                 if parts and os.path.normcase(parts[0]) in forbidden:
                     raise ConfigurationError(f'{path}: {key}: protected project directory')
+                if not links and os.path.normcase(str(current)) != os.path.normcase(str(target)):
+                    raise LinkedPath(f'{path}: {key}: is a link or another spelling of a stored name')
                 continue
             raise ConfigurationError(f'{path}: {key}: cannot inspect link: {error}') from error
         if target in visited:
@@ -186,7 +196,12 @@ def _resolve_within(candidate, root, forbidden, path, key):
         link = _strip_extended_prefix(link)
         resolved = Path(os.path.abspath(target.parent / link))
         if not resolved.is_relative_to(root):
-            raise ConfigurationError(f'{path}: {key}: resolved outside project root')
+            raise ConfigurationError(f'{path}: {key}: resolved outside project root')  # the more specific fact first
+        if not links:
+            target_parts = resolved.relative_to(root).parts
+            if target_parts and os.path.normcase(target_parts[0]) in forbidden:
+                raise ConfigurationError(f'{path}: {key}: protected project directory')
+            raise LinkedPath(f'{path}: {key}: is a link or another spelling of a stored name')
         pending = list(resolved.relative_to(root).parts) + pending
         current = root
     return current
@@ -455,7 +470,7 @@ def _lexical_path(value, root, path, key):
     return candidate
 
 
-def _configured_path(value, root, path, key, *, protected=True, secret=False):
+def _configured_path(value, root, path, key, *, protected=True, secret=False, links=False):
     if isinstance(value, str) and value in SENTINELS:
         return
     if secret and value == 'none':
@@ -471,7 +486,7 @@ def _configured_path(value, root, path, key, *, protected=True, secret=False):
     forbidden = {os.path.normcase(name) for name in ('.secrets', '.git', '.venv')}
     if protected:
         forbidden.add(os.path.normcase('models'))
-    resolved = _resolve_within(candidate, root, forbidden, path, key)
+    resolved = _resolve_within(candidate, root, forbidden, path, key, links=links)
     if resolved == root:
         raise ConfigurationError(f'{path}: {key}: must not be the project root')
     parts = resolved.relative_to(root).parts
@@ -495,7 +510,8 @@ def _validate_configured_paths(config, root, path, sources, *, knowledge_access=
             value = _get(config, key, path)
         except ConfigurationError:
             continue
-        _configured_path(value, root, _source(sources, key, path), key)
+        # The knowledge root is the user's read-only input and may be a link; every other path here is the project's own.
+        _configured_path(value, root, _source(sources, key, path), key, links=key == 'knowledge.root')
     knowledge = config.get('knowledge')
     if isinstance(knowledge, dict):
         key = 'knowledge.overrides_file'
@@ -1597,7 +1613,14 @@ def load_config(path, command, *, overlay=None, project_root=None):
 
 def validate_sync_config(config, *, project_root):
     """Apply the command preflight to a supplied mapping before any stage/store/source activity."""
-    return _validate_loaded_config(config, 'kb sync', Path(project_root).resolve(), 'configuration', {})
+    root = Path(project_root).resolve()
+    validated = _validate_loaded_config(config, 'kb sync', root, 'configuration', {})
+    # The run itself is about to read the knowledge root, so its resolved target must be a directory; a configuration that is
+    # only loaded for its shape (`load_config`) may name a knowledge base that does not exist yet. With retrieval off the
+    # run reads nothing of the knowledge base, so nothing of it is resolved either (R-009).
+    if config['rag']['enabled'] and not _resolved_knowledge_root(config, root, 'configuration').is_dir():
+        raise ConfigurationError('configuration: knowledge.root: not an existing directory')
+    return validated
 
 
 def _validate_override_policy(config, schema, path):
@@ -2261,11 +2284,19 @@ def _validate_store_reads(config, command, root, path, sources):
         raise ConfigurationError(f'{path}: {error}') from None
 
 
+def _resolved_knowledge_root(config, root, path):
+    """The knowledge root with its links resolved: it is read only (R-014), so a link to a directory inside the project
+    is followed and its target is what every check below sees (P3-SWEEP-2 item 7). Every path the project writes is
+    resolved without this allowance."""
+    return _resolve_within(_lexical_path(config['knowledge']['root'], root, path, 'knowledge.root'), root,
+                           {os.path.normcase('.secrets'), os.path.normcase('models')}, path, 'knowledge.root',
+                           links=True)
+
+
 def _validate_k0_reads(config, root, path, sources, stores):
     """K0's scan settings (`kb sync`, `embed dev-compare`): the knowledge root inside the project (never `models/`
     or `.secrets/`) and apart from every key in `stores`, the info-file codec, the worker count, the extensions."""
-    source = _resolve_within(_lexical_path(config['knowledge']['root'], root, path, 'knowledge.root'), root,
-                             {os.path.normcase('.secrets'), os.path.normcase('models')}, path, 'knowledge.root')
+    source = _resolved_knowledge_root(config, root, path)
     for key in stores:
         target = _resolve_within(_lexical_path(_get(config, key, path), root, path, key), root,
                                  {os.path.normcase('.secrets'), os.path.normcase('models')}, path, key)

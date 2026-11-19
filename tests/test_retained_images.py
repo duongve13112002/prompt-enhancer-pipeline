@@ -476,12 +476,12 @@ def run_intake(config, request, project_root):
         return result.payload, result.snapshot is not None
 
 
-def assert_kb_sync_refusal(payload, store):
+def assert_retention_refusal(payload, store):
     from prompt_enhancer.intake import RETENTION_MESSAGE
 
     assert payload['outcome'] == 'refused'
     assert payload['error'] == {'code': 'KNOWLEDGE_FAILED', 'message': RETENTION_MESSAGE}
-    assert 'kb sync' in payload['error']['message']
+    assert 'kb sync' not in payload['error']['message']  # sync does not repair a damaged snapshot (P3-SWEEP-2)
     assert not list((store.root / 'leases').glob('*/*.lease'))
 
 
@@ -514,7 +514,7 @@ def test_intake_refuses_damaged_retention_before_s4(k2_env, model_test_profile, 
 
         monkeypatch.setattr(PinnedSnapshot, 'read_rows', labelled_damaged_table)
     payload, pinned = run_intake(config, request, project_root)
-    assert_kb_sync_refusal(payload, k2_env.store)
+    assert_retention_refusal(payload, k2_env.store)
     assert not pinned
 
 
@@ -537,7 +537,7 @@ def test_manifest_copy_entry_whose_hash_differs_from_its_id_is_refused_at_intake
     with k2_env.store.pin() as pin, pytest.raises(StorageError, match='not retained in this snapshot'):
         pin.retained_image_entry(ids[-1])
     payload, pinned = run_intake(config, request, project_root)
-    assert_kb_sync_refusal(payload, k2_env.store)
+    assert_retention_refusal(payload, k2_env.store)
     assert not pinned
 
 
@@ -604,8 +604,9 @@ def test_same_size_corruption_is_caught_after_s3_for_selected_images_only(k2_env
         assert s0.payload['outcome'] == 'ready'  # manifest-only intake cannot see same-size damage
         require_attachment_copies(s0, pack(ids[0], ids[1]))  # unselected damaged copy: no read, no refusal
         require_attachment_copies(s0, None)
-        with pytest.raises(AttachmentRetentionUnavailable, match='kb sync'):
+        with pytest.raises(AttachmentRetentionUnavailable, match='image copies unavailable') as refused:
             require_attachment_copies(s0, pack(ids[0], ids[-1]))
+        assert 'kb sync' not in str(refused.value)  # damage in the current snapshot: a sync does not repair it
 
 
 @pytest.mark.parametrize('damage', ['missing', 'wrong_size'])
@@ -786,3 +787,50 @@ def test_dev_example_declares_explicit_retention_limits_and_refuses_bad_ones(pro
     k2_env.config['sync']['retained_images']['max_total_bytes'] = 'deploy_required'
     with pytest.raises(ConfigurationError):
         validate_sync_config(k2_env.config, project_root=k2_env.root)
+
+
+def test_kb_sync_cannot_repair_a_damaged_current_snapshot_so_no_message_promises_it(
+        k2_env, model_test_profile, tmp_path, project_root):
+    """P3-SWEEP-2 item 2 (probe kept as a test). A listed copy that is gone fails the next sync at the scan pin, and a
+    same-size corruption fails the unchanged check: the operator hints that said `run kb sync to republish` were false."""
+    from prompt_enhancer.intake import RETENTION_MESSAGE
+    from prompt_enhancer.storage.store import RetainedFileError
+
+    config, request, ids, directory = attach_setup(k2_env, model_test_profile, tmp_path, project_root)
+    path = k2_env.store.path(f'{directory}/images/{ids[-1][7:]}')
+    original = path.read_bytes()
+    path.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+    with pytest.raises(StorageError):  # same size: the pin passes, the unchanged branch re-hashes and refuses
+        invoke(k2_env, SyncServer())
+    path.unlink()
+    with pytest.raises(RetainedFileError):  # missing: the scan's pin refuses before any build
+        invoke(k2_env, SyncServer())
+    payload, pinned = run_intake(config, request, project_root)
+    assert payload['error']['message'] == RETENTION_MESSAGE and 'kb sync' not in RETENTION_MESSAGE and not pinned
+
+
+def test_the_republish_hint_is_given_only_for_a_snapshot_without_the_retention_layout(
+        k2_env, model_test_profile, tmp_path, project_root):
+    """The hint stays where it is true: a snapshot that never listed the marker is republished by a new sync, while an
+    image id that a retained-layout snapshot does not hold (or any damage) is not."""
+    from prompt_enhancer.storage.store import KnowledgeStore
+
+    config, request, ids, directory = attach_setup(k2_env, model_test_profile, tmp_path, project_root)
+    with k2_env.store.pin() as pin:
+        assert pin.has_retained_image_layout()
+        with pytest.raises(StorageError, match='not retained in this snapshot') as unknown:
+            pin.read_image('sha256:' + 'e' * 64)
+        assert 'kb sync' not in str(unknown.value)
+    real = KnowledgeStore._manifest
+
+    def without_copies(self, relative, expected_sha=None):  # test-only double: a manifest from before copies were kept
+        return [row for row in real(self, relative, expected_sha) if not row['path'].startswith('images/')]
+
+    with pytest.MonkeyPatch.context() as legacy:
+        legacy.setattr(KnowledgeStore, '_manifest', without_copies)
+        with k2_env.store.pin() as pin:
+            assert not pin.has_retained_image_layout()
+            with pytest.raises(StorageError, match='run kb sync to republish'):
+                pin.read_image(ids[0])
+        payload, pinned = run_intake(config, request, project_root)
+        assert payload['error']['message'] == 'image copies unavailable; run kb sync to republish' and not pinned

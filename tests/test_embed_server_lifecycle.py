@@ -673,8 +673,9 @@ def server_instances(monkeypatch):
 
 @pytest.fixture
 def lingered(monkeypatch):
-    """Labelled seam: one record per over-cap socket kept for its drain, written when it ends: the bytes it dropped
-    (its budget less what was left) and how long it lingered. The production methods run unchanged."""
+    """Labelled seam: one record per over-cap socket kept for its drain, written when it ends: the budget the server gave
+    it (read from the server's own entry when the socket is kept, never from the settings), the bytes it dropped (that
+    budget less what was left) and how long it lingered. The production methods run unchanged."""
     records, started = [], {}
     real_linger, real_end = server_module._Server._linger, server_module._Server._end_lingering
 
@@ -682,15 +683,18 @@ def lingered(monkeypatch):
         before = time.monotonic()  # taken before the deadline is set: the measured time is never below the deadline's
         kept = real_linger(self, request)
         if kept:
-            started[request] = before
+            with self._lock:
+                entry = self._lingering.get(request)
+            started[request] = (before, entry[1] if entry is not None else None)
         return kept
 
     def end(self, request):
         with self._lock:
             entry = self._lingering.get(request)
         if entry is not None:
-            records.append({'dropped': self._state.settings.max_discard_bytes - entry[1],
-                            'lingered': time.monotonic() - started[request]})
+            before, budget = started[request]
+            records.append({'budget': budget, 'dropped': None if budget is None else budget - entry[1],
+                            'lingered': time.monotonic() - before})
         return real_end(self, request)
 
     monkeypatch.setattr(server_module._Server, '_linger', linger)
@@ -799,8 +803,10 @@ def test_the_lingering_bound_is_capped_by_the_selector_capacity(project_root, mo
 # beyond that the reply is best effort (the close holds unread bytes and Windows may reset), and the one thing still
 # required is that the connection ends and that a reply which does arrive is a complete status line.
 
-def refusal_exchange(settings, head, body):
-    """Send `head` and `body` as a client that writes everything before reading; return (reply, seconds)."""
+def refusal_exchange(settings, head, body, *, before_reading=None):
+    """Send `head` and `body` as a client that writes everything before reading; return (reply, seconds).
+
+    `before_reading` is the labelled late-reading client: it runs after the last byte is sent and before the first read."""
     started = time.monotonic()
     with connect(settings) as raw:
         raw.settimeout(10)
@@ -808,8 +814,25 @@ def refusal_exchange(settings, head, body):
             raw.sendall(head + body)
         except OSError:  # the server stopped reading at its budget: the reply is what remains to read
             pass
+        if before_reading is not None:
+            before_reading()
         reply = read_to_end(raw)
     return reply, time.monotonic() - started
+
+
+LATE_READ_SETTLE_S = 0.3  # test-only: scheduling margin, after the server ended its drain, before the late client reads
+
+
+def read_after_the_server_ended_its_drain(lingered):
+    """The late-reading client (P3-SWEEP-2, F1). It waits for the server's own record that the drain ended (taken just
+    before the close, so the close is no later than the margin that follows), then reads. A server that stopped dropping
+    before the client's last byte closes with that byte unread and resets the connection; by then the reply the client
+    has not read yet is gone (Windows), so only a server that drops everything the client sent leaves the reply to read.
+    A client that reads at once cannot tell the two apart: the reply is already in its buffer."""
+    def wait():
+        assert wait_for(lambda: lingered), 'the server never ended the drain'
+        time.sleep(LATE_READ_SETTLE_S)
+    return wait
 
 
 def assert_refusal_property(reply, seconds, size, budget, status):
@@ -869,9 +892,10 @@ def _over_cap_refusal_property(settings, size):
     assert_refusal_property(reply, seconds, len(head) + size, settings.max_discard_bytes, 503)
 
 
-def test_the_over_cap_budget_counts_the_request_head(project_root, model_test_profile, monkeypatch):
-    """Deterministic edge of the property above: everything the client sends, up to the budget, gets its reply, with the
-    head counted; the server drops exactly the budget when the client sends more."""
+def test_the_over_cap_budget_counts_the_request_head(project_root, model_test_profile, monkeypatch, lingered):
+    """Deterministic edge of the property above: everything the client sends, up to the budget, gets its reply to a client
+    that reads late, with the head counted. A server budget of the budget less one, half of it or none leaves bytes unread
+    at the close and fails here (mutants run in the task file); a client that reads at once would pass them all."""
     settings, _ = make_settings(project_root, model_test_profile, max_connections=4, max_pending_requests=1,
                                 max_discard_bytes=100000, read_timeout_s=30)
     budget = settings.max_discard_bytes
@@ -882,8 +906,13 @@ def test_the_over_cap_budget_counts_the_request_head(project_root, model_test_pr
         try:
             # The largest body whose head and body together are exactly the budget (the head's length depends on the digits).
             size = next(n for n in range(budget, 0, -1) if n + len(post_head(settings, n)) == budget)
-            reply, seconds = refusal_exchange(settings, post_head(settings, size), b'x' * size)
+            reply, seconds = refusal_exchange(settings, post_head(settings, size), b'x' * size,
+                                              before_reading=read_after_the_server_ended_its_drain(lingered))
             assert_refusal_property(reply, seconds, budget, budget, 503)
+            # The budget the server gave the socket is the configured one, and the drain took everything the client sent.
+            # The late reader above cannot tell a smaller server budget on this machine (a reset did not cost the reply even
+            # at a budget of 0, probe in the task file), so the server's own entry is what fails the three mutants.
+            assert [(record['budget'], record['dropped']) for record in lingered] == [(budget, budget)]
             assert reply.startswith(b'HTTP/1.0 503 ') and b'\r\n' in reply
         finally:
             for holder in holders:

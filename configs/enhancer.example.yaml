@@ -1,4 +1,5 @@
-# Example full profile. Documentation only: nothing is implemented, so no loader exists. Contract: contracts/README.md.
+# Example full profile. The loader and the commands that read it are built and tested on the CPU with labelled doubles; every
+# unmeasured value below is a sentinel until it is fitted, so no command runs from this file as it stands. How to run: docs/run-guide.md. Contract: contracts/README.md.
 # Nothing here has been measured. Every key holds one of: a user decision or requirement (cited in a trailing comment),
 # a protocol-bound constant (with its note), an example policy the admin chooses, or a sentinel.
 # Sentinels:

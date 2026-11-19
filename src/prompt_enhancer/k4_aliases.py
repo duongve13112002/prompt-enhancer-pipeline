@@ -105,7 +105,7 @@ def _inputs(store, config, handoff, cards, overrides):
     def resolved(key):
         section, field = key.split('.')
         return _resolve_within(_lexical_path(config[section][field], root, root, key),
-                               Path(root), forbidden, Path(root), key)
+                               Path(root), forbidden, Path(root), key, links=key == 'knowledge.root')  # read only (R-014)
 
     source, target, data = (resolved(key) for key in ('knowledge.root', 'storage.kb_store', 'storage.data_root'))
     if Path(store.root).resolve() != target:
@@ -197,24 +197,25 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
                            'description_hash': _digest(payload['descriptions']),
                            'summary_hash': _digest(payload['card_summary']), 'languages_hash': _digest(payload['languages'])}
                 key = artifact_key('k4_generation', _digest(content), revisions)
-                record = None
-                try:
-                    cached = generated.done(key) or generated.reusable(key)
-                    if cached:
-                        try:
-                            bundle = json.loads(generated.load(key))
-                            if (bundle['version'] != LAYOUT or bundle['revisions'] != revisions
-                                    or bundle['payload'] != payload or bundle['key'] != key
-                                    or cached['call_records'] != [bundle['record']]):
-                                raise ValueError('completed alias bundle does not match input or call record')
-                            reply = parse_alias_reply(bundle['reply'], project_root=root)
-                            record = bundle['record']
-                            provenance = _record_revisions(record, config)
-                        except (ValueError, KeyError, TypeError, UnicodeError) as error:
-                            raise StorageError('k4_generation: CACHE_INVALID: invalid completed bundle') from None
-                        artifact = cached['output_key']
-                        report['reused'] += 1
-                    else:
+                cached = generated.done(key) or generated.reusable(key)
+                if cached:
+                    try:
+                        bundle = json.loads(generated.load(key))
+                        if (bundle['version'] != LAYOUT or bundle['revisions'] != revisions
+                                or bundle['payload'] != payload or bundle['key'] != key
+                                or cached['call_records'] != [bundle['record']]):
+                            raise ValueError('completed alias bundle does not match input or call record')
+                        reply = parse_alias_reply(bundle['reply'], project_root=root)
+                        provenance = _record_revisions(bundle['record'], config)
+                    except (ValueError, KeyError, TypeError, UnicodeError):
+                        raise StorageError('k4_generation: CACHE_INVALID: invalid completed bundle') from None
+                    artifact = cached['output_key']
+                    report['reused'] += 1
+                else:
+                    record = None
+                    # Only the model call and its reply are per-concept failures (decision 165). The steps after the
+                    # reply are this stage's own work: an error there is a defect and fails the stage (P3-SWEEP-2).
+                    try:
                         if client is None:
                             if owned_run is None:
                                 owned_run = ModelClientRun(config, root, probe_cases=probe_cases,
@@ -227,21 +228,22 @@ async def build_aliases(store, config, handoff, *, cards, overrides, client=None
                         if value is None:
                             raise ValueError(record['status'])
                         reply = parse_alias_reply(value, project_root=root)
-                        provenance = _record_revisions(record, config)
-                        bundle = _generation_bundle(revisions, payload, key, reply, record)
-                        artifact = generated.commit(key, 'k4_generation', canonical_json(bundle).encode('utf-8'),
-                                                    revisions=revisions, call_records=[record])
-                        report['generated'] += 1
-                    candidates[identity] = (reply['aliases'], provenance)
-                    artifacts.append(artifact)
-                except (ValueError, TypeError, UnicodeError, ModelCallError) as error:
-                    record_probe_failure(writer, key, error, revisions)
-                    if record is not None:
-                        writer.checkpoints('k4_call_failure').commit(
-                            key, 'k4_call_failure', canonical_json({'error': failure_code(error)}).encode('utf-8'),
-                            revisions=revisions, call_records=[record])
-                    generated.fail(key, failure_code(error), revisions=revisions)
-                    report['failed'][identity] = failure_code(error)
+                    except (ValueError, TypeError, UnicodeError, ModelCallError) as error:
+                        record_probe_failure(writer, key, error, revisions)
+                        if record is not None:
+                            writer.checkpoints('k4_call_failure').commit(
+                                key, 'k4_call_failure', canonical_json({'error': failure_code(error)}).encode('utf-8'),
+                                revisions=revisions, call_records=[record])
+                        generated.fail(key, failure_code(error), revisions=revisions)
+                        report['failed'][identity] = failure_code(error)
+                        return
+                    provenance = _record_revisions(record, config)
+                    bundle = _generation_bundle(revisions, payload, key, reply, record)
+                    artifact = generated.commit(key, 'k4_generation', canonical_json(bundle).encode('utf-8'),
+                                                revisions=revisions, call_records=[record])
+                    report['generated'] += 1
+                candidates[identity] = (reply['aliases'], provenance)
+                artifacts.append(artifact)
 
             ordered = [concepts[key] for key in sorted(concepts)]
             if generate:  # per-item flow (decision 149); a fatal error drains the calls in flight before it is raised

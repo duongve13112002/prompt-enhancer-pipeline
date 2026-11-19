@@ -33,10 +33,10 @@ def test_disabled_sync_never_accesses_knowledge(k2_env, monkeypatch, capsys, pla
     monkeypatch.setattr(module, '_validate_configured_paths', forbidden)
     resolve = module._resolve_within
 
-    def checked_resolve(candidate, root, protected, path, key):
+    def checked_resolve(candidate, root, protected, path, key, **options):  # labelled spy; `links=` is passed through
         if key in {'knowledge.root', 'storage.kb_store', 'storage.data_root'}:
             forbidden()
-        return resolve(candidate, root, protected, path, key)
+        return resolve(candidate, root, protected, path, key, **options)
 
     monkeypatch.setattr(module, '_resolve_within', checked_resolve)
     import prompt_enhancer.storage as storage

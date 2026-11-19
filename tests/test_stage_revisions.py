@@ -54,7 +54,9 @@ PINS = {
            ('k5-index-2', '3a25f1e9a1e1ab8ceebccc0f75c6ef959a1ba201d80809e4554a0b47ac75cfd0')],
     'kb_sync': [('kb-sync-1', '2126cc1a8a831a34add01a3aa8df7a5f2b074359cce34b3505f1d91cd23a607f'),
                 ('kb-sync-2', 'd37741dbeab9763048f69f8983f2ac34e58a228fdeaa8cb0d73e6606f93e870b'),
-                ('kb-sync-3', 'a407996f66c99ae87dd53d4b42e3162c4705d1e36d640abe1f490587ecb46094')],
+                ('kb-sync-3', 'a407996f66c99ae87dd53d4b42e3162c4705d1e36d640abe1f490587ecb46094'),
+                ('kb-sync-4', '72f51ce38e75c40bef7e944325029f175670660888d9b0020c210eb5d1b2659d'),
+                ('kb-sync-5', 'd8a0ee04f66cc973b883fd3c906f2d005133793fbf7c27033e075eea4ae66980')],
 }
 ENTRIES = sorted({(module, name) for stage in guard.STAGES.values() for module, name in stage[2]})
 

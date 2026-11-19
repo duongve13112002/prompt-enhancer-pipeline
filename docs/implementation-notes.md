@@ -84,5 +84,16 @@ Decisions, deviations, assumptions, tradeoffs, rejected alternatives and risks, 
 ## 2026-11-19 one note per attached image in the writer brief (ATTACH-NOTES)
 
 - **Built (decision 170 item 4):** `writer.render_brief` renders `knowledge.attachments`, one entry per `attach` image in S6 order (`position`, `image_id`, `bound_entity`, `facets`, decoded `note`); `assembly.attached_note` is the single decoder and checker of an image note, used by S3 validation and S4. Task file: [ATTACH-NOTES](../tasks/active/ATTACH-NOTES-writer-brief.md).
-- **PM decision pending user review:** with `renderer.accepts_reference_images: false` no `attachments` key is rendered (no image is delivered); no refusal at configuration time.
-- **Open for the user:** how `position` maps to the profile's `renderer.image_reference_syntax` when the source image is also sent; a `brief_v1` template line naming `attachments` (a new prompt revision judged by an eval, not an in-place edit of `brief_v0`).
+- **Superseded by decision 177:** with `renderer.accepts_reference_images: false` no `attachments` key is rendered; the user chose a refusal at configuration load instead (task KB-EXTERNAL).
+- **Decided (decision 176):** source and reference images are numbered as two groups with their own syntax templates, and `edit` takes n source images (task MULTI-SOURCE). Still open: a `brief_v1` template line naming `attachments` (a new prompt revision judged by an eval, not an in-place edit of `brief_v0`).
+
+## 2026-11-19 link rule and P3-SWEEP-1 follow-ups (P3-SWEEP-2)
+
+- **Built (decision 174):** a path the project writes or owns (models, cache, stores, data, profiles, schemas, verifier) refuses a link or another spelling at any component (`config.LinkedPath`); `knowledge.root` follows a link whose resolved target must stay inside the project root, at load and in every stage (K0 to K4). K4's alias `try` holds only the model call and its parse (decision 165); `retain_images` runs after the identity check; the K4 failure summary keeps `concept_ids_hash`; `RETENTION_MESSAGE` no longer advises `kb sync`. Task file: [P3-SWEEP-2](../tasks/active/P3-SWEEP-2-follow-ups.md).
+- **Fix round:** K4 resolved the knowledge root strictly (Claude Opus P1); a `kb sync` flow test through a real link now covers every stage. To make that flow work, `kb_sync.sync_knowledge` passes the resolved root to K1 and K2 (`kb-sync-5`: the first sync after the upgrade re-plans once). PM decision pending user review.
+- **Kept as before (PM decision pending user review):** no recovery path from a damaged current snapshot (false hint removed only); K2 naming and K3 keep one `try` per item (9 accepted tests pin them).
+- **Follow-ups:** sync recovery from a damaged snapshot; a POSIX link target holding `..` after an earlier link (validated lexically, read physically; predates this change); the volume mount point wording on Windows.
+
+## 2026-11-19 purge rule for pytest data in worker worktrees (FOLLOWUPS-1)
+
+- **Built:** `purge_tmp.py archive-remove` treats a protected name (never `.secrets`, any case) as test data only below `<worktree>/.tmp/<dir>/` inside a directory named exactly as pytest's `_mk_tmp` names a test function defined in that worktree's own test files (non-word characters to `_`, cut at 30, ASCII counter); links are never followed; the other purge commands are unchanged. Also: the run-guide test checks long options against the real parser, `K3-cards.md` and `execution.md` lint sentences corrected, four configuration headers updated. Task file: [FOLLOWUPS-1](../tasks/active/FOLLOWUPS-1-small-fixes.md).

@@ -686,13 +686,20 @@ class PinnedSnapshot:
             raise StorageError(f'snapshot {self.snapshot_id}: file changed during read')
         return data
 
+    def has_retained_image_layout(self):
+        """True when the manifest lists the retention marker: every snapshot `kb sync` builds today does. False means a
+        snapshot built before copies were kept, which a new sync republishes; a listed marker that is damaged fails at pin."""
+        return ('file', RETAINED_IMAGE_MARKER[0]) in self._entries
+
     def retained_image_entry(self, image_id):
         """Manifest row of a retained copy: a listed file named by the image id whose hash is that id."""
         if (not isinstance(image_id, str) or re.fullmatch(r'sha256:[0-9a-f]{64}', image_id) is None):
             raise StorageError('invalid retained image identity')
         entry = self._entries.get(('file', 'images/' + image_id[7:]))
         if entry is None or entry['sha256'] != image_id[7:]:
-            raise StorageError('image copy is not retained in this snapshot; run kb sync to republish')
+            # A republish helps only a snapshot without the layout; a damaged or foreign snapshot is not repaired by sync.
+            raise StorageError('image copy is not retained in this snapshot' + (
+                '' if self.has_retained_image_layout() else '; run kb sync to republish'))
         return entry
 
     def check_retained_images(self, rows):

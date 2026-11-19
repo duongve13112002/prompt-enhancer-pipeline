@@ -152,7 +152,7 @@ def test_link_resolving_to_project_root_is_refused(config, tmp_path, project_roo
 
     monkeypatch.setattr(os, 'readlink', labelled_link_double)
     config['storage']['kb_store'] = str(link)
-    with pytest.raises(ConfigurationError, match='storage.kb_store.*project root'):
+    with pytest.raises(ConfigurationError, match='storage.kb_store.*is a link'):  # refused as a link, before its target
         load_config(write_config(tmp_path, config), 'kb status', project_root=project_root)
 
 

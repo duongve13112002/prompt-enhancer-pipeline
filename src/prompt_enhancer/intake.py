@@ -20,7 +20,10 @@ from .storage import StorageError, open_knowledge_store
 from .storage.store import RetainedFileError
 
 
-RETENTION_MESSAGE = 'image copies unavailable; run kb sync to republish'  # protocol-bound operator hint
+# protocol-bound operator diagnostics. `kb sync` cannot repair a damaged current snapshot (it fails on the listed file),
+# so only the legacy-layout case, which a sync does republish, carries the remedy (P3-SWEEP-2).
+RETENTION_MESSAGE = 'image copies unavailable in the current snapshot'
+REPUBLISH_MESSAGE = 'image copies unavailable; run kb sync to republish'  # a snapshot built before copies were kept
 INDEX_DAMAGE_MESSAGE = 'knowledge index file missing or changed in the current snapshot'  # protocol-bound operator diagnostic (no remedy: kb sync does not repair a damaged current snapshot)
 _INDEX_PREFIX = 'index/'  # artifact-bound: where K5 keeps its files inside a snapshot (`k5_index.MANIFEST`)
 
@@ -234,7 +237,8 @@ def intake(request, config, *, project_root, profile_view=None):
                 try:
                     snapshot.check_retained_images(snapshot.read_rows('images'))
                 except (StorageError, OSError):
-                    raise AttachmentRetentionUnavailable(RETENTION_MESSAGE) from None
+                    raise AttachmentRetentionUnavailable(
+                        RETENTION_MESSAGE if snapshot.has_retained_image_layout() else REPUBLISH_MESSAGE) from None
             if snapshot is None:
                 payload['outcome'] = 'degraded'
                 payload['warnings'].append('SNAPSHOT_MISSING')

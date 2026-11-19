@@ -111,7 +111,8 @@ def inside(root, relative):
         raise StorageError(f'{root}: invalid relative path {relative!r}: {error}') from error
     root = Path(root)
     try:
-        return _resolve_within(root.joinpath(*parts), root, set(), root, relative)
+        # `inside` resolves through links and refuses only what leaves root; `real_inside` below refuses every link.
+        return _resolve_within(root.joinpath(*parts), root, set(), root, relative, links=True)
     except ConfigurationError as error:
         raise StorageError(str(error)) from error
 

@@ -131,3 +131,24 @@ def test_cli_audit_prints_sample_without_source_or_models(k2_env, monkeypatch, c
     assert result['snapshot_id'] == sid and result['actual'] == {'folders': 1, 'cards': 1}
     with pytest.raises(SystemExit):
         cli.main(['kb', 'audit', '--config', str(path)])
+
+
+def test_the_snapshot_pin_helper_has_a_public_name_and_no_module_imports_a_private_name_from_kb_audit(
+        project_root, tmp_path):
+    """P3-SWEEP-2 item 8: `cli_commands` used the private `_audit_snapshot`; callers take the public name."""
+    import ast
+    from pathlib import Path
+
+    import prompt_enhancer
+    from prompt_enhancer import kb_audit
+
+    assert not hasattr(kb_audit, '_audit_snapshot')
+    store, sid = published(project_root, tmp_path)
+    with kb_audit.audit_snapshot(store) as pinned:
+        assert pinned.snapshot_id == sid
+    private = []
+    for path in sorted(Path(prompt_enhancer.__file__).parent.rglob('*.py')):
+        for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+            if isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[-1] == 'kb_audit':
+                private += [f'{path.name}:{alias.name}' for alias in node.names if alias.name.startswith('_')]
+    assert private == []

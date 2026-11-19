@@ -20,7 +20,13 @@ is a file) may delete that worktree's own `.tmp/pm-state` (test-slot counters, g
 inside it), after archiving its reports; every other protected name inside it still refuses. A second waiver, also only
 for `archive-remove`: a nested protected-name tree that holds nothing but directories (an empty `runs` whose evidence
 moved) is removed with `rmdir` only, and only when the strict gate would accept the worktree with it gone; a directory
-that cannot be removed (in use, denied) still refuses at the real run even when the dry run listed it. An unreadable
+that cannot be removed (in use, denied) still refuses at the real run even when the dry run listed it. A third waiver,
+also only for `archive-remove` of a worker worktree: a protected name other than `.secrets` inside a test directory of a
+pytest base temporary directory under that worktree's `.tmp` (`.tmp/<basetemp>/<test>/data/eval/runs`, made by a test
+fixture) is test data and goes with the worktree. The structure that makes it one: the test directory is a child of a
+directory strictly below `.tmp` and is named as pytest's `tmp_path` names it for a test function defined in the worktree's
+own test files (`_pytest_directory_name`), and no protected name lies between `.tmp` and it; a `.tmp` child of any other
+shape, `runs/`, `models/`, `.venv*` and `.secrets/` anywhere else, and `.tmp/pm-state` still refuse. An unreadable
 worker registry refuses every deletion. Never reads file contents of any path under
 a `.secrets` directory: only the entry names of a nested `.secrets` are counted (never printed) to tell the checked-out
 placeholder `README.md` from real credentials. Links (symlinks, junctions) are never followed; deleting one removes
@@ -42,7 +48,7 @@ import stat
 import sys
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -68,6 +74,12 @@ CONTAINERS = frozenset({"worktrees", "agy-work"})
 # Containers that carry an explicit runner ACL from scripts/agy-runner/setup.ps1 (the runner's only write grant), so
 # the container itself, or anything holding it, is never deleted; its children (Gemini workspaces) stay purgeable.
 KEPT_CONTAINERS = (Path(".tmp") / "agy-work",)
+# Protocol-bound: how pytest names a test's directory (`_pytest/tmpdir.py` `_mk_tmp`: the node name with every non-word
+# character replaced by `_`, cut to 30 characters, then a number from `make_numbered_dir`) and which files and functions
+# it collects by default. `archive-remove` uses them to tell a pytest base temporary directory from evidence.
+PYTEST_NAME_LIMIT = 30
+TEST_FILE_PATTERNS = ("test_*.py", "*_test.py")
+TEST_FUNCTION = re.compile(r"^[ \t]*(?:async[ \t]+)?def[ \t]+(test\w*)[ \t]*\(", re.MULTILINE)
 INFLIGHT_HEADING = "## IN-FLIGHT"
 CLEANUP_KEYS = ("sweep_age_hours", "archive_retention_hours", "scan_timeout_seconds")
 
@@ -611,6 +623,86 @@ def _protected_name(parent: str, name: str) -> bool:
     )
 
 
+def _test_names(root: str) -> frozenset[str]:
+    """The names of the test functions defined in the test files (`TEST_FILE_PATTERNS`) below `root`, each with every
+    non-word character replaced by `_` as pytest does for a directory name. Never enters a link, `.git`, `.tmp`, an
+    environment (`.venv*`), `node_modules` or a protected tree; a file that is a link, unreadable or larger than
+    `MAX_REPORT_BYTES` is skipped (its names are then missing, which only makes the caller refuse more)."""
+    names: set[str] = set()
+    for folder, dirs, files in _walk(root):
+        dirs[:] = [
+            d
+            for d in dirs
+            if d not in (".git", ".tmp", "node_modules")
+            and not d.startswith(".venv")
+            and not _protected_name(folder, d)
+        ]
+        for file in files:
+            if not any(fnmatch.fnmatchcase(file, pattern) for pattern in TEST_FILE_PATTERNS):
+                continue
+            path = os.path.join(folder, file)
+            if _is_link(path):
+                continue
+            try:
+                with open(path, "rb") as handle:
+                    text = handle.read(MAX_REPORT_BYTES).decode("utf-8", "replace")
+            except OSError:
+                continue
+            names.update(re.sub(r"\W", "_", found) for found in TEST_FUNCTION.findall(text))
+    return frozenset(names)
+
+
+def _pytest_directory_name(name: str, test_names: frozenset[str]) -> bool:
+    """True when `name` is what pytest's `tmp_path` names a directory for a test of `test_names`: the node name (the
+    function name, then `[parameters]` for a parametrized test) with every non-word character replaced by `_`, cut to
+    `PYTEST_NAME_LIMIT` characters, then a decimal number without leading zeros (`make_numbered_dir`, which counts from
+    0). The number is split off every possible way because a stem can itself end in digits. The counter is ASCII
+    (`int()` would also take other digits that `str.isdigit` accepts, and raise on `'²'`). A stem is at most the limit
+    and is one of: a function name as it is; the cut of a longer function name or of a parametrized name (exactly the
+    limit); a function name, `_`, the sanitized parameters and a final `_` (the closing `]`)
+    (`_pytest/tmpdir.py` `_mk_tmp`: `re.sub(r"[\\W]", "_", name)` then `name[:MAXVAL]`, `MAXVAL = 30`)."""
+    for size in range(1, len(name)):
+        stem, number = name[:-size], name[-size:]
+        if not (number.isascii() and number.isdigit()):
+            break
+        if number != str(int(number)) or len(stem) > PYTEST_NAME_LIMIT or re.search(r"\W", stem):
+            continue  # pytest turned every non-word character of the stem into `_`
+        if stem in test_names:
+            return True
+        cut = len(stem) == PYTEST_NAME_LIMIT
+        if cut and any(known.startswith(stem) for known in test_names):
+            return True  # a long function name, cut
+        # A parametrized test: `[` and `]` each became `_`, so unless cut the stem is the name, `_`, the parameters and
+        # a final `_`: at least two characters more than the name (`f[]` gives `f__`).
+        if any(
+            stem.startswith(known + "_") and (cut or (stem.endswith("_") and len(stem) >= len(known) + 2))
+            for known in test_names
+        ):
+            return True
+    return False
+
+
+def _inside_pytest_tmp(nested: str, worktree_tmp: str, test_names: Callable[[], frozenset[str]]) -> bool:
+    """True when the protected-name directory `nested` lies inside a test directory of a pytest base temporary
+    directory kept under `worktree_tmp` (`<worktree>/.tmp`): `<worktree>/.tmp/<basetemp, any depth>/<test directory>/
+    ...<nested>`. Structure only: the basetemp is the parent of a directory `_pytest_directory_name` accepts, which is
+    strictly above `nested`; no name from `.tmp` down to that test directory is itself protected (so nothing under
+    `.tmp/pm-state` qualifies), and the basetemp is strictly below `.tmp` (a `.tmp` child that is not the parent of a
+    pytest-named directory is not test data). Names are read from the worktree's own tests only when a candidate gets
+    here, and every path comes from `_walk`, which never enters a link."""
+    parts = os.path.relpath(nested, worktree_tmp).split(os.sep)
+    if parts[0] in (os.curdir, os.pardir):
+        return False
+    folder = worktree_tmp
+    for index, part in enumerate(parts[:-1]):
+        if _protected_name(folder, part):
+            return False
+        folder = os.path.join(folder, part)
+        if index >= 1 and _pytest_directory_name(part, test_names()):
+            return True
+    return False
+
+
 def _protected_ancestor(target: Path, exempt: Path | None = None) -> Path | None:
     """The target itself or the first directory between it and the project root that is protected: anything inside a
     protected tree is protected too (purging `.tmp/pm-state` children would delete the ledgers). `exempt` is the one
@@ -651,10 +743,14 @@ def _find_protected(
     worker_state: bool = False,
     pruned: frozenset[str] = frozenset(),
     nested: bool = True,
+    test_data: bool = False,
 ) -> Path | None:
     """The first protected directory that deleting `target` would remove or touch: the target, an ancestor or a
     nested one. `worker_state` (only `archive-remove`, which archives the reports first) waives the protected name
-    of a worker worktree's own `.tmp/pm-state`; every other protected name inside it still refuses. `pruned` (only a
+    of a worker worktree's own `.tmp/pm-state`; every other protected name inside it still refuses. `test_data` (also
+    only `archive-remove`, and only for a worker worktree) waives a protected name other than `.secrets` that lies
+    inside a test directory of a pytest base temporary directory under the worktree's `.tmp` (`_inside_pytest_tmp`): a
+    test fixture made it, so it is test data, not evidence. `pruned` (only a
     dry run, which removes nothing) holds the `os.path.normcase` paths `_prune_empty_protected` listed: they and
     everything below them are judged as a real run would after pruning them. `nested` False (`Gate.prune`'s
     precheck) keeps the ancestor and kept-container checks and skips only the walk for nested protected trees."""
@@ -667,6 +763,14 @@ def _find_protected(
     if not nested:
         return None
     waived = _worker_state_dir(target) if worker_state else None
+    worktree_tmp = os.path.join(str(target), ".tmp") if test_data and _worker_state_dir(target) is not None else None
+    names: list[frozenset[str]] = []  # the worktree's test names, read once and only when a candidate needs them
+
+    def test_names() -> frozenset[str]:
+        if not names:
+            names.append(_test_names(str(target)))
+        return names[0]
+
     for root, dirs, _files in _walk(target):
         gone = {name for name in dirs if os.path.normcase(os.path.join(root, name)) in pruned}
         for name in dirs:
@@ -674,6 +778,12 @@ def _find_protected(
                 continue
             nested = os.path.join(root, name)
             if name.casefold() in PLACEHOLDER_DIRS and _is_placeholder(nested):
+                continue
+            if (
+                worktree_tmp is not None
+                and name.casefold() != ".secrets"
+                and _inside_pytest_tmp(nested, worktree_tmp, test_names)
+            ):
                 continue
             if waived is not None and os.path.normcase(nested) == os.path.normcase(str(waived)):
                 if not _is_link(nested):
@@ -715,6 +825,7 @@ def _authorize(
     worker_state: bool = False,
     nested: bool = True,
     pruned: frozenset[str] = frozenset(),
+    test_data: bool = False,
 ) -> tuple[str, str] | None:
     """(status, reason) when `target` must not be deleted, else None. Private: `Gate` supplies every input.
 
@@ -723,8 +834,8 @@ def _authorize(
     `check_inflight`; an unfinished Antigravity job; a busy worker cwd); manifest-bound files. Status is `refused`,
     `unknown` (ownership unreadable) or `owned`. A link target is judged by name only: removing it touches nothing behind
     it. `exempt` waives the protected name of that one parent directory. `nested` False skips only the walk for
-    nested protected trees (`Gate.prune` asks every other check first, kept containers included); `pruned` and
-    `nested` are passed to `_find_protected`."""
+    nested protected trees (`Gate.prune` asks every other check first, kept containers included); `pruned`, `nested`
+    and `test_data` are passed to `_find_protected`."""
     problem = _path_problem(target)
     if problem:
         return "refused", problem
@@ -736,7 +847,7 @@ def _authorize(
         return "unknown", own.problem
     is_link = _is_link(target)
     if not is_link and deep:
-        found = _find_protected(target, exempt, worker_state, pruned, nested)
+        found = _find_protected(target, exempt, worker_state, pruned, nested, test_data)
         if found is not None:
             return "refused", f"protected tree {found}"
     owner = _owner(target, own, check_inflight, is_link)
@@ -766,11 +877,13 @@ class Gate:
         deadline: float | None = None,
         worker_state: bool = False,
         prune_empty: bool = False,
+        test_data: bool = False,
     ) -> None:
         self.check_inflight = check_inflight
         self.exempt = exempt
         self.deep = deep
         self.worker_state = worker_state
+        self.test_data = test_data
         self.prune_empty = prune_empty
         self.own = load_ownership(deadline)
         if strict and self.own.problem:
@@ -806,6 +919,7 @@ class Gate:
             worker_state=self.worker_state,
             nested=nested,
             pruned=pruned,
+            test_data=self.test_data,
         )
 
     def prune(self, target: Path, dry_run: bool = False) -> frozenset[str]:
@@ -988,7 +1102,8 @@ def archive_remove(paths: list[str], dry_run: bool = False) -> int:
     # A worker worktree's own `.tmp/pm-state` may go: `_archive_reports` copies its reports before the delete.
     # Empty nested protected-name trees (an empty `runs` whose evidence moved) are pruned with rmdir only, then the
     # strict gate judges what is left (review F1 to F4).
-    gate = Gate(check_inflight=False, strict=True, worker_state=True, prune_empty=True)
+    # A protected name inside a pytest base temporary directory of the worktree is test data (`test_data`).
+    gate = Gate(check_inflight=False, strict=True, worker_state=True, prune_empty=True, test_data=True)
     refused = 0
     for raw in paths:
         worktree = _inside_project(Path(raw))

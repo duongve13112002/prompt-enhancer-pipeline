@@ -7,6 +7,7 @@ import importlib.util
 import itertools
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -2188,3 +2189,405 @@ def test_qa3_property_no_command_removes_a_file_bound_by_any_root(
         except SystemExit:
             pass
         assert (wt / bound).exists() and (archived / bound).exists()
+
+
+# FOLLOWUPS-1 item 5: a protected name that a test fixture made inside a pytest base temporary directory is test data.
+LONG_TEST = "test_the_run_lock_is_held_while_the_final_summary_and_the_pack_are_written"  # longer than pytest's 30 characters
+
+
+def pytest_stem(node_name: str) -> str:
+    """The directory name stem pytest's `tmp_path` gives a test (`_pytest/tmpdir.py` `_mk_tmp`, read in the installed
+    version): every non-word character replaced by `_`, cut to 30 characters."""
+    return re.sub(r"\W", "_", node_name)[:30]
+
+
+def with_tests(wt: Path, *names: str) -> None:
+    """Test functions in the worktree's own `tests/`, the source of the names a pytest directory can carry."""
+    (wt / "tests").mkdir(exist_ok=True)
+    body = "".join(f"def {name}(tmp_path):\n    pass\n\n\n" for name in names)
+    (wt / "tests" / "test_fixture_names.py").write_text(body, encoding="utf-8")
+
+
+def pytest_tmp(
+    wt: Path,
+    test: str = LONG_TEST,
+    base: tuple[str, ...] = ("pm", "bt"),
+    inner: tuple[str, ...] = ("data", "eval", "runs"),
+    number: int = 0,
+    content: bool = True,
+) -> Path:
+    """What `pytest --basetemp .tmp/pm/bt` leaves for one test: `<base>/<stem><number>/<inner>`; `content` puts a file in
+    the innermost directory (a test fixture's summary)."""
+    folder = wt.joinpath(".tmp", *base, f"{pytest_stem(test)}{number}", *inner)
+    folder.mkdir(parents=True)
+    if content:
+        (folder / "summary.json").write_text("{}", encoding="utf-8")
+    return folder
+
+
+def link(path: Path, target: Path) -> bool:
+    """A junction (Windows) or a symlink; False when the platform refuses to make one (a symlink without privilege)."""
+    if os.name == "nt":
+        junction(path, target)
+        return True
+    try:
+        path.symlink_to(target, target_is_directory=True)
+    except OSError:
+        return False
+    return True
+
+
+def test_archive_remove_deletes_a_worker_worktree_whose_basetemp_holds_protected_names(pt: ModuleType) -> None:
+    wt = worker_worktree(pt.PROJECT)
+    with_tests(wt, LONG_TEST)
+    runs = pytest_tmp(wt)  # .tmp/pm/bt/<test>/data/eval/runs/summary.json: the layout that kept T-016d on disk
+    for inner in (("models", "w.bin"), (".venv", "pyvenv.cfg"), ("cli-jobs", "job.json"), ("pm-archive", "a.json")):
+        deeper = pytest_tmp(wt, inner=inner[:1], number=1)
+        (deeper / inner[1]).write_text("x", encoding="utf-8")
+    assert runs.joinpath("summary.json").exists()
+    assert pt.archive_remove([str(wt)]) == 0
+    assert not wt.exists()
+
+
+@pytest.mark.parametrize("node", ["test_short", "test_param[a-b]", "test_param[a b/c]", "test_ends_in_digits_2", LONG_TEST])
+def test_the_directory_names_pytest_makes_for_a_test_are_recognised(pt: ModuleType, node: str) -> None:
+    function = node.split("[")[0]
+    wt = worker_worktree(pt.PROJECT)
+    with_tests(wt, function)
+    pytest_tmp(wt, test=node)
+    assert pt.archive_remove([str(wt)]) == 0 and not wt.exists()
+
+
+def test_a_multi_digit_counter_and_a_stem_that_ends_in_digits_are_both_split_correctly(pt: ModuleType) -> None:
+    names = frozenset({"test_short", "test_case_2"})
+    assert pt._pytest_directory_name("test_short12", names)  # stem `test_short`, counter 12
+    assert pt._pytest_directory_name("test_case_20", names)  # stem `test_case_2`, counter 0
+    assert pt._pytest_directory_name("test_case_215", names)  # stem `test_case_2`, counter 15
+    assert not pt._pytest_directory_name("test_case_3", names) and not pt._pytest_directory_name("12", names)
+
+
+def test_a_directory_pytest_really_made_for_this_test_is_recognised(pt: ModuleType, tmp_path: Path) -> None:
+    """Not a reimplementation: the name comes from pytest's own `tmp_path` of this very test function."""
+    names = pt._test_names(str(Path(__file__).parent))
+    assert pt._pytest_directory_name(tmp_path.name, names), tmp_path.name
+
+
+@pytest.mark.parametrize("case", ["a", "b[x-y]"])
+def test_a_directory_pytest_really_made_for_a_parametrized_test_is_recognised(
+    pt: ModuleType, tmp_path: Path, case: str
+) -> None:
+    names = pt._test_names(str(Path(__file__).parent))
+    assert re.fullmatch(r"test_a_directory_pytest_really\d+", tmp_path.name), tmp_path.name  # cut to 30 characters
+    assert pt._pytest_directory_name(tmp_path.name, names), tmp_path.name
+
+
+REAL_ONE_SHAPES = {
+    "long stem after a function name": "test_real_one_totally_unrelated_and_very_long_name7",
+    "short stem after a function name without a closing underscore": "test_real_one_2",
+    "counter is a superscript digit": "test_real_one²",
+    "counter is an Arabic-Indic digit": "test_real_one٣",
+}
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "name not from a test of this worktree",
+        "no tests in the worktree",
+        "directly under .tmp",
+        "test directory is the protected name",
+        "number with a leading zero",
+        "no number",
+        "a stem cut short of 30 characters",
+        "protected name above the test directory",
+        "under pm-state",
+        "ordinary scratch",
+        "not a worker worktree",
+        "stem continues a test name without an underscore",
+        "name defined only under .tmp",
+        "test directory outside .tmp",
+        "long stem after a function name",
+        "short stem after a function name without a closing underscore",
+        "counter is a superscript digit",
+        "counter is an Arabic-Indic digit",
+    ],
+)
+def test_a_protected_name_that_is_not_inside_a_pytest_directory_still_refuses(pt: ModuleType, shape: str) -> None:
+    # `not a worker worktree` has no `.git` file and no `.tmp/pm-state`, so only the pytest directory can decide
+    wt = make_worktree(pt.PROJECT) if shape == "not a worker worktree" else worker_worktree(pt.PROJECT)
+    defined = {"no tests in the worktree": (), "name defined only under .tmp": (),
+               "stem continues a test name without an underscore": (LONG_TEST, "test_short")}.get(
+        shape, (LONG_TEST, "test_real_one") if shape in REAL_ONE_SHAPES else (LONG_TEST,))
+    if defined:
+        with_tests(wt, *defined)
+    keep: Path
+    if shape in REAL_ONE_SHAPES:  # names pytest never makes for `test_real_one` (F1, F2); `²` and `٣` are not ASCII
+        keep = wt / ".tmp" / "eval" / REAL_ONE_SHAPES[shape] / "runs"
+        keep.mkdir(parents=True)
+    elif shape == "stem continues a test name without an underscore":
+        keep = pytest_tmp(wt, test="test_shortage")
+    elif shape == "name defined only under .tmp":  # a test file inside `.tmp` is scratch, not one of the worktree's tests
+        (wt / ".tmp" / "planted").mkdir()
+        (wt / ".tmp" / "planted" / "test_planted.py").write_text(f"def {LONG_TEST}():\n    pass\n", encoding="utf-8")
+        keep = pytest_tmp(wt)
+    elif shape == "test directory outside .tmp":  # the same layout under the checkout's own `data/`, which is evidence
+        keep = wt / "data" / "pm" / "bt" / f"{pytest_stem(LONG_TEST)}0" / "runs"
+        keep.mkdir(parents=True)
+    elif shape == "name not from a test of this worktree":
+        keep = pytest_tmp(wt, test="test_nobody_wrote_this_one_anywhere")
+    elif shape == "no tests in the worktree":
+        keep = pytest_tmp(wt)
+    elif shape == "directly under .tmp":  # `.tmp` itself would be the base temporary directory: not a base
+        keep = pytest_tmp(wt, base=())
+    elif shape == "test directory is the protected name":
+        keep = wt / ".tmp" / "pm" / "bt" / "runs"
+        keep.mkdir(parents=True)
+        (keep / "summary.json").write_text("{}", encoding="utf-8")
+    elif shape == "number with a leading zero":
+        keep = pytest_tmp(wt, number=7)
+        renamed = keep.parents[2].with_name(pytest_stem(LONG_TEST) + "07")
+        keep.parents[2].rename(renamed)
+        keep = renamed / "data" / "eval" / "runs" / "summary.json"
+    elif shape == "no number":
+        keep = pytest_tmp(wt)
+        renamed = keep.parents[2].with_name(pytest_stem(LONG_TEST))
+        keep.parents[2].rename(renamed)
+        keep = renamed / "data" / "eval" / "runs" / "summary.json"
+    elif shape == "a stem cut short of 30 characters":  # pytest cuts at 30; a 20-character cut of a longer name is not its work
+        keep = pytest_tmp(wt)
+        renamed = keep.parents[2].with_name(pytest_stem(LONG_TEST)[:20] + "0")
+        keep.parents[2].rename(renamed)
+        keep = renamed / "data" / "eval" / "runs" / "summary.json"
+    elif shape == "protected name above the test directory":
+        keep = pytest_tmp(wt, base=("pm", "runs"), inner=("deeper",))
+    elif shape == "under pm-state":
+        keep = pytest_tmp(wt, base=("pm-state", "bt"))
+    elif shape == "ordinary scratch":
+        keep = wt / ".tmp" / "scratch" / "deeper" / "runs"
+        keep.mkdir(parents=True)
+    else:
+        keep = pytest_tmp(wt)
+    if keep.is_dir() and not any(keep.iterdir()):
+        (keep / "evidence.json").write_text("{}", encoding="utf-8")
+        keep = keep / "evidence.json"
+    elif keep.is_dir():
+        keep = next(path for path in keep.rglob("*") if path.is_file())
+    assert pt.archive_remove([str(wt)]) == 1
+    assert wt.exists() and keep.exists()
+
+
+@pytest.mark.parametrize("name", ["runs", "models", ".venv", "pm-state"])
+def test_a_protected_name_at_the_worktree_root_still_refuses_beside_a_pytest_directory(pt: ModuleType, name: str) -> None:
+    wt = worker_worktree(pt.PROJECT)
+    with_tests(wt, LONG_TEST)
+    pytest_tmp(wt)
+    real = wt / name if name != "pm-state" else wt / ".tmp" / "pm-state" / "ledger" / "pm-state"
+    real.mkdir(parents=True, exist_ok=True)
+    (real / "evidence.json").write_text("{}", encoding="utf-8")
+    assert pt.archive_remove([str(wt)]) == 1
+    assert (real / "evidence.json").exists()
+
+
+@pytest.mark.parametrize("spelling", [".secrets", ".Secrets", ".SECRETS"])
+def test_a_secrets_directory_is_never_test_data(pt: ModuleType, spelling: str) -> None:
+    wt = worker_worktree(pt.PROJECT)
+    with_tests(wt, LONG_TEST)
+    secret = pytest_tmp(wt, inner=("data", spelling), content=False)
+    (secret / "key.txt").write_text("not read", encoding="utf-8")
+    assert pt.archive_remove([str(wt)]) == 1
+    assert (secret / "key.txt").exists()
+
+
+@pytest.mark.parametrize("suffix", ["²", "٣"])
+def test_a_non_ascii_digit_after_a_test_name_is_refused_and_later_worktrees_are_still_judged(
+    pt: ModuleType, suffix: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`'²'.isdigit()` is true but `int('²')` raises: the first worktree must get a refusal line, not stop the call."""
+    first = worker_worktree(pt.PROJECT, "wt-first")
+    second = worker_worktree(pt.PROJECT, "wt-second")
+    for wt in (first, second):
+        with_tests(wt, "test_real_one", LONG_TEST)
+    odd = first / ".tmp" / "pm" / "bt" / f"test_real_one{suffix}" / "runs"
+    odd.mkdir(parents=True)
+    (odd / "ev.json").write_text("{}", encoding="utf-8")
+    pytest_tmp(second)  # a name pytest really makes
+    assert pt.archive_remove([str(first), str(second)]) == 1
+    out = capsys.readouterr().out
+    assert "wt-first: refused, protected tree" in out and "wt-second" in out
+    assert first.exists() and (odd / "ev.json").exists() and not second.exists()
+
+
+def test_the_names_of_a_pytest_directory_follow_pytests_cut_and_closing_underscore(pt: ModuleType) -> None:
+    names = frozenset({"test_real_one", LONG_TEST})
+    for made in ("test_real_one0", "test_real_one_a_b_3", "test_real_one__0", "test_real_one_" + "x" * 16 + "4"):
+        assert pt._pytest_directory_name(made, names), made  # `[a-b]`, `[]`, and a parameter text cut at 30 characters
+    for refused in (
+        "test_real_one_2",  # below the limit and not closed by `_`
+        "test_real_one_2_x1",  # not closed
+        "test_real_one_5",  # `f_` is shorter than `f[]` can give
+        "test_real_one_" + "x" * 17 + "_4",  # 32 characters: longer than pytest cuts
+        "test_real_one_totally_unrelated_and_very_long_name7",
+        "test_real_one²", "test_real_one٣", "test_real_one۱",
+        "test_real_one_a-b_0", "test_real_one_a b_1", "test_real_one_[x]_2",  # pytest turns non-word characters into `_`
+    ):
+        assert not pt._pytest_directory_name(refused, names), refused
+
+
+def test_test_names_come_from_test_files_only_and_never_from_a_protected_tree(pt: ModuleType) -> None:
+    wt = worker_worktree(pt.PROJECT)
+    (wt / "tests").mkdir()
+    (wt / "tests" / "test_one.py").write_text("def test_from_prefix_file():\n    pass\n", encoding="utf-8")
+    (wt / "tests" / "two_test.py").write_text("def test_from_suffix_file():\n    pass\n", encoding="utf-8")
+    (wt / "tests" / "helpers.py").write_text("def test_in_a_non_test_file():\n    pass\n", encoding="utf-8")
+    for planted in ("runs", ".venv", "pm-archive"):  # a test file below a protected tree is not one of the worktree's
+        (wt / planted / "inner").mkdir(parents=True)
+        (wt / planted / "inner" / "test_planted.py").write_text(f"def test_planted_in_{planted.strip('.').replace('-', '_')}():\n    pass\n", encoding="utf-8")
+    names = pt._test_names(str(wt))
+    assert {"test_from_prefix_file", "test_from_suffix_file"} <= names
+    assert not {name for name in names if name.startswith("test_planted_in_") or name == "test_in_a_non_test_file"}
+
+
+@pytest.mark.parametrize("command", ["purge-children", "purge-older", "sweep"])
+def test_only_archive_remove_treats_a_pytest_directory_as_test_data(pt: ModuleType, command: str) -> None:
+    wt = worker_worktree(pt.PROJECT)
+    shutil.rmtree(wt / ".tmp" / "pm-state")  # so that only the pytest directory's `runs` could decide
+    with_tests(wt, LONG_TEST)
+    kept = pytest_tmp(wt) / "summary.json"
+    age(wt, 100)
+    if command == "purge-children":
+        assert pt.purge_children(str(wt.parent), [wt.name]) == 1
+    elif command == "purge-older":
+        pt.purge_older(str(wt.parent), 24)
+    else:
+        pt.sweep(config=cfg(pt))
+    assert kept.exists()
+
+
+def test_a_dry_run_names_nothing_it_would_refuse_for_a_pytest_directory_and_removes_nothing(
+    pt: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    wt = worker_worktree(pt.PROJECT)
+    with_tests(wt, LONG_TEST)
+    kept = pytest_tmp(wt) / "summary.json"
+    assert pt.archive_remove([str(wt)], dry_run=True) == 0
+    assert "would archive reports and remove" in capsys.readouterr().out and kept.exists()
+
+
+def test_a_link_in_a_pytest_directory_is_removed_as_a_link_and_never_followed(pt: ModuleType) -> None:
+    wt = worker_worktree(pt.PROJECT)
+    with_tests(wt, LONG_TEST)
+    outside = pt.PROJECT / ".tmp" / "outside"
+    (outside / "runs").mkdir(parents=True)
+    (outside / "runs" / "evidence.json").write_text("{}", encoding="utf-8")
+    data = pytest_tmp(wt, inner=("data",), content=False)
+    if not link(data / "runs", outside / "runs"):  # a link named like a protected tree, pointing out of the worktree
+        pytest.skip("no link can be made here")
+    assert pt.archive_remove([str(wt)]) == 0
+    assert not wt.exists() and (outside / "runs" / "evidence.json").exists()
+
+
+def test_a_pytest_named_link_is_not_entered_and_what_it_points_to_stays(pt: ModuleType) -> None:
+    wt = worker_worktree(pt.PROJECT)
+    with_tests(wt, LONG_TEST)
+    outside = pt.PROJECT / ".tmp" / "outside"
+    (outside / "data" / "runs").mkdir(parents=True)
+    (outside / "data" / "runs" / "evidence.json").write_text("{}", encoding="utf-8")
+    base = wt / ".tmp" / "pm" / "bt"
+    base.mkdir(parents=True)
+    if not link(base / f"{pytest_stem(LONG_TEST)}0", outside):  # the test directory itself is a link
+        pytest.skip("no link can be made here")
+    assert pt.archive_remove([str(wt)]) == 0
+    assert not wt.exists() and (outside / "data" / "runs" / "evidence.json").exists()
+
+
+_LOCATIONS = st.sampled_from(["root", "pytest", "other", "linked"])
+_PROTECTED = st.sampled_from(["runs", "models", ".venv", "cli-jobs", "pm-archive", "RUNS"])
+
+
+@settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(st.lists(st.tuples(_LOCATIONS, _PROTECTED, st.booleans()), min_size=1, max_size=6))
+def test_property_only_a_protected_name_in_a_pytest_directory_is_test_data(
+    pt: ModuleType, layout: list[tuple[str, str, bool]]
+) -> None:
+    """Over generated layouts (a protected name at the root of the checkout, inside a pytest directory, in another `.tmp`
+    child, or behind a link out of the worktree, with or without a file in it), the worktree goes exactly when no
+    protected name outside a pytest directory holds a file; a file behind a link is never touched."""
+    wt = worker_worktree(pt.PROJECT, f"wt-{next(_COUNTER)}")
+    with_tests(wt, LONG_TEST)
+    outside = pt.PROJECT / ".tmp" / f"outside-{next(_COUNTER)}"
+    outside.mkdir()
+    (outside / "evidence.json").write_text("{}", encoding="utf-8")
+    blocking: list[Path] = []
+    for index, (location, name, with_file) in enumerate(layout):
+        if location == "root":
+            folder = wt / f"pkg{index}" / name
+        elif location == "pytest":
+            folder = pytest_tmp(wt, inner=(f"data{index}", name), number=index, content=False)
+        elif location == "other":
+            folder = wt / ".tmp" / f"scratch{index}" / "deeper" / name
+        else:
+            base = pytest_tmp(wt, inner=(f"data{index}",), number=index, content=False)
+            if not link(base / name, outside):
+                continue
+            continue
+        folder.mkdir(parents=True, exist_ok=True)
+        if with_file:
+            (folder / "evidence.json").write_text("{}", encoding="utf-8")
+            if location != "pytest":
+                blocking.append(folder / "evidence.json")
+    result = pt.archive_remove([str(wt)])
+    assert (outside / "evidence.json").exists()
+    assert all(path.exists() for path in blocking)
+    assert (result == 1 and wt.exists()) if blocking else (result == 0 and not wt.exists())
+
+
+@settings(max_examples=60, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(st.text(alphabet="abcdefg_[]- /09", min_size=1, max_size=45), st.integers(min_value=0, max_value=120))
+def test_property_a_name_made_by_pytests_rule_is_recognised_only_for_a_known_test(
+    pt: ModuleType, parameters: str, number: int
+) -> None:
+    """The name pytest gives a parametrized test (any parameter text, cut to 30 characters, any counter) is accepted when
+    the worktree defines the function, and refused when it does not or when the stem is not the function's."""
+    function = "test_" + "x" * 12
+    name = f"{pytest_stem(f'{function}[{parameters}]')}{number}"
+    assert pt._pytest_directory_name(name, frozenset({function}))
+    assert not pt._pytest_directory_name(name, frozenset())
+    assert not pt._pytest_directory_name("T" + name[1:], frozenset({function}))
+
+
+def pytest_could_make(name: str, function: str) -> bool:
+    """Independent oracle (regular expressions, not the code under test's string tests): could pytest's `tmp_path` have
+    made `name` for `function` or for `function[<any parameters>]`? Rule read from `_pytest/tmpdir.py` `_mk_tmp`: the
+    node name with `\\W` replaced by `_`, cut to 30 characters, then the counter of `make_numbered_dir`."""
+    limit = 30
+    for index in range(1, len(name)):
+        stem, counter = name[:index], name[index:]
+        if not re.fullmatch(r"0|[1-9][0-9]*", counter, re.ASCII) or len(stem) > limit:
+            continue
+        bare = re.escape(re.sub(r"\W", "_", function))
+        if re.fullmatch(bare, stem):
+            return True  # the function itself
+        if len(stem) == limit and (re.fullmatch(bare + r"_\w*", stem) or re.sub(r"\W", "_", function).startswith(stem)):
+            return True  # a parametrized or long name, cut at the limit
+        if re.fullmatch(bare + r"_\w*_", stem):
+            return True  # `[` and `]` became `_` around the parameters
+    return False
+
+
+@settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    st.one_of(
+        st.text(alphabet="abcdefg_x-[] é²019", max_size=30),
+        st.builds("_{}_".format, st.text(alphabet="abc_-[] é²", max_size=12)),  # the closed parametrized shape
+    ),
+    st.integers(min_value=1, max_value=45),
+    st.text(alphabet="0123456789²٣", max_size=3),
+)
+def test_property_a_generated_name_is_recognised_exactly_when_pytest_could_have_made_it(
+    pt: ModuleType, tail: str, cut: int, counter: str
+) -> None:
+    """Random stems, with and without a counter, some made of the real shape and cut anywhere, some broken by a space, a
+    non-ASCII digit or a stray character: the rule accepts exactly what the independent oracle says pytest can make."""
+    function = "test_real_one"
+    name = (function + tail)[:cut] + counter
+    assert pt._pytest_directory_name(name, frozenset({function})) == pytest_could_make(name, function), name

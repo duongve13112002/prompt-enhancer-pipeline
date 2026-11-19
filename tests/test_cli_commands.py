@@ -50,6 +50,7 @@ def test_kb_show_finds_a_concept_by_name_or_id_and_refuses_an_unknown_one(k2_env
     identity = by_name['concept']['concept_id']
     assert by_name['concept']['normalised_name'] == normalise_name('Name') and by_name['card'] is not None
     assert [facet['facet'] for facet in by_name['card']['facets']] == ['apparel.color']
+    assert isinstance(by_name['card']['lint_findings'], list)  # the card's own findings (docs/stages/K3-cards.md, Lint report)
     assert by_name['aliases'] and len(by_name['folders']) == 1
     by_id = json.loads(text(kb(project_root, tmp_path, k2_env.config, 'show', identity))[0])
     assert by_id == by_name

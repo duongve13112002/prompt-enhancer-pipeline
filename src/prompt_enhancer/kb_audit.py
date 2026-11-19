@@ -10,7 +10,7 @@ from .storage.identity import canonical_json
 
 
 @contextmanager
-def _audit_snapshot(store):
+def audit_snapshot(store):
     """Release the pin and remove only new empty lease directories, preserving concurrent readers."""
     if not store.root.exists():
         yield None
@@ -65,7 +65,7 @@ def audit(store, *, folder_count, card_count, seed):
     # Protocol-bound population labels keep each sample independent of the other's requested count.
     folder_rng = Random(canonical_json({'seed': seed, 'population': 'folders'}))
     card_rng = Random(canonical_json({'seed': seed, 'population': 'cards'}))
-    with _audit_snapshot(store) as pinned:
+    with audit_snapshot(store) as pinned:
         if pinned is None:
             return result
         result.update(status='OK', snapshot_id=pinned.snapshot_id)
