@@ -625,7 +625,34 @@ def test_damaged_k5_index_file_is_reported_as_an_index_problem_not_as_missing_im
     assert payload['outcome'] == 'refused' and not pinned
     assert payload['error'] == {'code': 'KNOWLEDGE_FAILED', 'message': INDEX_DAMAGE_MESSAGE}
     assert INDEX_DAMAGE_MESSAGE != RETENTION_MESSAGE and 'image' not in INDEX_DAMAGE_MESSAGE
-    assert str(tmp_path) not in repr(payload) and not list((k2_env.store.root / 'leases').glob('*/*.lease'))
+    # `effective_config` is the operator's own resolved profile (intake_result.v0), so its configured paths belong there;
+    # every other field, the refusal and its envelope included, must hold no machine path in either separator form.
+    outside_config = {key: value for key, value in payload.items() if key != 'effective_config'}
+    assert payload['effective_config'] is not None
+    assert [hit for form in {str(tmp_path), tmp_path.as_posix()} for hit in _keys_holding(outside_config, form)] == []
+    assert not list((k2_env.store.root / 'leases').glob('*/*.lease'))
+
+
+def _keys_holding(value, text, where=()):
+    """Every key path of `value` whose string holds `text`. Compares the strings themselves, not `repr`, which doubles
+    Windows backslashes and so never matched a Windows path (CI window 29: the check passed only on Windows)."""
+    if isinstance(value, (str, os.PathLike)):
+        return [where] if text in os.fspath(value) else []
+    if isinstance(value, dict):
+        return [hit for key, item in value.items() for hit in _keys_holding(item, text, where + (key,))]
+    if isinstance(value, (list, tuple)):
+        return [hit for index, item in enumerate(value) for hit in _keys_holding(item, text, where + (index,))]
+    return []
+
+
+def test_the_path_walk_finds_a_path_in_every_container_and_form(tmp_path):
+    """The leak check above asserts an empty walk, so the walk itself must find a planted path wherever it sits."""
+    planted = {'error': {'message': f'at {tmp_path}'}, 'warnings': [{'detail': tmp_path.as_posix()}],
+               'pair': ('clean', tmp_path / 'index'), 'count': 3, 'none': None}
+    native = _keys_holding(planted, str(tmp_path))
+    assert {('error', 'message'), ('pair', 1)} <= set(native)
+    found = {hit for form in {str(tmp_path), tmp_path.as_posix()} for hit in _keys_holding(planted, form)}
+    assert found == {('error', 'message'), ('warnings', 0, 'detail'), ('pair', 1)}
 
 
 def test_damaged_k5_index_file_is_reported_without_attachments_as_before(k2_env, model_test_profile, tmp_path,

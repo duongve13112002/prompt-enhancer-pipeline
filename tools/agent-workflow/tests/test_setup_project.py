@@ -36,17 +36,40 @@ def test_the_real_checkout_has_no_failures(monkeypatch: pytest.MonkeyPatch) -> N
     assert _fails(results) == []
 
 
+# Top-level trees the copy never takes: credentials (never copied or read, AGENTS.md section 6), model artifacts,
+# the read-only knowledge base, run evidence, working data and caches. Each was copied before, about 8.6 GB per test
+# on a machine with local models (five tests: about 43 GB written per tooling run, S45). The scan in
+# `setup_project.py` skips `.cache`, `.secrets`, `models` and `runs` itself, so leaving them out changes no result.
+_NOT_COPIED_AT_ROOT = frozenset((".secrets", "models", "database", "runs", "data", ".cache"))
+_NOT_COPIED = shutil.ignore_patterns(".venv*", ".git", ".tmp", "__pycache__", ".pytest_cache", "settings.local.json")
+
+
+def _ignore(directory: str, names: list[str]) -> set[str]:
+    skipped = set(_NOT_COPIED(directory, names))
+    if Path(directory) == ROOT:
+        skipped |= _NOT_COPIED_AT_ROOT & set(names)
+    return skipped
+
+
 @pytest.fixture
 def copy(tmp_path: Path) -> Path:
-    """A disposable copy of the repository's text (no venv, Git, scratch or local settings)."""
+    """A disposable copy of the repository's text (no venv, Git, scratch, local settings, credentials, models,
+    knowledge base, run evidence, working data or caches)."""
     target = tmp_path / "proj"
-    shutil.copytree(
-        ROOT,
-        target,
-        ignore=shutil.ignore_patterns(".venv*", ".git", ".tmp", "__pycache__", ".pytest_cache", "settings.local.json"),
-        symlinks=True,
-    )
+    shutil.copytree(ROOT, target, ignore=_ignore, symlinks=True)
+    # The tracked placeholder is the one readable file under `.secrets` (AGENTS.md links to it); it is copied by its
+    # name alone, so no other entry of the real `.secrets` is listed, read or copied.
+    (target / ".secrets").mkdir()
+    shutil.copyfile(ROOT / ".secrets" / "README.md", target / ".secrets" / "README.md")
     return target
+
+
+def test_the_copy_leaves_out_credentials_models_and_data(copy: Path) -> None:
+    """S45 and AGENTS.md section 6: the fixture copies text only; a copied `.secrets` or `models` tree is a defect."""
+    for name in _NOT_COPIED_AT_ROOT - {".secrets"}:
+        assert not (copy / name).exists(), name
+    assert [entry.name for entry in (copy / ".secrets").iterdir()] == ["README.md"]
+    assert (copy / "AGENTS.md").is_file() and (copy / "tools" / "agent-workflow" / "setup_project.py").is_file()
 
 
 def test_apply_binds_a_copy_and_is_idempotent(copy: Path) -> None:
