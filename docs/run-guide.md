@@ -75,8 +75,10 @@ Pass them as `--config configs/enhancer.deploy.yaml --overlay configs/overlays/d
 | `knowledge.root`, `sync.retained_images.max_image_bytes`, `.max_total_bytes` | `deploy_required` | `kb sync` |
 | `sync.snapshots.keep`, `sync.gc.retention` | `design_required` | `kb sync`, `kb gc` |
 | `sync.mass_deletion_guard.max_removed_fraction`, `knowledge.naming.rename_on_change`, `aliases.languages`, `index.engine`, `index.metric`, `observe.facet_schema_version` | `design_required` | `kb sync` |
-| `observe.near_duplicate_cosine_distance`, `observe.representatives_per_folder`, `cards.*`, `index.lexical.ngram_size` | `fit_from_gt` | `kb sync` |
+| `observe.near_duplicate_cosine_distance`, `observe.representatives_per_folder`, `cards.*` (but `cards.reply_attempts`, below), `index.lexical.ngram_size` | `fit_from_gt` | `kb sync` |
 | `index.build` | `fit_from_bench` | `kb sync` |
+| `observe.reply_attempts`, `cards.reply_attempts` (requests per image or concept when a reply is refused; K3-RETRY, decisions 183 and 188) | `fit_from_bench` | `kb sync` |
+| `vlm.backends.<name>.probe.image_attempts` (requests per plain `image` challenge answered with a malformed reply) | `fit_from_bench` | every command that binds a role on that backend; a sentinel here refuses the whole backend |
 | `embedding.backend`, `embedding.batch_size` | `deploy_required` | `kb sync`, `enhance once`, `enhance serve`, `eval run` |
 | `embedding.revision` | `pin_required` | same |
 | `embedding.dimension_mode`, `embedding.request.*`, `embedding.query_text_limit`, `embedding.query_text_template` | `design_required` | same |
@@ -95,6 +97,8 @@ Pass them as `--config configs/enhancer.deploy.yaml --overlay configs/overlays/d
 | `serving.queue_limit` | `design_required` | `enhance serve` |
 | `evaluation.run.*`, `evaluation.judge.blinding_seed`, `.under_test_families`, `.max_score_file_bytes` | `deploy_required` | `eval run`, `eval import` (each reads its own leaves) |
 | `evaluation.judge.score_min`, `.score_max` | `design_required` | `eval run`, `eval import` |
+
+**Reply retries (K3-RETRY).** `observe.reply_attempts`, `cards.reply_attempts` and `probe.image_attempts` are whole numbers of at least 1 (1 = one request, the earlier behaviour). Above 1 each needs an integer `sampling.seed` on the role (`observer`, `card_builder`, or every role with an image for the probe) and a provider that maps `seed` (`openai_compatible`, `gemini`, not `anthropic`), and `probe.image_attempts` also needs `probe.max_requests` large enough for the role's own challenges plus the retries; the loader names both keys when it is not. Attempts restart each run, and a retry counts against any granted `call_budget`. Evidence of an exhausted image or concept is in its `k2_call_failure` or `k3_call_failure` row, which `kb gc` removes after `sync.gc.retention`: read it first. A later run of the same item replaces its failure row and repeats the same seeds, so the seed experiment reads the failure rows after each run.
 
 `serving.prefix_cache` is an external-backend setup choice and is not read by any command. `serving.total_deadline_s` must exceed `runtime.request_deadline_s`, and `serving.http.max_connections` must be at least `serving.max_concurrency + serving.queue_limit` (config-time refusals).
 

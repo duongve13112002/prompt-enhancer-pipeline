@@ -61,7 +61,7 @@ def test_backend_operational_schema(tmp_path, project_root, section, key, overri
     backend = profile['vlm']['backends']['main']
     backend['http'] = dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
                            max_retries=0, backoff_initial_s=0, backoff_max_s=4, retry_statuses=[])
-    backend['probe'] = dict(max_requests=1, timeout_s=1)
+    backend['probe'] = dict(max_requests=1, timeout_s=1, image_attempts=1)
     backend['image'] = dict(max_decode_pixels=100, max_side='none')
     backend[section][key] = override
     path = tmp_path / 'config.yaml'
@@ -267,7 +267,7 @@ def test_role_values_through_command_load(tmp_path, project_root, key, override,
                    http=dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1,
                              pool_timeout_s=1, max_retries=0, backoff_initial_s=0,
                              backoff_max_s=0, retry_statuses=[]),
-                   probe=dict(max_requests=1, timeout_s=1), image=dict(max_decode_pixels=1000, max_side='none'))
+                   probe=dict(max_requests=1, timeout_s=1, image_attempts=1), image=dict(max_decode_pixels=1000, max_side='none'))
     backend['model'].update(id='local-model', revision='revision')
     profile['vlm']['backends']['alternate'] = deepcopy(backend)
     keys = key.split('.')

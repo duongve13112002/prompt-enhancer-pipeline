@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from jsonschema import Draft202012Validator, exceptions, validators
 import yaml
 
+from .model_mapping import SAMPLING
 from .model_schemas import SnapshotCache
 
 
@@ -865,7 +866,109 @@ def _command_reads(command, config):
                  if key not in ('candidates', 'embedding', 'assembly'))
 
 
-def _validate_model_bindings(config, path):
+def image_probe_backend(vlm, role):
+    """The backend whose plain `image` probe a role's calls run, or None when it cannot be named from the profile.
+
+    The condition of `RoleClient._production_probe` and `_call`: a backend that is not `openai_compatible` and does not
+    allow images never probes or serves an image, so the call (and its probe) moves to the default local backend.
+    """
+    backends = vlm['backends']
+    name = role.get('backend')
+    backend = backends.get(name) if isinstance(backends, dict) else None
+    if not isinstance(backend, dict) or backend.get('provider') in SENTINELS:
+        return None
+    if backend.get('provider') == 'openai_compatible' or backend.get('allow_images') is True:
+        return name
+    default = vlm.get('default_backend')
+    return default if isinstance(default, str) and default in backends else None
+
+
+def attempt_seed_refusal(vlm, role_name, role=None, backend_name=None):
+    """Why a role cannot take retry seeds (decisions 183, 188), or None; the caller names the attempts key.
+
+    Attempt k sends sampling.seed + k, so the role needs an integer base seed, and every backend the call can reach
+    (`backend_name`, default the role's own, and the default one when a budget fallback may serve it) must map `seed`
+    (`model_mapping.SAMPLING`). The probe passes the backend its image probe really runs on.
+    """
+    from .planner import SEED_BITS  # lazy: planner imports this module
+
+    role = vlm['roles'][role_name] if role is None else role
+    seed = role['sampling']['seed']
+    key = f'vlm.roles.{role_name}.sampling.seed'
+    if type(seed) is not int or not 0 <= seed < 2 ** SEED_BITS:
+        return f'{key}: an integer in [0, 2^{SEED_BITS}) is required, got {seed!r}'
+    backends = vlm['backends']
+    start = role['backend'] if backend_name is None else backend_name
+    names = [start]
+    first = backends.get(start) if isinstance(backends, dict) else None
+    if (isinstance(first, dict) and first.get('on_budget_exhausted') == 'fallback_to_default_backend'
+            and vlm.get('default_backend') not in names):
+        names.append(vlm['default_backend'])
+    for name in names:
+        backend = backends.get(name) if isinstance(backends, dict) else None
+        provider = backend.get('provider') if isinstance(backend, dict) else None
+        if isinstance(provider, str) and provider not in SENTINELS and 'seed' not in SAMPLING.get(provider, {}):
+            return f'vlm.backends.{name}.provider: {provider!r} does not map sampling.seed, so a retry would repeat the request'
+    return None
+
+
+def _refuse_attempts_seed(config, role_name, attempts_key, attempts, path, sources):
+    if type(attempts) is int and attempts > 1:
+        role = config['vlm']['roles'][role_name]
+        # a role that sends images is served (and probed) by the backend `image_probe_backend` names
+        served = image_probe_backend(config['vlm'], role) if isinstance(role.get('image'), dict) else None
+        problem = attempt_seed_refusal(config['vlm'], role_name, backend_name=served)
+        if problem:
+            raise ConfigurationError(f'{_source(sources, attempts_key, path)}: {attempts_key}: {attempts} attempts need '
+                                     f'distinct seeds; {problem}')
+
+
+def _validate_probe_attempts(vlm, path, project_root=None):
+    """`probe.image_attempts` above 1: every role with an image needs a seed base on the backend its image probe really
+    runs on (`image_probe_backend`; a backend that never image-probes is not asked), and the plain `image` probe,
+    retried, must fit `probe.max_requests` (a floor: the role's own challenges plus the retries; other roles on the
+    same backend add more at run time and stay a runtime PROBE_INCOMPLETE). The probe bundle is read from the loader's
+    project root (the runtime reads the same one); when it cannot be read the profile is refused, never skipped."""
+    from .model_probe import BUNDLE_PATH, probe_image_challenges
+
+    backends = vlm['backends']
+    root = Path(__file__).resolve().parents[2] if project_root is None else Path(project_root)
+    for name, role in vlm['roles'].items():
+        if not isinstance(role, dict) or not isinstance(role.get('image'), dict):
+            continue
+        probed = image_probe_backend(vlm, role)
+        if probed is None:
+            continue
+        backend = backends[probed]
+        probe = backend.get('probe') if isinstance(backend, dict) else None
+        attempts = probe.get('image_attempts') if isinstance(probe, dict) else None
+        if type(attempts) is not int or attempts <= 1:
+            continue
+        key = f'vlm.backends.{probed}.probe.image_attempts'
+        problem = attempt_seed_refusal(vlm, name, backend_name=probed)
+        if problem:
+            raise ConfigurationError(f'{path}: {key}: {attempts} attempts need distinct seeds; {problem}')
+        limit = probe.get('max_requests')
+        challenges = probe_image_challenges(root)
+        output = role['output']['format'] if isinstance(role.get('output'), dict) else None
+        if challenges is None:
+            raise ConfigurationError(
+                f'{path}: {key}: {attempts} attempts need the probe bundle {BUNDLE_PATH.as_posix()} under {root} to '
+                f'count the plain image challenges against probe.max_requests, but it cannot be read there')
+        if type(limit) is not int or backend.get('provider') in SENTINELS:
+            continue  # not computable from the profile: the runtime keeps PROBE_INCOMPLETE
+        structured = 1 if output in ('json_object', 'json_schema') else 0
+        base = 1 + structured + challenges * (1 + structured)
+        retries = challenges * (attempts - 1)
+        if base + retries > limit:
+            raise ConfigurationError(
+                f'{path}: {key}: {attempts} attempts make the plain image probe of role {name!r} need up to '
+                f'{base + retries} requests ({base} for its challenges: 1 text + {structured} structured + '
+                f'{challenges * (1 + structured)} image; plus {challenges} challenges x {attempts - 1} retries = '
+                f'{retries}), but vlm.backends.{probed}.probe.max_requests is {limit}')
+
+
+def _validate_model_bindings(config, path, project_root=None):
     """Reject known provider and encoder incompatibilities before model calls."""
     from PIL import Image
     from .model_transport import endpoint_url
@@ -970,6 +1073,7 @@ def _validate_model_bindings(config, path):
                 raise ConfigurationError(f'{path}: {key}.image.format: no installed encoder for {fmt!r}')
             if fmt not in SENTINELS and image_media_type(fmt) is None:  # the request header names it (R4F1)
                 raise ConfigurationError(f'{path}: {key}.image.format: {NO_MEDIA_TYPE.format(fmt)}')
+    _validate_probe_attempts(vlm, path, project_root)
 
 
 def installed_encoder(name):
@@ -1401,7 +1505,7 @@ def validate_naming_reads(config, path='configuration', sources=None, project_ro
                 dotted = f'{key}.{section}.{field}'
                 if 'number' in _schema_types(_schema_at(schema, dotted)):
                     _require_float_seconds(value, path, dotted, sources)
-    _validate_model_bindings(config, path)
+    _validate_model_bindings(config, path, project_root)
     _validate_configured_paths(config, root, path, sources)
 
 
@@ -1472,10 +1576,12 @@ def validate_observation_reads(config, path='configuration', sources=None, proje
                 dotted = f'{backend_key}.{section}.{field}'
                 if 'number' in _schema_types(_schema_at(schema, dotted)):
                     _require_float_seconds(backend[section][field], path, dotted, sources)
+    _refuse_attempts_seed({'vlm': {'roles': {'observer': role}, 'backends': backends, 'default_backend': default}},
+                          'observer', 'observe.reply_attempts', observe['reply_attempts'], path, sources)
     scoped = {'vlm': {'roles': {'observer': role}, 'backends': backends, 'default_backend': default},
               'vision': config['vision'], 'knowledge': {'root': config['knowledge']['root']},
               'storage': {field: config['storage'][field] for field in ('kb_store', 'data_root')}}
-    _validate_model_bindings(scoped, path)
+    _validate_model_bindings(scoped, path, project_root)
     _validate_configured_paths(scoped, root, path, sources)
 
 
@@ -1551,10 +1657,12 @@ def validate_card_reads(config, path='configuration', sources=None, project_root
                 dotted = f'{backend_key}.{section}.{field}'
                 if 'number' in _schema_types(_schema_at(schema, dotted)):
                     _require_float_seconds(backend[section][field], path, dotted, sources)
+    _refuse_attempts_seed({'vlm': {'roles': {'card_builder': role}, 'backends': backends, 'default_backend': default}},
+                          'card_builder', 'cards.reply_attempts', cards['reply_attempts'], path, sources)
     scoped = {'vlm': {'roles': {'card_builder': role}, 'backends': backends, 'default_backend': default},
               'knowledge': {'root': config['knowledge']['root']},
               'storage': {field: config['storage'][field] for field in ('kb_store', 'data_root')}}
-    _validate_model_bindings(scoped, path)
+    _validate_model_bindings(scoped, path, project_root)
     _validate_configured_paths(scoped, root, path, sources)
 
 
@@ -1621,7 +1729,7 @@ def validate_alias_reads(config, path='configuration', sources=None, project_roo
     scoped = {'vlm': {'roles': {'alias_generator': role}, 'backends': backends, 'default_backend': default},
               'knowledge': {'root': config['knowledge']['root']},
               'storage': {field: config['storage'][field] for field in ('kb_store', 'data_root')}}
-    _validate_model_bindings(scoped, path)
+    _validate_model_bindings(scoped, path, project_root)
     _validate_configured_paths(scoped, root, path, sources)
 
 
@@ -1898,7 +2006,7 @@ def validate_writer_reads(config, path='configuration', sources=None, project_ro
                     raise ConfigurationError(f'{path}: {key}.extra_body.{field}: cannot replace writer identity')
     if config['rag']['enabled'] and config['rag']['evidence_mode'] != 'cards':
         raise ConfigurationError(f'{path}: rag.evidence_mode: live modes are not implemented')
-    _validate_model_bindings(config, path)
+    _validate_model_bindings(config, path, project_root)
     return role
 
 
@@ -2202,7 +2310,7 @@ def validate_validation_reads(config, path='configuration', sources=None, projec
             raise ConfigurationError(f'{path}: vlm.roles.verifier.output.{key}: expected {expected}')
     load_id = role['prompt_id']
     _filename(load_id, path, 'vlm.roles.verifier.prompt_id')
-    _validate_model_bindings(config, path)
+    _validate_model_bindings(config, path, root)
     return validation
 
 
@@ -2308,7 +2416,7 @@ def _validate_loaded_config(config, command, root, path, sources):
             raise ConfigurationError(f'{path}: rag.enabled: expected boolean')
         if not gate:
             return config
-    _validate_model_bindings(config, path)
+    _validate_model_bindings(config, path, root)
     _validate_embedding(config, path, sources)
     for name, backend in config['vlm']['backends'].items():
         if not isinstance(backend, dict):

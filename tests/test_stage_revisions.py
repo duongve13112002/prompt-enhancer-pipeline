@@ -40,14 +40,18 @@ PINS = {
     'k1_text': [('k1-text-1', '861021292f329dd3cd006a65823d398ef6207b145b7779646c83db6291ef3d48'),
                 ('k1-text-2', '9b0bdb7c4d79becd4f75843704812eb8f7d90e5e0a2325794bdffe4d5de69d3e')],
     'model_call': [('model-call-1', 'd343f8ab7bf36edd21b077e7152cf1e9c5404747d0e337e0d8f275e1b0842466'),
-                   ('model-call-2', '9785be00c96416c3342fcff3bccf84c720e036d22e83aab58b9dec397219355c')],
+                   ('model-call-2', '9785be00c96416c3342fcff3bccf84c720e036d22e83aab58b9dec397219355c'),
+                   # K3-RETRY: a per-request seed override on the request copy; the probe seed retry
+                   ('model-call-3', '6c2b6e8b5f92f8edb789bb60d75edbf87dfc703bc55b50dc978c01de1718ba29')],
     'k2_naming': [('k2-naming-1', 'f7c8bc6ccac88fd3bde0d29807ee60669e67b67f6e7b054ded05998ca6e11fa5'),
                   ('k2-naming-2', '9028bbc88242340042e849112324d30d03e9568f25384d5863bf5dac1976eba6')],
     'k2_draw': [('k2-draw-v1', '085e0f67f4a98374df27d6c6103d10119f223e71975675382c3e1763dc71117b')],
     'k2_observe': [('k2-observe-1', 'e8b5d4c403b8f058114556fff14bd100bff47083b25d78b101e2307a8db27fba'),
-                   ('k2-observe-2', '9ede0abca2bd891708b305b83c9c5de621fe174d60016ff5a8278c86dbbe4002')],
+                   ('k2-observe-2', '9ede0abca2bd891708b305b83c9c5de621fe174d60016ff5a8278c86dbbe4002'),
+                   ('k2-observe-3', 'cd7bdde0196b89533b228a58858bd67f2893b09c62058a9944d65764e17e7bf9')],  # K3-RETRY
     'k3': [('k3-card-1', '1247c6586399c4d98fdf64513accee9feb29db2cbb5c743daf02946c4a82611b'),
-           ('k3-card-2', 'c80d7fc38f7d3d8e2f2ae348ccbb0305c02ae3bc885b4ca2b874aa5d65677a30')],
+           ('k3-card-2', 'c80d7fc38f7d3d8e2f2ae348ccbb0305c02ae3bc885b4ca2b874aa5d65677a30'),
+           ('k3-card-3', 'baac7f04d4106c4be7b789775409a5804db3f23b92728f67bb4921e4d6e8ddd1')],  # K3-RETRY
     'k4': [('k4-alias-1', 'e0b9748cea1ad96d2d904ec855ce9b00f5dda8e080d9a1588a9b121b80bd48e6'),
            ('k4-alias-2', 'b4404f20f5f572e969fbe228ebb00e6ac3a898fdbcb13f5b81a756f1e3054f44')],
     'k5': [('k5-index-1', 'e1609a9b78845d6465985457b276da2cd022c001a8999dedb7747bba7ee8bf4f'),

@@ -37,6 +37,9 @@ K1_SHARED = [
     ('k1_embed', '_commit_record'), ('storage.identity', 'canonical_json'),  # in the key, so this code stands for it
 ]
 NAMING_SHARED = [('k2_naming', '_validate_reply')]  # reply validation every model stage uses
+RETRY_SHARED = [  # decisions 183 and 188: which refusals are retried, with which seed, and what an attempt records
+    ('reply_retry', 'REFUSED'), ('reply_retry', 'SEED_WARNING'), ('reply_retry', 'attempt_seed'),
+    ('reply_retry', 'Attempts.__init__'), ('reply_retry', 'reply_digest'), ('reply_retry', 'call_until_valid')]
 STAGES = {
     'k0': ('k0_checkpoint', 'K0_SCAN_REVISION', [
         ('k0', 'trim_info_token'), ('k0', 'parse_info'), ('k0', 'rows_from_scan'),
@@ -78,13 +81,13 @@ STAGES = {
         ('k2_naming', 'uniform_draw'), ('k2_naming', '_draw'), ('k2_naming', '_redraw'), ('k2_naming', '_digest'),
         ('k2_naming', '_key'), ('k2_naming', '_load'), ('k2_naming', '_save'), ('k2_naming', '_recovery_index'),
         ('k2_naming', '_referenced_draw'), ('storage.identity', 'canonical_json')]),
-    'k2_observe': ('k2_observe', 'K2_OBSERVE_REVISION', NAMING_SHARED + [
+    'k2_observe': ('k2_observe', 'K2_OBSERVE_REVISION', NAMING_SHARED + RETRY_SHARED + [
         ('k2_observe', 'LAYOUT'), ('k2_observe', 'GROUPING'), ('k2_observe', 'STORED_SCHEMA'),
         ('k2_observe', 'REPLY_SCHEMA'), ('k2_observe', 'group_images'), ('k2_observe', 'choose_representatives'),
         ('k2_observe', 'parse_observation'), ('k2_observe', '_observation_payload'),
         ('k2_observe', '_observation_bundle'), ('k2_observe', '_member'), ('k2_observe', '_declared'),
         ('k2_observe', '_rows'), ('k1_embed', '_read_verified'), ('storage.identity', 'canonical_json')]),
-    'k3': ('k3_cards', 'K3_CARD_REVISION', NAMING_SHARED + [
+    'k3': ('k3_cards', 'K3_CARD_REVISION', NAMING_SHARED + RETRY_SHARED + [
         ('k3_cards', 'LAYOUT'), ('k3_cards', 'VISIBLE'), ('k3_cards', 'REPLY_SCHEMA'), ('k3_cards', 'STORED_SCHEMA'),
         ('k3_cards', 'card_inputs'), ('k3_cards', '_partition'), ('k3_cards', 'parse_card_reply'),
         ('k3_cards', 'stability_label'), ('k3_cards', '_has_variation'), ('k3_cards', 'assemble_card'),
@@ -154,8 +157,10 @@ LEFT_OUT = [
     ('k2_observe', DECLARED, ['K2_OBSERVE_REVISION']),
     ('k2_observe', KEY, ['STAGE', 'observation_revisions', 'observation_key']),
     ('k2_observe', DRIVER, ['observe_images']),
+    ('k2_observe', 'diagnostic evidence row of a refused attempt; never read back as a result', ['_failure_row']),
     ('k3_cards', DECLARED, ['K3_CARD_REVISION']),
     ('k3_cards', DRIVER, ['build_cards']),
+    ('k3_cards', 'diagnostic evidence row of a refused attempt; never read back as a result', ['_failure_row']),
     ('k4_aliases', DECLARED, ['K4_ALIAS_REVISION']),
     ('k4_aliases', CHECK, ['_inputs']),
     ('k4_aliases', DRIVER, ['build_aliases']),
@@ -171,12 +176,13 @@ LEFT_OUT = [
     ('kb_sync', ERRORS, ['require_success', '_CLOSED_CODES', '_closed_code']),
     ('model_client', DECLARED, ['MODEL_CALL_REVISION']),
     ('model_client', ERRORS, ['MODEL_CODES', 'safe_model_code', 'safe_probe_events', 'ModelCallError.__init__',
-                              'ProbeCasesMissing']),
+                              'ProbeCasesMissing', '_safe_attempts']),
     ('model_client', KEY, ['_digest', 'semantic_role_settings', 'RoleClient._proof_key']),
     ('model_client', 'capability probes admit a backend or role; a probe result gates a call and is no artifact content',
      ['CAPABILITIES', 'IMAGE_SOURCE_ROLES', 'validate_require', 'RoleClient._multiple_images_pair',
       'RoleClient._take_probe_requests', 'RoleClient._probe_transport', 'RoleClient._production_probe',
-      'RoleClient._bundle_images', 'RoleClient._extend_multiple_images', 'RoleClient.ensure_role_capabilities']),
+      'RoleClient._bundle_images', 'RoleClient._extend_multiple_images', 'RoleClient.ensure_role_capabilities',
+      'RoleClient._retry_plain_image']),  # decision 188: the plain image probe's seed retry
     ('model_client', LIFECYCLE, ['ModelClientRun.__init__', 'ModelClientRun.for_role', 'ModelClientRun.close',
                                  'BoundModelClient.__init__', 'BoundModelClient.call', 'BoundModelClient.for_role',
                                  'BoundModelClient.close', 'run_concurrency', 'compose_model_client',

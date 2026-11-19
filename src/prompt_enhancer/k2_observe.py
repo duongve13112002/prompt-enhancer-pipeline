@@ -19,6 +19,7 @@ from .model_client import (MODEL_CALL_REVISION, ModelCallError, ModelClientRun, 
                            semantic_role_settings)
 from .model_resources import CapacityLog, await_owned, flow
 from .profile_prompt import load_prompt
+from .reply_retry import Attempts, call_until_valid
 from .storage import StorageError, artifact_key, concept_id
 from .storage.identity import canonical_json, check_artifact_key, is_image_id
 
@@ -31,7 +32,7 @@ STORED_SCHEMA = 'image_observation.v0'
 REPLY_SCHEMA = 'observer_reply.v1'
 # declared revision of the code that shapes a K2 observation (KBS-S3-1); keys the artifacts in place of a hash of
 # module source. Bump it with any edit to a function its guard pins (tests/test_stage_revisions.py).
-K2_OBSERVE_REVISION = 'k2-observe-2'
+K2_OBSERVE_REVISION = 'k2-observe-3'
 
 
 def group_images(images, vectors, distance, *, revision, dim):
@@ -168,9 +169,21 @@ def _observation_payload(declared, config, root):
                                        ['properties']['facet_group']['enum']}}
 
 
-def _observation_bundle(revisions, declared, reply, document):
-    """The stored layout of one completed image-call bundle."""
-    return {'version': LAYOUT, 'revisions': revisions, 'concepts': declared, 'reply': reply, 'document': document}
+def _observation_bundle(revisions, declared, reply, document, attempts):
+    """The stored layout of one completed image-call bundle; `attempts` lists every request made for it (decision 188)."""
+    return {'version': LAYOUT, 'revisions': revisions, 'concepts': declared, 'reply': reply, 'document': document,
+            'attempts': attempts.entries}
+
+
+def _failure_row(writer, key, attempts, revisions, error=None):
+    """The k2_call_failure checkpoint of one image: every attempt so far (index, seed, closed code, reply digest) and its
+    call records; rewritten after each refused attempt. A snapshot never references it, so garbage collection removes it
+    after `sync.gc.retention`."""
+    code = failure_code(error) if error is not None else next(
+        (entry['code'] for entry in reversed(attempts.entries) if entry['code']), None)
+    writer.checkpoints('k2_call_failure').commit(
+        key, 'k2_call_failure', canonical_json({'error': code, 'attempts': attempts.entries}).encode('utf-8'),
+        revisions=revisions, call_records=attempts.records)
 
 
 def observation_key(image_id, names, revisions):
@@ -239,8 +252,10 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
     role = config['vlm']['roles']['observer']
     prompt = load_prompt(root, role['prompt_id'])
     revisions = observation_revisions(config, prompt, root)
+    attempts_allowed = config['observe']['reply_attempts']
     report = {'observed': 0, 'skipped_done': 0, 'reused_referenced': [], 'queued': [], 'failed': {},
-              'skipped_folders': [], 'ineligible_images': sorted(all_images - set(groups)), 'representatives': {}}
+              'skipped_folders': [], 'ineligible_images': sorted(all_images - set(groups)), 'representatives': {},
+              'attempts': {'allowed': attempts_allowed, 'used': {}}}
     tasks = {}
     for folder_id, folder in sorted(folders.items()):
         declared = _declared(members.get(folder_id, []))
@@ -295,6 +310,7 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
                         checkpoints.queue(key, revisions=revisions)
                     report['queued'].append(key)
                     return
+                attempts = Attempts()
                 try:
                     data = _read_verified(source, task['locations'], identity)
                     if data is None:
@@ -308,15 +324,26 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
                     else:
                         bound = await client.for_role('observer')
                     payload = _observation_payload(declared, config, root)
-                    value, record = await bound.call(prompt, canonical_json(payload),
-                                                     images=[('knowledge_reference', data)])
-                    if value is None:
-                        raise ValueError(record['status'])
-                    document = parse_observation(value, image_id=identity, concepts=declared, context_key=key,
-                        model_revision=record['model_revision'], prompt_id=role['prompt_id'],
-                        facet_schema_version=config['observe']['facet_schema_version'], project_root=root)
+                    text = canonical_json(payload)
+                    images = [('knowledge_reference', data)]
+
+                    def call(seed):  # attempt 0 is the profile's request; a retry changes only the seed
+                        return (bound.call(prompt, text, images=images) if seed is None
+                                else bound.call(prompt, text, images=images, seed=seed))
+
+                    def parse(reply):
+                        return parse_observation(reply, image_id=identity, concepts=declared, context_key=key,
+                            model_revision=attempts.records[-1]['model_revision'], prompt_id=role['prompt_id'],
+                            facet_schema_version=config['observe']['facet_schema_version'], project_root=root)
+
+                    document, value, record = await call_until_valid(
+                        call, parse, attempts=attempts_allowed, base_seed=role['sampling']['seed'], log=attempts,
+                        persist=lambda log: _failure_row(writer, key, log, revisions))
                 except (ValueError, TypeError, OverflowError, UnicodeError, ModelCallError) as error:
                     record_probe_failure(writer, key, error, revisions)
+                    if attempts.records:
+                        _failure_row(writer, key, attempts, revisions, error)
+                        report['attempts']['used'][key] = len(attempts.entries)
                     checkpoints.fail(key, failure_code(error), revisions=revisions)
                     report['failed'][key] = failure_code(error)
                     return
@@ -324,9 +351,10 @@ async def observe_images(store, config, handoff, *, images, folder_images, image
                 # rows is this stage's own work, so an error there fails the stage (P3-SWEEP-2).
                 rows = _rows(document)
                 store.catalog.build('observations', rows)
-                bundle = _observation_bundle(revisions, declared, value, document)
+                bundle = _observation_bundle(revisions, declared, value, document, attempts)
                 artifact = checkpoints.commit(key, STAGE, canonical_json(bundle).encode('utf-8'),
-                                               revisions=revisions, call_records=[record])
+                                               revisions=revisions, call_records=attempts.records)
+                report['attempts']['used'][key] = len(attempts.entries)
                 artifacts.append(artifact)
                 observations.extend(rows)
                 report['observed'] += 1

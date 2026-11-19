@@ -274,7 +274,7 @@ def test_an_encoder_without_a_registered_image_media_type_is_refused_before_the_
 def test_client_runs_configured_probe_through_transport():
     async def run():
         backend = {'provider': 'openai_compatible', 'engine': {'name': 'llama_cpp', 'version': 'test-version'}, 'endpoints': {'chat': 'chat'},
-                   'probe': {'max_requests': 1, 'timeout_s': 1}}
+                   'probe': {'max_requests': 1, 'timeout_s': 1, 'image_attempts': 1}}
         config = {'vlm': {'backends': {'main': backend}}}
         double = DoubleTransport('evidence')
         schema = SchemaRegistry(Path(__file__).resolve().parents[1] / 'contracts' / 'schemas')
@@ -292,7 +292,7 @@ def test_backend_without_probe_cases_raises_its_own_type_and_sends_nothing():
     """The KBS-F1 production gap is named by ProbeCasesMissing, a ModelCallError; no request is made."""
     async def run():
         backend = {'provider': 'openai_compatible', 'engine': {'name': 'llama_cpp', 'version': 'test-version'},
-                   'endpoints': {'chat': 'chat'}, 'probe': {'max_requests': 1, 'timeout_s': 1}}
+                   'endpoints': {'chat': 'chat'}, 'probe': {'max_requests': 1, 'timeout_s': 1, 'image_attempts': 1}}
         double = DoubleTransport('evidence')
         schema = SchemaRegistry(Path(__file__).resolve().parents[1] / 'contracts' / 'schemas')
         client = RoleClient({'vlm': {'backends': {'main': backend}}}, {'main': double}, {}, schema, probe_cases={})
@@ -322,7 +322,7 @@ def test_local_probe_plan_runs_both_challenge_pairs():
         plan = {'image': ((image_body('first'), 1), (image_body('second'), 2)),
                 'thinking': (enabled, disabled, 'switch', lambda response: response.json()['thinking'])}
         config = {'vlm': {'backends': {'main': {'provider': 'openai_compatible', 'engine': {'name': 'llama_cpp', 'version': 'test-version'},
-                  'endpoints': {'chat': 'chat'}, 'probe': {'max_requests': 4, 'timeout_s': 1}}}}}
+                  'endpoints': {'chat': 'chat'}, 'probe': {'max_requests': 4, 'timeout_s': 1, 'image_attempts': 1}}}}}
         client = RoleClient(config, {'main': ProbeDouble()}, {}, None, local_probe_plans={'main': plan})
         result = await client.start_backend('main')
         assert result.status == 'complete' and result.capabilities == {'image': True, 'reasoning.mode': True}
@@ -337,7 +337,7 @@ def test_cloud_image_forbidden_falls_back_and_reprobes_local():
                 'reasoning': {'mode': 'auto', 'effort': 'none', 'budget_tokens': 'none'},
                 'output': {'format': 'none', 'schema_id': 'none', 'strict': False, 'validate_response': False}}
         local ={'provider': 'openai_compatible', 'engine': {'name': 'llama_cpp', 'version': 'test-version'}, 'model': {'id': 'local', 'revision': 'r'},
-                 'endpoints': {'chat': 'chat'}, 'probe': {'max_requests': 1, 'timeout_s': 1},
+                 'endpoints': {'chat': 'chat'}, 'probe': {'max_requests': 1, 'timeout_s': 1, 'image_attempts': 1},
                  'image': {'max_decode_pixels': 1000, 'max_side': 'none'}}
         config = {'vision': {'max_image_side': 'none', 'format': 'png', 'quality': 90, 'alpha_policy': {'mode': 'refuse'}},
                   'vlm': {'roles': {'planner': role}, 'backends': {'main': local,
@@ -436,7 +436,7 @@ def test_cloud_budget_exhaustion_reprobes_and_falls_back(tmp_path):
                 'reasoning': {'mode': 'auto', 'effort': 'none', 'budget_tokens': 'none'},
                 'output': {'format': 'none', 'schema_id': 'none', 'strict': False, 'validate_response': False}}
         local = {'provider': 'openai_compatible', 'engine': {'name': 'llama_cpp', 'version': 'test-version'}, 'model': {'id': 'local', 'revision': 'r'},
-                 'endpoints': {'chat': 'chat'}, 'probe': {'max_requests': 1, 'timeout_s': 1}}
+                 'endpoints': {'chat': 'chat'}, 'probe': {'max_requests': 1, 'timeout_s': 1, 'image_attempts': 1}}
         cloud = {'provider': 'gemini', 'engine': {'name': 'gemini'}, 'api_key_file': '.secrets/fake.key', 'model': {'id': 'fake', 'revision': 'r'},
                  'endpoints': {'chat': 'v1beta/models/fake:generateContent'}, 'on_budget_exhausted': 'fallback_to_default_backend'}
         config = {'vlm': {'roles': {'planner': role}, 'backends': {'main': local, 'cloud': cloud}, 'default_backend': 'main'}}
@@ -470,7 +470,7 @@ def test_fallback_warnings_belong_to_each_attempt(tmp_path):
                 'output': {'format': 'none', 'schema_id': 'none', 'strict': False, 'validate_response': False}}
         local = {'provider': 'openai_compatible', 'engine': {'name': 'llama_cpp', 'version': 'v'},
                  'model': {'id': 'local', 'revision': 'r'}, 'endpoints': {'chat': 'chat'},
-                 'probe': {'max_requests': 1, 'timeout_s': 1}}
+                 'probe': {'max_requests': 1, 'timeout_s': 1, 'image_attempts': 1}}
         cloud = {'provider': 'gemini', 'engine': {'name': 'gemini'}, 'api_key_file': '.secrets/fake.key',
                  'model': {'id': 'cloud', 'revision': 'r'}, 'endpoints': {'chat': 'v1beta/models/x:generateContent'},
                  'on_budget_exhausted': 'fallback_to_default_backend'}

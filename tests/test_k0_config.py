@@ -18,8 +18,9 @@ def config(model_test_profile):
                           snapshots={'keep': 1}, gc={'retention': '1d'})
     # T-008: embedding.chosen must be a listed candidate; the conftest embedder resolves the K1 keys.
     config['embedding'].update(chosen='embeddinggemma-2', revision='test', query_text_limit=128)
-    config['observe'].update(representatives_per_folder=1, facet_schema_version='image_observation.v0')
-    config['cards']['min_visible_images'] = 1
+    config['observe'].update(representatives_per_folder=1, facet_schema_version='image_observation.v0',
+                             reply_attempts=1)  # test-only: decisions 183 and 188 leave the fitted value a sentinel
+    config['cards'].update(min_visible_images=1, reply_attempts=1)
     config['index'].update(engine='numpy_exact', metric='inner_product', build={'block_rows': 2})
     config['index']['lexical']['ngram_size'] = 2
     config['storage'].update(kb_store='store', lock={'timeout_s': 5, 'poll_s': 0.01})

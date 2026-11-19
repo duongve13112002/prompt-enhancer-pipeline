@@ -9,8 +9,8 @@ from copy import deepcopy
 
 from jsonschema.exceptions import ValidationError
 
-from .config import (ConfigurationError, NO_MEDIA_TYPE, _sentinel, image_media_type, resolve_backend_engine,
-                     resolve_writer_format)
+from .config import (ConfigurationError, NO_MEDIA_TYPE, _sentinel, attempt_seed_refusal, image_media_type,
+                     resolve_backend_engine, resolve_writer_format)
 from .model_cloud import cloud_headers, cloud_request
 from .model_json import strict_json
 from .model_mapping import openai_request
@@ -29,7 +29,7 @@ from pathlib import Path
 # artifact-bound: declared revision of the shared model-call path (request mapping, image preparation, reply parsing)
 # that every K2, K3 and K4 artifact passes through (KBS-S3-1). It keys those artifacts in place of a hash of module
 # source; bump it in the same change that edits a function its guard pins (tests/test_stage_revisions.py).
-MODEL_CALL_REVISION = 'model-call-2'
+MODEL_CALL_REVISION = 'model-call-3'
 
 # Protocol-bound public failure codes; never expose arbitrary exception/model text.
 MODEL_CODES = frozenset(('MODEL_CALL_FAILED', 'MODEL_CALL_INVALID', 'CAPABILITY_UNAVAILABLE',
@@ -40,6 +40,17 @@ MODEL_CODES = frozenset(('MODEL_CALL_FAILED', 'MODEL_CALL_INVALID', 'CAPABILITY_
 
 def safe_model_code(code):
     return code if type(code) is str and code in MODEL_CODES else 'MODEL_CALL_FAILED'
+
+
+def _safe_attempts(attempts):
+    """Attempt records of a retried probe challenge (decision 188): counters, seeds, closed codes and digests only."""
+    return [{'attempt': entry['attempt'], 'seed': entry['seed'],
+             'code': entry['code'] if entry['code'] in PROBE_CODES else None,
+             'reply_digest': entry['reply_digest'] if type(entry['reply_digest']) is str
+             and len(entry['reply_digest']) == 64 else None}
+            for entry in attempts if isinstance(entry, dict) and type(entry.get('attempt')) is int
+            and entry['attempt'] >= 0 and type(entry.get('seed')) in (int, type(None))
+            and ('code' in entry and 'reply_digest' in entry)]
 
 
 def safe_probe_events(events):
@@ -60,7 +71,8 @@ def safe_probe_events(events):
         if isinstance(challenges, list):
             item['challenges'] = [
                 {'challenge': case['challenge'], 'status': case['status'],
-                 **({'reason': case['reason']} if type(case.get('reason')) is str and case['reason'] in PROBE_CODES else {})}
+                 **({'reason': case['reason']} if type(case.get('reason')) is str and case['reason'] in PROBE_CODES else {}),
+                 **({'attempts': _safe_attempts(case['attempts'])} if isinstance(case.get('attempts'), list) else {})}
                 for case in challenges if isinstance(case, dict)
                 and type(case.get('challenge')) is str and case['challenge'] in ('0', '1', 'first', 'second')
                 and type(case.get('status')) is str
@@ -243,8 +255,10 @@ class BoundModelClient:
         self.run = run
         self.role_name = role_name
 
-    async def call(self, system_prompt, user_text, *, manifest=None, images=(), addendum=None):
+    async def call(self, system_prompt, user_text, *, manifest=None, images=(), addendum=None, seed=None):
         options = {} if addendum is None else {'addendum': addendum}
+        if seed is not None:  # a retry attempt (decisions 183, 188); absent for attempt 0, so doubles stay valid
+            options['seed'] = seed
         return await self.run.client.call(self.role_name, system_prompt, user_text, manifest=manifest, images=images,
                                           **options)
 
@@ -399,11 +413,63 @@ class RoleClient:
         allowance = self._probe_allowances.setdefault(backend_name, ProbeAllowance(backend['probe']['max_requests']))
         return ProbeTransport(self.transports[backend_name], allowance)
 
+    async def _retry_plain_image(self, backend_name, role_name, role, backend, bundle, side, cases, result, transport):
+        """Decision 188: re-send a plain `image` challenge whose reply was malformed with another seed, up to
+        `probe.image_attempts` requests per challenge. Only PROBE_MALFORMED is retried; every request, retry
+        included, is taken from `probe.max_requests`; a retry the allowance cannot pay leaves the challenge
+        incomplete, never negative. Returns the merged result and each challenge's attempt records."""
+        from .reply_retry import attempt_seed
+
+        limits = backend['probe']
+        attempts = limits['image_attempts']
+        problem = attempt_seed_refusal(self.config['vlm'], role_name, role, backend_name=backend_name)
+        if problem:
+            raise ModelCallError(f'CONFIGURATION_INVALID: probe.image_attempts {attempts}: {problem}')
+        base = role['sampling']['seed']
+
+        def code_of(error):
+            return error if error in PROBE_CODES else ('PROBE_FAILED' if error else None)
+
+        capabilities, errors, digests = dict(result.capabilities), dict(result.errors), dict(result.digests)
+        log = {name: [{'attempt': 0, 'seed': base, 'code': code_of(errors.get(name)),
+                       'reply_digest': digests.get(name)}] for name in cases}
+        for attempt in range(1, attempts):
+            pending = [name for name in cases if errors.get(name) == 'PROBE_MALFORMED']
+            if not pending:
+                break
+            seed = attempt_seed(base, attempt)
+            dropped = []
+            built = production_probe_cases(bundle, self._bundle_images(), backend, role, self.config['vision'],
+                                           'image', side, warnings=dropped, seed=seed)
+            if any(tuple(item) == ('PARAM_UNSUPPORTED', 'sampling.seed') for item in dropped):
+                raise ModelCallError('CONFIGURATION_INVALID: the backend dropped sampling.seed, so a retry would repeat the request')
+            subset = {name: built[name] for name in pending}
+            count = self._take_probe_requests(backend_name, len(subset))
+            sub = (await probe_backend(transport, backend['endpoints']['chat'], subset, count, limits['timeout_s'],
+                                       headers=self._headers(backend_name))
+                   if count else ProbeResult('incomplete', {}, {}))
+            digests.update(sub.digests)
+            for name in pending:
+                if name in sub.capabilities:
+                    capabilities[name] = sub.capabilities[name]
+                    if sub.errors.get(name):
+                        errors[name] = sub.errors[name]
+                    else:
+                        errors.pop(name, None)
+                else:  # not sent (allowance) or failed in transport: not a verdict, so never negative
+                    capabilities.pop(name, None)
+                    errors[name] = sub.errors.get(name, 'PROBE_INCOMPLETE')
+                if name in sub.capabilities or name in sub.errors:
+                    log[name].append({'attempt': attempt, 'seed': seed, 'code': code_of(sub.errors.get(name)),
+                                      'reply_digest': sub.digests.get(name)})
+        return ProbeResult('complete', capabilities, errors, digests=digests), log
+
     async def _production_probe(self, backend_name, role_name, *, require=(), role=None):
         backend = self.config['vlm']['backends'][backend_name]
         limits = backend['probe']
         _sentinel(limits, self.project_root, f'vlm.backends.{backend_name}.probe', {})
-        if (type(limits['max_requests']) is not int or limits['max_requests'] < 1
+        if (type(limits['image_attempts']) is not int or limits['image_attempts'] < 1
+                or type(limits['max_requests']) is not int or limits['max_requests'] < 1
                 or type(limits['timeout_s']) not in (int, float)
                 or not math.isfinite(limits['timeout_s']) or limits['timeout_s'] <= 0):
             raise ModelCallError('CONFIGURATION_INVALID: invalid probe limits')
@@ -453,10 +519,14 @@ class RoleClient:
                     'reason': 'CLIENT_STATE_INVALID' if isinstance(error, (TypeError, KeyError)) else 'INPUT_INVALID'})
                 raise ModelCallError('CAPABILITY_UNAVAILABLE: probe request mapping is unproved') from error
             count = self._take_probe_requests(backend_name, len(cases))
+            attempt_log = None
             try:
                 result = (await probe_backend(transport, backend['endpoints']['chat'], cases, count,
                                               limits['timeout_s'], headers=self._headers(backend_name))
                           if count else ProbeResult('incomplete', {}, {}))
+                if capability == 'image' and limits['image_attempts'] > 1:
+                    result, attempt_log = await self._retry_plain_image(
+                        backend_name, role_name, role, backend, bundle, side, cases, result, transport)
             except BaseException as error:
                 # No evidence was recorded: refusals and cancellation must remain retryable.
                 attempted.pop(capability, None)
@@ -468,8 +538,11 @@ class RoleClient:
             group = summarize_probe_group(result, cases, capability)
             accepted = group.capabilities.get(capability)
             attempted[capability] = 'negative' if accepted is False else group.status
+            challenges = list(group.evidence)
+            if attempt_log is not None:  # every attempt of every challenge stays in the evidence, pass or fail
+                challenges = [dict(case, attempts=attempt_log[case['challenge']]) for case in challenges]
             event = {'role': role_name, 'capability': capability, 'status': attempted[capability],
-                     'sent': transport.allowance.sent, 'challenges': list(group.evidence)}
+                     'sent': transport.allowance.sent, 'challenges': challenges}
             if capability in group.errors:
                 event['reason'] = group.errors[capability]
             evidence = {**event, 'bundle_id': BUNDLE_ID,
@@ -629,10 +702,10 @@ class RoleClient:
         self.probes[backend_name] = result
         return await self._extend_multiple_images(backend_name, production_pair)
 
-    async def call(self, role_name, system_prompt, user_text, *, manifest=None, images=(), addendum=None):
+    async def call(self, role_name, system_prompt, user_text, *, manifest=None, images=(), addendum=None, seed=None):
         try:
             return await self._call(role_name, system_prompt, user_text, manifest=manifest, images=images,
-                                    addendum=addendum)
+                                    addendum=addendum, seed=seed)
         except ModelCallError as error:
             error.probe_evidence = safe_probe_events(self.probe_events)
             if error.__cause__ is not None or error.code != 'MODEL_CALL_FAILED':
@@ -655,7 +728,9 @@ class RoleClient:
         except Exception as error:
             raise ModelCallError('MODEL_CALL_FAILED: model call could not be completed') from error
 
-    async def _call(self, role_name, system_prompt, user_text, *, manifest=None, images=(), addendum=None):
+    async def _call(self, role_name, system_prompt, user_text, *, manifest=None, images=(), addendum=None, seed=None):
+        if seed is not None and (type(seed) is not int or seed < 0):
+            raise ValueError('seed must be a non-negative integer')
         if addendum is not None and not isinstance(addendum, bytes):
             raise ValueError('addendum must be bytes or None')
         addendum_text = None if addendum is None else addendum.decode('utf-8')
@@ -780,14 +855,20 @@ class RoleClient:
                 cloud_schema, schema_hash = self.schemas.get(schema_id)
             if provider == 'openai_compatible' and output['format'] == 'json_schema':
                 schema, schema_hash = self.schemas.get(schema_id)
+            # A retry changes only sampling.seed, on a copy made here: the probe proof key and every artifact key come
+            # from the configured `role`, so a result stored on attempt 2 is found by the next run.
+            sent_role = role
+            if seed is not None:
+                sent_role = deepcopy(role)
+                sent_role['sampling']['seed'] = seed
             if provider == 'openai_compatible':
-                body, dropped = openai_request(backend, role, system_prompt.decode('utf-8'), user_text,
+                body, dropped = openai_request(backend, sent_role, system_prompt.decode('utf-8'), user_text,
                                               schema=schema if output['format'] == 'json_schema' else None,
                                               images=cloud_images, capabilities=capabilities, mapped=self._production,
                                               addendum=addendum_text)
                 warnings.extend(dropped)
             else:
-                body, cloud_warnings = cloud_request(provider, backend, role, system_prompt.decode('utf-8'), user_text,
+                body, cloud_warnings = cloud_request(provider, backend, sent_role, system_prompt.decode('utf-8'), user_text,
                                                      schema=cloud_schema, images=cloud_images, addendum=addendum_text)
                 warnings.extend(cloud_warnings)
             body_hash = _digest(body)
@@ -806,7 +887,7 @@ class RoleClient:
             request_hash = _digest({'body_hash': body_hash, 'role': role_name, 'prompt_id': role['prompt_id'],
                                     'image_roles': [image_role for image_role, _ in images],
                                     'image': image_config, 'vision': vision_config, 'image_max_side': side_config,
-                                    'sampling': role['sampling'],
+                                    'sampling': sent_role['sampling'],
                                     'reasoning': role['reasoning'], 'output': configured_output,
                                     'resolved_output': output, 'engine': engine,
                                     'model_revision': backend['model']['revision']})

@@ -121,7 +121,7 @@ def test_command_role_and_backend_validation(config, tmp_path):
     backend['max_concurrency'] = 1
     backend['http'] = dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
                            max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[])
-    backend['probe'] = dict(max_requests=1, timeout_s=1)
+    backend['probe'] = dict(max_requests=1, timeout_s=1, image_attempts=1)
     backend['image'] = dict(max_decode_pixels=1000, max_side='none')
     path = save_config(tmp_path, config)
     assert load_config(path, 'profile register')['vlm']['roles']['manifest_drafter']['max_tokens'] == 128
@@ -140,6 +140,7 @@ def test_command_role_and_backend_validation(config, tmp_path):
     ('http', 'max_retries', 'design_required'), ('http', 'backoff_initial_s', 'design_required'),
     ('http', 'backoff_max_s', 'design_required'), ('http', 'retry_statuses', 'design_required'),
     ('probe', 'max_requests', 'design_required'), ('probe', 'timeout_s', 'design_required'),
+    ('probe', 'image_attempts', 'fit_from_bench'),
     ('image', 'max_decode_pixels', 'deploy_required'),
     ('engine', 'name', 'deploy_required'), ('engine', 'version', 'pin_required'),
 ])
@@ -160,7 +161,7 @@ def test_model_backend_read_refuses_operational_sentinel(config, tmp_path, secti
     backend['max_concurrency'] = 1
     backend['http'] = dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
                            max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[])
-    backend['probe'] = dict(max_requests=1, timeout_s=1)
+    backend['probe'] = dict(max_requests=1, timeout_s=1, image_attempts=1)
     backend['image'] = dict(max_decode_pixels=1000, max_side='none')
     backend[section][field] = sentinel
     with pytest.raises(ConfigurationError, match=field + '.*unresolved sentinel'):
@@ -398,7 +399,7 @@ def test_overlay_rejects_policy(config, tmp_path):
     ('extra_body', {'chat_template_kwargs': {'enable_thinking': True}}),
     ('http', {'connect_timeout_s': 1, 'read_timeout_s': 2, 'write_timeout_s': 3, 'pool_timeout_s': 4,
               'max_retries': 1, 'backoff_initial_s': 0, 'backoff_max_s': 1, 'retry_statuses': [503]}),
-    ('probe', {'max_requests': 2, 'timeout_s': 3}),
+    ('probe', {'max_requests': 2, 'timeout_s': 3, 'image_attempts': 1}),
     ('image', {'max_decode_pixels': 1000, 'max_side': 512}),  # decision 144: a deployment sets its backend cap
     ('anthropic_version', '2025-01-01'),
     ('anthropic_workspace_id', 'workspace-123'),

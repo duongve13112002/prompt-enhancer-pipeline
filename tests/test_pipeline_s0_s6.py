@@ -95,7 +95,7 @@ def test_production_s0_s6_retrieval_off_without_kb(model_test_profile, tmp_path,
                    # test-only: KBS-F2 proves each request-shaping context separately; a verifier-on case needs 11
                    # probe sends (planner and writer only: 9), so 12 passes and still fails if the count grows; an
                    # exhausted allowance would silently turn the expected status into `degraded`.
-                   probe={'max_requests': 12, 'timeout_s': 2})
+                   probe={'max_requests': 12, 'timeout_s': 2, 'image_attempts': 1})
     backend['image']['max_decode_pixels'] = 20_000_000
     if retrieval:
         config['vlm']['backends']['embedder']['base_urls'] = backend['base_urls']
@@ -210,7 +210,7 @@ def test_published_image_attaches_after_source_removed_and_corrupt_copy_refuses_
     config['assembly']['default_outfit'] = 'include'
     config['validation']['verifier']['require_calibration'] = False
     backend = config['vlm']['backends']['main']
-    backend.update(base_urls=[f'http://127.0.0.1:{server.server_port}'], probe={'max_requests': 12, 'timeout_s': 2})
+    backend.update(base_urls=[f'http://127.0.0.1:{server.server_port}'], probe={'max_requests': 12, 'timeout_s': 2, 'image_attempts': 1})
     backend['image']['max_decode_pixels'] = 20_000_000
     config['vlm']['backends']['embedder']['base_urls'] = backend['base_urls']
     activate(config, project_root, renderer={'accepts_reference_images': True, 'image_reference_syntax': 'none'})

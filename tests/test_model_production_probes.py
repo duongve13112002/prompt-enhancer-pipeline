@@ -34,7 +34,7 @@ def production_env(k2_env):
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(REPO / probes.BUNDLE_PATH, target)
     k2_env.config['embedding']['query_text_template'] = '{text}'
-    k2_env.config['vlm']['backends']['main']['probe'] = {'max_requests': 8, 'timeout_s': 1}
+    k2_env.config['vlm']['backends']['main']['probe'] = {'max_requests': 8, 'timeout_s': 1, 'image_attempts': 1}
     return k2_env
 
 

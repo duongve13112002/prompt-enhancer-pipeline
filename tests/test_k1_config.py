@@ -312,7 +312,7 @@ def test_dimension_is_accepted_exactly_inside_the_representable_range(model_test
 
 def test_unread_embedder_probe_settings_do_not_block_kb_sync(project_root, config):  # noqa: F811
     profile = deepcopy(config)
-    profile['vlm']['backends']['embedder']['probe'] = {'max_requests': 'design_required', 'timeout_s': 'design_required'}
+    profile['vlm']['backends']['embedder']['probe'] = {'max_requests': 'design_required', 'timeout_s': 'design_required', 'image_attempts': 'fit_from_bench'}
     assert load(project_root, profile)['embedding']['backend'] == 'embedder'
 
 

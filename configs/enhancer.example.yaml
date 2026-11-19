@@ -67,6 +67,7 @@ observe:                                 # K2
   near_duplicate_cosine_distance: fit_from_gt   # E14: connected components at or below this cosine distance
   one_image_per_call: true               # R-010, N107, N108: models mix up several images in one call
   representatives_per_folder: fit_from_gt   # experiment E14
+  reply_attempts: fit_from_bench         # decision 188: requests per image when the observer reply fails validation; later attempts change only sampling.seed (an integer sampling.seed is required above 1); fitted by the seed experiment
   lazy_observation_of_rest: true         # images not yet read are read on demand at the next sync
   facet_schema_version: design_required
   region_output: optional                # a region per observation only when the schema asks for it
@@ -80,6 +81,7 @@ cards:                                   # K3
   low_diversity: mark_stable_low_diversity   # never promoted to stable
   variant_groups: true                   # decision 16
   lint_report: true
+  reply_attempts: fit_from_bench         # decision 183: requests per concept when the card reply fails validation; later attempts change only sampling.seed (an integer sampling.seed is required above 1); fitted by the seed experiment
 
 aliases:                                 # K4
   languages: design_required              # expected languages/scripts; set by the deployment, never inferred
@@ -201,7 +203,7 @@ vlm:                                     # R-018: rules name no model; models ar
       model: {id: deploy_required, revision: pin_required, source: none, file: none, mmproj_file: none}   # source, file and mmproj_file are used only by servers that load a local model file
       max_concurrency: fit_from_bench
       http: &model_http {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
-      probe: &model_probe {max_requests: design_required, timeout_s: design_required}
+      probe: &model_probe {max_requests: design_required, timeout_s: design_required, image_attempts: fit_from_bench}   # image_attempts: requests per challenge of the plain `image` probe on a malformed reply (decision 188); fitted by the seed experiment
       image: &model_image {max_decode_pixels: deploy_required, max_side: none}   # max_side (decision 144): this backend's longest image side; a chat call uses the smaller of it and the role's side; none = no backend limit; embedder backends keep none until K1 includes it
     embedder_qwen3vl8b:                  # T-018: Qwen3-VL-Embedding-8B on this project's embedding server (decision 137); selected with embedding.backend, never run on the dev machine
       provider: openai_compatible

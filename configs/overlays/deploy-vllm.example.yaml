@@ -18,7 +18,7 @@ vlm:
         chat_template_kwargs: {enable_thinking: false}   # thinking is on by default, so every request switches it off, N102, N121
       max_concurrency: fit_from_bench
       http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
-      probe: {max_requests: design_required, timeout_s: design_required}
+      probe: {max_requests: design_required, timeout_s: design_required, image_attempts: fit_from_bench}
       image: {max_decode_pixels: deploy_required, max_side: none}   # max_side: the server's own longest-side cap, decision 144
       endpoints:
         chat: deploy_required

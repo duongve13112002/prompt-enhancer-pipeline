@@ -13,6 +13,7 @@ from .model_client import (MODEL_CALL_REVISION, ModelCallError, ModelClientRun, 
                            semantic_role_settings)
 from .model_resources import CapacityLog, await_owned, flow
 from .profile_prompt import load_prompt
+from .reply_retry import Attempts, call_until_valid
 from .storage import StorageError, artifact_key, concept_id
 from .storage.identity import canonical_json
 from .storage.store import check_snapshot_id
@@ -25,7 +26,7 @@ STORED_SCHEMA = 'concept_card.v0'
 LAYOUT = 1
 # declared revision of the code that shapes a K3 grouping bundle or card (KBS-S3-1); keys the artifacts in place of a
 # hash of module source. Bump it with any edit to a function its guard pins (tests/test_stage_revisions.py).
-K3_CARD_REVISION = 'k3-card-2'
+K3_CARD_REVISION = 'k3-card-3'
 VISIBLE = frozenset(('clear', 'partial'))
 
 
@@ -165,10 +166,22 @@ def assemble_card(concept, rows, payload, reply, curated, override, images, card
             'lint_findings': findings, 'revisions': revisions}
 
 
-def _grouping_bundle(revisions, payload, key, reply, record):
-    """The stored layout of one completed grouping call."""
+def _grouping_bundle(revisions, payload, key, reply, record, attempts):
+    """The stored layout of one completed grouping call; `attempts` lists every request made for it (decision 183),
+    `records` their call records (the last one is `record`)."""
     return {'version': LAYOUT, 'revisions': revisions, 'payload': payload, 'key': key, 'reply': reply,
-            'record': record}
+            'record': record, 'attempts': attempts.entries, 'records': attempts.records}
+
+
+def _failure_row(writer, key, attempts, revisions, error=None):
+    """The k3_call_failure checkpoint of one concept: every attempt so far (index, seed, closed code, reply digest) and
+    its call records. Rewritten after each refused attempt, so a crash between attempts keeps the earlier ones. It is
+    not referenced by a snapshot, so garbage collection removes it after `sync.gc.retention`."""
+    code = failure_code(error) if error is not None else next(
+        (entry['code'] for entry in reversed(attempts.entries) if entry['code']), None)
+    writer.checkpoints('k3_call_failure').commit(
+        key, 'k3_call_failure', canonical_json({'error': code, 'attempts': attempts.entries}).encode('utf-8'),
+        revisions=revisions, call_records=attempts.records)
 
 
 def _card_revisions(record, role, config, snapshot_id):
@@ -266,7 +279,9 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
                                    'stage_revision': K3_CARD_REVISION, 'model_call': MODEL_CALL_REVISION})}
     effective = {concept_id(name): value for name, value in overrides['data'].items()}
     unknown = [name for name in overrides['data'] if concept_id(name) not in concepts]
-    report = {'built': 0, 'reused_grouping': 0, 'failed': {}, 'lint_findings': [], 'unmatched_overrides': sorted(unknown)}
+    attempts_allowed = config['cards']['reply_attempts']
+    report = {'built': 0, 'reused_grouping': 0, 'failed': {}, 'lint_findings': [], 'unmatched_overrides': sorted(unknown),
+              'attempts': {'allowed': attempts_allowed, 'used': {}}}
     artifacts, result = [], []
     owned_run = None
     by_concept = {}  # grouped once, in `current` order, instead of a filter per concept
@@ -289,13 +304,16 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
                 payload['suppressed_facets'] = override.get('suppress', [])
                 key = artifact_key('k3_grouping', _digest({'identity': 'card_payload_v1', 'payload': payload}), revisions)
                 record = None
+                attempts = Attempts()
                 try:
                     if grouping.done(key) or grouping.reusable(key):
                         try:
                             bundle = json.loads(grouping.load(key))
                             if (bundle['version'] != LAYOUT or bundle['revisions'] != revisions
                                     or bundle['payload'] != payload or bundle['key'] != key
-                                    or grouping.state(key)['call_records'] != [bundle['record']]):
+                                    or grouping.state(key)['call_records'] != bundle['records']
+                                    or bundle['records'][-1:] != [bundle['record']]
+                                    or len(bundle['attempts']) != len(bundle['records'])):
                                 raise ValueError('completed bundle does not match current input or call record')
                             reply = parse_card_reply(bundle['reply'], payload, project_root=root)
                             record = bundle['record']
@@ -311,13 +329,21 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
                             bound = await owned_run.for_role('card_builder')
                         else:
                             bound = await client.for_role('card_builder')
-                        value, record = await bound.call(prompt, canonical_json(payload))
-                        if value is None:
-                            raise ValueError(record['status'])
-                        reply = parse_card_reply(value, payload, project_root=root)
-                        bundle = _grouping_bundle(revisions, payload, key, reply, record)
+                        text = canonical_json(payload)
+
+                        def call(seed):  # attempt 0 is the profile's request; a retry changes only the seed
+                            return bound.call(prompt, text) if seed is None else bound.call(prompt, text, seed=seed)
+
+                        def persist(log):  # each refused attempt is kept before the next one starts
+                            _failure_row(writer, key, log, revisions)
+
+                        reply, _, record = await call_until_valid(
+                            call, lambda value: parse_card_reply(value, payload, project_root=root),
+                            attempts=attempts_allowed, base_seed=role['sampling']['seed'], log=attempts, persist=persist)
+                        bundle = _grouping_bundle(revisions, payload, key, reply, record, attempts)
                         grouping.commit(key, 'k3_grouping', canonical_json(bundle).encode('utf-8'),
-                                        revisions=revisions, call_records=[record])
+                                        revisions=revisions, call_records=attempts.records)
+                        report['attempts']['used'][identity] = len(attempts.entries)
                     artifact = grouping.state(key)['output_key']
                     card_revisions = _card_revisions(record, role, config, snapshot_id)
                     card = assemble_card(concept, rows, payload, reply, curated, override, images,
@@ -343,10 +369,9 @@ async def build_cards(store, config, handoff, *, observations, images, folder_im
                         report['lint_findings'].extend(dict(finding, concept_id=identity) for finding in card['lint_findings'])
                 except (ValueError, TypeError, UnicodeError, ModelCallError) as error:
                     record_probe_failure(writer, key, error, revisions)
-                    if record is not None:
-                        writer.checkpoints('k3_call_failure').commit(
-                            key, 'k3_call_failure', canonical_json({'error': failure_code(error)}).encode('utf-8'),
-                            revisions=revisions, call_records=[record])
+                    if attempts.records:
+                        _failure_row(writer, key, attempts, revisions, error)
+                        report['attempts']['used'][identity] = len(attempts.entries)
                     grouping.fail(key, failure_code(error), revisions=revisions)
                     report['failed'][identity] = failure_code(error)
 

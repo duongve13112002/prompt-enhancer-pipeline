@@ -917,6 +917,13 @@
                 }
               ]
             },
+            "reply_attempts": {
+              "description": "Decision 188: requests per image when an observer reply fails validation; attempt 0 is the profile's request, every later attempt changes only sampling.seed. 1 means no retry. Fitted by the seed experiment (fit_from_bench until then).",
+              "anyOf": [
+                {"type": "integer", "minimum": 1},
+                {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}
+              ]
+            },
             "facet_schema_version": {
               "anyOf": [
                 {
@@ -959,6 +966,7 @@
             "one_image_per_call",
             "lazy_observation_of_rest",
             "representatives_per_folder",
+            "reply_attempts",
             "facet_schema_version",
             "region_output"
           ],
@@ -1122,9 +1130,17 @@
                   ]
                 }
               ]
+            },
+            "reply_attempts": {
+              "description": "Decision 183: requests per concept when a card reply fails validation; attempt 0 is the profile's request, every later attempt changes only sampling.seed. 1 means no retry. Fitted by the seed experiment (fit_from_bench until then).",
+              "anyOf": [
+                {"type": "integer", "minimum": 1},
+                {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}
+              ]
             }
           },
           "required": [
+            "reply_attempts",
             "stability_policy",
             "min_visible_images",
             "low_diversity_max_group_ratio",
@@ -3564,9 +3580,11 @@
                             "type": "object",
                             "properties": {
                               "max_requests": {"anyOf": [{"type": "integer", "minimum": 1}, {"const": "design_required"}]},
-                              "timeout_s": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "design_required"}]}
+                              "timeout_s": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"const": "design_required"}]},
+                              "image_attempts": {"description": "Decision 188: requests per challenge of the plain `image` probe when its reply is malformed (PROBE_MALFORMED); challenge attempt 0 is the profile's request, every later attempt changes only sampling.seed. 1 means no retry. Each attempt counts against max_requests.",
+                                                 "anyOf": [{"type": "integer", "minimum": 1}, {"enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]}]}
                             },
-                            "required": ["max_requests", "timeout_s"], "additionalProperties": false
+                            "required": ["max_requests", "timeout_s", "image_attempts"], "additionalProperties": false
                           },
                           "image": {
                             "type": "object",

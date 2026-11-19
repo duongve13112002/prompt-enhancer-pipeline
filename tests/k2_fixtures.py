@@ -39,8 +39,8 @@ def environment(project_root, tmp_path, profile):
     config['sync'].update(mass_deletion_guard={'max_removed_fraction': 1}, snapshots={'keep': 1},
                           gc={'retention': '1d'})
     config['embedding']['query_text_limit'] = 128
-    config['observe'].update(representatives_per_folder=1, facet_schema_version='image_observation.v0')
-    config['cards']['min_visible_images'] = 1
+    config['observe'].update(representatives_per_folder=1, facet_schema_version='image_observation.v0', reply_attempts=1)
+    config['cards'].update(min_visible_images=1, reply_attempts=1)  # test-only: one request, as before decisions 183 and 188
     config['index'].update(engine='numpy_exact', metric='inner_product', build={'block_rows': 2})
     config['index']['lexical']['ngram_size'] = 2
     config['storage'].update(kb_store=store_path.relative_to(project_root).as_posix(),

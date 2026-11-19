@@ -128,7 +128,7 @@ def test_kb_sync_cli_probes_without_injection(k2_env, monkeypatch, capsys):
     config = env.config
     config['embedding']['query_text_template'] = '{text}'
     config['runtime']['cpu_workers'] = 1
-    config['vlm']['backends']['main']['probe'] = {'max_requests': 20, 'timeout_s': 2}  # Test-only allowance for five contexts.
+    config['vlm']['backends']['main']['probe'] = {'max_requests': 20, 'timeout_s': 2, 'image_attempts': 1}  # Test-only allowance for five contexts.
     # Bind only the CLI's project-root discovery to the tiny temporary project.
     monkeypatch.setattr(cli, '__file__', str(env.root / 'src/prompt_enhancer/__main__.py'))
     bundle = Path(__file__).resolve().parents[1] / 'contracts/probes/model_capabilities.v0.json'

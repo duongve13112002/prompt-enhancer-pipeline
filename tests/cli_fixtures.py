@@ -73,7 +73,7 @@ def pipeline_config(model_test_profile, tmp_path, project_root, port, *, retriev
     config['resolution']['random_seed'] = 7
     config['serving']['http'] = {'max_request_bytes': REQUEST_CAP}
     backend = config['vlm']['backends']['main']
-    backend.update(base_urls=[f'http://127.0.0.1:{port}'], probe={'max_requests': 12, 'timeout_s': 2})
+    backend.update(base_urls=[f'http://127.0.0.1:{port}'], probe={'max_requests': 12, 'timeout_s': 2, 'image_attempts': 1})
     backend['image']['max_decode_pixels'] = 20_000_000
     if retrieval:
         config['vlm']['backends']['embedder']['base_urls'] = backend['base_urls']

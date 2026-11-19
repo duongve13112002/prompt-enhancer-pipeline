@@ -23,7 +23,7 @@ OVERRIDES = {
     B + 'http.write_timeout_s': 4, B + 'http.pool_timeout_s': 5,
     B + 'http.max_retries': 1, B + 'http.backoff_initial_s': 0.1,
     B + 'http.backoff_max_s': 0.5, B + 'http.retry_statuses': [503],
-    B + 'probe.max_requests': 3, B + 'probe.timeout_s': 2,
+    B + 'probe.max_requests': 3, B + 'probe.timeout_s': 2, B + 'probe.image_attempts': 1,
     B + 'image.max_decode_pixels': 10_000_000,
     'vision.max_image_side': 640, 'vision.format': 'png', 'vision.quality': 40,
     'vision.alpha_policy.mode': 'refuse', 'vision.alpha_policy.background': '#123456',

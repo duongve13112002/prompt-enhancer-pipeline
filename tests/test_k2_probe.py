@@ -193,7 +193,7 @@ def test_production_plan_propagates_transport_budget_exhaustion(k2_env):
     from prompt_enhancer.model_resources import BudgetExhausted
     env = k2_env
     backend = env.config['vlm']['backends']['main']
-    backend['probe'] = {'max_requests': 3, 'timeout_s': 1}
+    backend['probe'] = {'max_requests': 3, 'timeout_s': 1, 'image_attempts': 1}
     run = NamingServer().run(env)
     original = run.transports['main']
     requests = []

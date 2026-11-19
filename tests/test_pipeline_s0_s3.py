@@ -123,7 +123,7 @@ def test_generate_request_runs_s0_to_s3_on_production_entry_points(model_test_pr
     config['vlm']['backends']['embedder']['base_urls'] = [url]
     config['embedding']['query_text_limit'] = 1000  # labelled test-only
     # Labelled test-only: room for the production capability probes and their bundled 96x64 images (KBS-F1).
-    config['vlm']['backends']['main']['probe'] = {'max_requests': 10, 'timeout_s': 2}
+    config['vlm']['backends']['main']['probe'] = {'max_requests': 10, 'timeout_s': 2, 'image_attempts': 1}
     config['vlm']['backends']['main']['image']['max_decode_pixels'] = 20_000_000
     config['candidates']['max_prompt_windows'] = 100000
     rows = dataset(revision=query_embedder_settings(config).revision)

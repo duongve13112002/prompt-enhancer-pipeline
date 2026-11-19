@@ -7,7 +7,7 @@ import base64
 import hashlib
 from io import BytesIO
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -109,6 +109,8 @@ PROBE_SCHEMA = {'type': 'object', 'properties': {'value': {'type': 'integer'}},
 class ProbeVerdict:
     success: bool
     code: str | None = None
+    # SHA-256 of the reply text when one was read (decision 188 attempt record); never the text, never compared.
+    digest: str | None = field(default=None, compare=False)
 
     def __post_init__(self):
         if type(self.success) is not bool or (self.success and self.code is not None) or (
@@ -118,6 +120,7 @@ class ProbeVerdict:
 
 def probe_verdict(response, provider, expected):
     """Classify only protocol structure, then exact JSON shape and integer answer."""
+    digest = None
     try:
         payload = response.json()
         if type(payload) is not dict:
@@ -189,12 +192,14 @@ def probe_verdict(response, provider, expected):
             return ProbeVerdict(False, 'PROBE_MALFORMED')
         if type(text) is not str:
             return ProbeVerdict(False, 'PROBE_MALFORMED')
+        digest = hashlib.sha256(text.encode('utf-8', 'surrogatepass')).hexdigest()
         value = strict_json(text)
         if type(value) is not dict or set(value) != {'value'} or type(value['value']) is not int:
-            return ProbeVerdict(False, 'PROBE_MALFORMED')
-        return ProbeVerdict(True) if value['value'] == expected else ProbeVerdict(False, 'PROBE_WRONG_ANSWER')
+            return ProbeVerdict(False, 'PROBE_MALFORMED', digest)
+        return (ProbeVerdict(True, digest=digest) if value['value'] == expected
+                else ProbeVerdict(False, 'PROBE_WRONG_ANSWER', digest))
     except (KeyError, IndexError, TypeError, ValueError, AttributeError):
-        return ProbeVerdict(False, 'PROBE_MALFORMED')
+        return ProbeVerdict(False, 'PROBE_MALFORMED', digest)
 
 
 def verify_probe_reply(response, provider, expected):
@@ -247,10 +252,23 @@ def probe_image_hashes(body, provider):
     return hashes
 
 
-def production_probe_cases(bundle, image_bytes, backend, role, vision, capability, max_side, *, warnings=None):
+def probe_image_challenges(project_root):
+    """How many image challenges the probe bundle holds, read without decoding them, or None when it cannot be read
+    (the profile loader then leaves the request arithmetic to the runtime)."""
+    try:
+        with (Path(project_root) / BUNDLE_PATH).open('rb') as stream:
+            count = len(json.loads(stream.read(max(size for size, _ in BUNDLE_PINS) + 1))['images'])
+        return count if count > 0 else None
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def production_probe_cases(bundle, image_bytes, backend, role, vision, capability, max_side, *, warnings=None,
+                           seed=None):
     """Build only the demanded challenge; deployment choices come from validated config.
 
     `max_side` is the effective image side generation would use for this role and backend (never re-derived here).
+    `seed` replaces `sampling.seed` in every body (a probe retry, decision 188); nothing else changes.
     """
     provider = backend['provider']
     image_case = capability == 'image' or capability.startswith('image+')
@@ -268,6 +286,8 @@ def production_probe_cases(bundle, image_bytes, backend, role, vision, capabilit
             images = [prepare_probe_image(data, max_side, backend, role, vision)]
         probe_role = deepcopy(role)
         probe_role['output'] = dict(role['output'], format=fmt, schema_id=BUNDLE_ID)
+        if seed is not None:
+            probe_role['sampling']['seed'] = seed
         if provider == 'openai_compatible':
             body, dropped = openai_request(backend, probe_role, None, prompt, schema=PROBE_SCHEMA,
                                            images=images, mapped=True)
@@ -285,6 +305,7 @@ class ProbeResult:
     capabilities: dict
     errors: dict
     evidence: tuple = ()
+    digests: dict = field(default_factory=dict)  # case name -> reply digest of the last verdict that carried one
 
 
 def summarize_probe_group(result, names, capability):
@@ -322,7 +343,7 @@ async def probe_capabilities(cases, max_requests, timeout_s):
     if (type(max_requests) is not int or max_requests < 1 or type(timeout_s) not in (int, float)
             or not math.isfinite(timeout_s) or timeout_s <= 0):
         raise ValueError('invalid probe limits')
-    capabilities, errors = {}, {}
+    capabilities, errors, digests = {}, {}, {}
     failed, incomplete = False, False
     for index, (name, case) in enumerate(cases.items()):
         if index >= max_requests:
@@ -330,6 +351,8 @@ async def probe_capabilities(cases, max_requests, timeout_s):
         try:
             result = await asyncio.wait_for(case(), timeout=timeout_s)
             if isinstance(result, ProbeVerdict):
+                if result.digest:
+                    digests[name] = result.digest
                 if result.code == 'PROBE_INCOMPLETE':
                     incomplete = True
                 else:
@@ -343,12 +366,12 @@ async def probe_capabilities(cases, max_requests, timeout_s):
         except BudgetExhausted:
             raise
         except ProbeLimitExhausted:
-            return ProbeResult('incomplete', capabilities, {**errors, name: 'PROBE_INCOMPLETE'})
+            return ProbeResult('incomplete', capabilities, {**errors, name: 'PROBE_INCOMPLETE'}, digests=digests)
         except Exception as error:
             failed = True
             errors[name] = type(error).__name__
     status = 'failed' if failed else ('incomplete' if incomplete or len(capabilities) < len(cases) else 'complete')
-    return ProbeResult(status, capabilities, errors)
+    return ProbeResult(status, capabilities, errors, digests=digests)
 
 
 def require_capabilities(result, required):

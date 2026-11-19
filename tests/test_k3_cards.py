@@ -172,7 +172,7 @@ def test_card_probe_failure_evidence_persists_before_generation(k2_env, monkeypa
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(Path(__file__).resolve().parents[1] / BUNDLE_PATH, target)
     k2_env.config['vlm']['backends']['main']['probe'] = {'max_requests': 1 if failure == 'incomplete' else 2,
-                                                       'timeout_s': 1}
+                                                       'timeout_s': 1, 'image_attempts': 1}
     seen = []
     double = ProductionServer()
     original = ModelTransport.__init__
