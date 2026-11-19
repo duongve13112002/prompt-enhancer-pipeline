@@ -2076,7 +2076,9 @@ def test_fix4_pm_set_writes_a_valid_file_again_with_equal_values(
     expected = plain(ODD)
     expected["blocks"][0]["wake_note"] = "task"
     assert plain(written) == expected  # every value it did not edit is equal
-    assert b"1.50" not in written and b'"n": 1.5,' in written and "\u00e9".encode() in written  # canonical spelling
+    # canonical spelling; AHEAD is left out first because its microseconds can contain "1.50" (CI 33 flake)
+    assert b"1.50" not in written.replace(AHEAD.encode(), b"") and b'"n": 1.5,' in written and "\u00e9".encode() in written
+    assert AHEAD.encode() in written  # the time is kept verbatim, so leaving it out above hides nothing else
     assert b"\r\n" in written and b"\n" not in written.replace(b"\r\n", b"")  # the file's own line ending
     assert us.stored_blocks(written).tag == "valid"
 
