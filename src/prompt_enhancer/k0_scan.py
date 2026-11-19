@@ -195,6 +195,14 @@ def read_source_file(root, parts, *, max_bytes=None):
 
     `root` is the already resolved knowledge root; `parts` are the relative components K0 recorded.
     """
+    return b''.join(iter_source_file(root, parts, max_bytes=max_bytes))
+
+
+def iter_source_file(root, parts, *, max_bytes=None):
+    """The blocks of `read_source_file`, one at a time, so a caller can walk a large file without holding it (R-017).
+    The same checks run: a link on any component, a size above `max_bytes` (SourceTooLarge, also when the file grows
+    while it is read) and a change between the first and the last read (ScanError, raised after the last block).
+    The generator must be closed (or consumed) by the caller; closing it releases the descriptors."""
     parts = tuple(parts)
     if not parts or any(not part or part in ('.', '..') or '/' in part or '\\' in part or '\x00' in part
                         for part in parts):
@@ -212,7 +220,6 @@ def read_source_file(root, parts, *, max_bytes=None):
             initial = os.fstat(fd)
             if max_bytes is not None and initial.st_size > max_bytes:
                 raise SourceTooLarge(f'{path}: source exceeds byte limit')
-            chunks = []
             size = 0
             while True:
                 block = os.read(fd, _CHUNK_BYTES if max_bytes is None else min(_CHUNK_BYTES, max_bytes - size + 1))
@@ -221,11 +228,10 @@ def read_source_file(root, parts, *, max_bytes=None):
                 size += len(block)
                 if max_bytes is not None and size > max_bytes:
                     raise SourceTooLarge(f'{path}: source exceeds byte limit')
-                chunks.append(block)
+                yield block
             final = os.fstat(fd)
             if (initial.st_size, initial.st_mtime_ns) != (final.st_size, final.st_mtime_ns):
                 raise ScanError(f'{path}: changed while reading')
-    return b''.join(chunks)
 
 
 def scan_source(root, *, info_names, encoding, extensions, separator, previous, cache=None, workers=1,

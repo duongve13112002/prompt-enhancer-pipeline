@@ -86,10 +86,19 @@ COMMAND_READS = {
                       'serving.total_deadline_s', 'serving.http'),
     'eval build': ('evaluation', 'storage.kb_store', 'storage.lock', 'storage.data_root', 'storage.table_format',
                    'vlm.roles.scenario_generator'),
-    'eval run': ('evaluation', 'profiles', 'rag', 'vision', 'candidates', 'embedding', 'planner', 'resolution',
+    # `eval run` consumes these `evaluation` leaves only (T-016 P4): `min_items_per_class`, `languages` and the import-only
+    # judge leaves are not read, so an unresolved value of theirs is not a refusal here.
+    'eval run': ('evaluation.scenario_kinds', 'evaluation.split_by', 'evaluation.run',
+                 'evaluation.judge.blinding_seed', 'evaluation.judge.score_min', 'evaluation.judge.score_max',
+                 'evaluation.judge.rubric_prompt_id',
+                 'profiles', 'rag', 'vision', 'candidates', 'embedding', 'planner', 'resolution',
                  'clarification', 'creativity', 'edit', 'assembly', 'writer', 'validation', 'runtime',
-                 'storage.data_root', 'storage.table_format',
+                 'storage.data_root', 'storage.table_format', 'storage.lock',
                  'vlm.roles.planner', 'vlm.roles.writer', 'vlm.roles.verifier'),
+    # `storage.lock` builds the run lock that one `eval run` (or one `eval import`) holds on a run (fix round 1, P1)
+    'eval import': ('evaluation.judge.score_min', 'evaluation.judge.score_max', 'evaluation.judge.min_scorers',
+                    'evaluation.judge.under_test_families', 'evaluation.judge.max_score_file_bytes',
+                    'evaluation.run.max_sidecar_bytes', 'storage.data_root', 'storage.table_format', 'storage.lock'),
     'eval fit': ('evaluation', 'storage.data_root'),
 }
 
@@ -1925,6 +1934,61 @@ def validate_serving(config, path='configuration', sources=None, project_root=No
     return values
 
 
+EVALUATION_LEAVES = {  # protocol-bound: the `evaluation` leaves each evaluation command consumes (T-016 P4)
+    'eval run': ('scenario_kinds', 'split_by', 'run.max_set_bytes', 'run.max_source_image_bytes', 'run.max_concurrency',
+                 'run.max_sidecar_bytes', 'judge.blinding_seed', 'judge.score_min', 'judge.score_max',
+                 'judge.rubric_prompt_id'),
+    'eval import': ('judge.score_min', 'judge.score_max', 'judge.min_scorers', 'judge.under_test_families',
+                    'judge.max_score_file_bytes', 'run.max_sidecar_bytes'),
+}
+SPLIT_RULES = ('concept',)  # protocol-bound: the one split rule the runner can check (a concept is in one split only)
+
+
+def validate_evaluation_settings(config, command, path='configuration', sources=None, project_root=None):
+    """The `evaluation` values `eval run` or `eval import` consume, after the loader's per-leaf checks, as one mapping
+    keyed by the leaf name below `evaluation`. A missing, unresolved or malformed leaf is refused naming its key; no
+    value is defaulted. Cross-field rule: the scale must have a lowest value below its highest. No rule ties
+    `run.max_concurrency` to `runtime.trace.queue_limit`: a trace slot is freed only after its trace write (and monitor)
+    finishes, so no setting guarantees capacity; a unit the pipeline refuses for capacity is recorded `not_run`
+    (reason `trace_capacity`) and retried on the next invocation (fix round 1, P3)."""
+    sources = {} if sources is None else sources
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    schema = _configuration_schema(root, config)
+    values = {}
+    for leaf in EVALUATION_LEAVES[command]:
+        key = f'evaluation.{leaf}'
+        value = _get(config, key, path)
+        where = f'{_source(sources, key, path)}: {key}'
+        _sentinel(value, path, key, sources)
+        _validate(value, _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
+        _require_finite(value, path, key, sources)
+        if leaf in ('scenario_kinds', 'judge.under_test_families'):
+            if (type(value) is not list or not value or len(set(value)) != len(value)
+                    or any(type(item) is not str or not item for item in value)):
+                raise ConfigurationError(f'{where}: expected a non-empty list of distinct non-empty strings')
+        elif leaf == 'split_by':
+            if value not in SPLIT_RULES:
+                raise ConfigurationError(f'{where}: expected one of {list(SPLIT_RULES)}')
+        elif leaf == 'judge.rubric_prompt_id':
+            if type(value) is not str or not value:
+                raise ConfigurationError(f'{where}: expected a prompt id')
+        else:
+            low = 0 if leaf == 'judge.blinding_seed' else None
+            limit = 2 ** 63 - 1 if leaf == 'judge.blinding_seed' else sys.maxsize
+            if type(value) is not int or value > limit or (low is not None and value < low):
+                raise ConfigurationError(f'{where}: expected a native integer in range')
+            if leaf not in ('judge.score_min', 'judge.score_max', 'judge.blinding_seed') and value < 1:
+                raise ConfigurationError(f'{where}: expected a positive integer')
+        values[leaf] = deepcopy(value)
+    if 'judge.score_min' in values and values['judge.score_min'] >= values['judge.score_max']:
+        raise ConfigurationError(f'{_source(sources, "evaluation.judge.score_min", path)}: evaluation.judge.score_min: '
+                                 'must be below evaluation.judge.score_max')
+    if 'judge.min_scorers' in values and values['judge.min_scorers'] < 2:
+        raise ConfigurationError(f'{_source(sources, "evaluation.judge.min_scorers", path)}: '
+                                 'evaluation.judge.min_scorers: two scorers of different families are required')
+    return values
+
+
 def _require_validation_version(config, path):
     """Refuse legacy requests before any version-dependent field or schema read."""
     if not isinstance(config, dict) or type(config.get('schema_version')) is not int or config['schema_version'] != 2:
@@ -2155,10 +2219,14 @@ def _validate_loaded_config(config, command, root, path, sources):
         validate_pipeline_reads(config, path, sources, root)
         if command == 'enhance serve':
             validate_serving(config, path, sources, root)
+        if command == 'eval run':
+            validate_evaluation_settings(config, command, path, sources, root)
         if config['rag']['enabled']:
             validate_index_reads(config, path, sources, root)
             validate_candidates_reads(config, path, sources, root)
             validate_assembly_reads(config, path, sources, root)
+    if command == 'eval import':
+        validate_evaluation_settings(config, command, path, sources, root)
     if command == 'kb sync':
         _validate_store_reads(config, command, root, path, sources)
         for key in ('sync.retained_images.max_image_bytes', 'sync.retained_images.max_total_bytes'):

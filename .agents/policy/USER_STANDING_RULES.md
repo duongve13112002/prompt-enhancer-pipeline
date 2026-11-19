@@ -11,15 +11,15 @@ S07 | GPU: `nvidia-smi` first, tell the peer "starting GPU job" and "GPU free", 
 S13 | Every user decision enters DECISIONS_INDEX in the same session with an `applied:` marker | seed rules | `decisions_applied.py check`
 S14 | Delegate per `.agents/ORCHESTRATION.md` (read it before each assignment); at most 8 running agents; Claude workers only via `cli_worker.py` | seed rules | `cli_worker.py`
 S15 | Reuse a worker only within its task (fix rounds, next phase, same worktree); a new task gets a fresh worker and worktree; retire a worker over about 250K | user 2026-11-13 (decision 45) | remembered only
-S16 | Every brief: Step 0 then STOP (small tasks: Step 0 atop the report, then continue; Codex still two messages), footer, `Kind:`, R-IDs (feature), class test sets (code) | seed rules; changed 2026-11-13 (decision 49) | `brief_lint.py` via `cli_worker.py start/send`
-S17 | Start at the lowest effort that can meet the gate; raise effort before changing model; `high` for builds, P2+ and high-risk reviews | seed rules; 2026-11-10 model guidance (N093) | remembered only
+S16 | Every brief: Step 0 then STOP (small tasks: Step 0 atop the report, then continue; Codex still two messages), footer, `Kind:`, R-IDs (feature), class test sets (code) | seed rules; changed 2026-11-13 (decision 49) | `brief_lint.py`
+S17 | Start at the lowest effort that can meet the gate; raise effort before changing model; `high` for builds, P2+ and high-risk reviews | seed rules; N093 | remembered only
 S18 | Models and reviewers per PM_POLICY section 2: Gemini 3.8 Flash is the first reviewer of ordinary work once T-024 allows uncommitted patches; high-risk = pre-mortem plus 2 reviewers of different families; Fable 5.2 only after Opus 5.5 `high` fails | user 2026-11-10 (Fable 5.1 to 5.2) | remembered only
 S19 | Relay every worker finding in full, conflicts with decisions first; check a cited decision verbatim before relaying a question | seed rules | remembered only
 S20 | Each own mistake gets a line in LESSONS_LEARNED with its prevention rule or gate | seed rules 2026-10-17 | remembered only
 S21 | Scout audit for forgotten plan items once per wave and before a long absence | seed rules 2026-10-28 "thường xuyên kiểm tra plan" | `audit_brief.md`
 S22 | Haiku 5.5 read-only audit daily while active and before GPU rounds: met / not met / cannot tell + evidence; the PM verifies every "not met" | seed rules 2026-10-29 | `audit_brief.md`, `audit_extract.py`
 S23 | Config everything: no source constant for a limit, window, provider or model; an absent key is refused | seed rules | config sweep tests
-S24 | Live files within their character budgets; repository text English, replies to the user in Vietnamese | seed rules | `doc_budgets.json` via `session_context.py`
+S24 | Live files within their character budgets; language per AGENTS.md section 1 | seed rules | `doc_budgets.json` via `session_context.py`
 S25 | Facts from the store or the run record, never from memory | seed rules 2026-10-18 | remembered only
 S26 | Supervisor every 45 min while work is active (never above 50) to wake the PM and keep its cache warm; PM_POLICY section 3 | seed rules; user 2026-11-10 | `pm_invariants.py`
 S27 | No hardcode to pass, nor as a checker: anything that may vary is config or model; no per-language rules | seed rules 2026-11-07 | remembered only
@@ -34,7 +34,7 @@ S35 | CI on the latest Ubuntu and on Windows; the repository is public only duri
 S36 | Fresh Haiku, Sonnet and Opus readers cold-read new documents; their questions go to the user | user 2026-11-11 (decision 27) | PM_POLICY section 8
 S37 | Every report claim carries its evidence pointer; "unknown" is a valid answer; nothing is invented | user 2026-11-11 (decision 24) | remembered only (task T-021 adds the report lint)
 S38 | Cloud backends (Claude, default Haiku 5.5; Gemini, default gemini-3.1-flash-lite) only when configured; local is the default; keys in `.secrets/`; ask the user for a request count before any cloud call | user 2026-11-11 (decision 28) | remembered only
-S39 | The orchestrator commits and pushes verified work itself, without asking and without force; workers never commit, push or merge | user 2026-11-11 (decisions 36, 37); changed 2026-11-14 (decision 77) | AGENTS.md section 11
+S39 | The orchestrator commits and pushes verified work, no asking, no force; workers never do | user 2026-11-11 (decisions 36, 37); changed 2026-11-14 (decision 77) | AGENTS.md section 11
 S40 | Clean `.tmp` after each task, at session start and end and on every wake (orphans past the configured age); never protected trees | user 2026-11-13 (decision 43) | remembered only (task T-025 adds the sweep)
 S41 | Codex image generation tests the flow; generate only what a test needs and reuse images (Codex quota) | user 2026-11-13 (decision 47) | remembered only
 S42 | Fix existing agent-tooling defects yourself, no task command; new tooling features stay in T-020 to T-026; another family reviews each reported fix | user 2026-11-14 (decision 72) | remembered only
@@ -44,3 +44,4 @@ S45 | Spare the shared SSD: no whole-tree copies, one fixed basetemp deleted aft
 S46 | Mandatory: model servers busy to configured capacity (concurrent requests, no stage-wide barrier); remove repeated work first; never trade accuracy for speed; back off only on real 429, overload or OOM; a differential test proves each faster path equals the serial one; machine limits hold | user 2026-11-17 (decision 149) | remembered only (task RES-1)
 S47 | Lean process: 1 build, 1 review, max 1 fix round; diff-only retest; task file ~20 KB; 1 reviewer unless high-risk; no Step 0 stop once the cause is clear; PM measures quality | user 2026-11-18 (decision 164) | remembered only
 S48 | Every build brief asks for a pre-mortem (failure classes, each tested before handing in); retest as soon as the fix lands, by a fresh reviewer if the old one idled past its cache window; the PM measures coordination | user 2026-11-19 (decision 169) | remembered only
+S49 | Never break the pipeline's intent (R-001, R-004, R-009, R-026); every brief, review and decision checks it | user 2026-11-19 (decision 170) | AGENTS.md section 10

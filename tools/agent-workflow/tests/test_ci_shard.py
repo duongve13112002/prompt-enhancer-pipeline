@@ -11,6 +11,7 @@ No test double: the children are real pytest processes, the weight table is the 
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import subprocess
@@ -378,16 +379,165 @@ def test_child_environ_drops_both_variables_and_keeps_the_rest() -> None:
     assert cs.child_environ(env) == {"PATH": "x", "PE_OTHER": "y"}
 
 
-def test_every_test_that_spawns_a_pytest_child_takes_its_environment_from_the_shared_helper() -> None:
-    """Class guard (fix round 1): a spawn of `python -m pytest` in either suite must scrub the shard variables."""
-    spawn = '"-m", ' + '"pytest"'  # split so this file does not match itself by accident
+_SPAWN_CALLS = frozenset({"run", "Popen", "call", "check_call", "check_output"})  # `subprocess.<name>` or the bare import
+_SPAWN_BARE = frozenset({"Popen", "check_call", "check_output", "call"})  # `run` alone is too common a helper name
+# Spawns that run a child pytest on purpose with the raw environment, by (repo-relative file, enclosing function).
+DELIBERATE_RAW_ENV = {"tools/agent-workflow/tests/test_ci_shard.py": frozenset({"run"})}  # shows the leak: exit 4
+
+
+def _callee(call: ast.Call) -> str | None:
+    func = call.func
+    return func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+
+
+def _calls_child_environ(node: ast.AST) -> bool:
+    return any(isinstance(n, ast.Call) and _callee(n) == "child_environ" for n in ast.walk(node))
+
+
+def _is_pytest_command(node: ast.AST | None) -> bool:
+    """A list or tuple literal that runs pytest: `... "-m", "pytest" ...` or `"pytest", ...` as the first word."""
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return False
+    words = [e.value if isinstance(e, ast.Constant) and isinstance(e.value, str) else None for e in node.elts]
+    return any(word == "pytest" and (i == 0 or words[i - 1] == "-m") for i, word in enumerate(words))
+
+
+def _is_spawn(call: ast.Call) -> bool:
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return isinstance(func.value, ast.Name) and func.value.id == "subprocess" and func.attr in _SPAWN_CALLS
+    return isinstance(func, ast.Name) and func.id in _SPAWN_BARE
+
+
+def _runs_pytest(call: ast.Call, scope: ast.AST) -> bool:
+    command = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg == "args"), None)
+    if isinstance(command, ast.Name):  # `cmd = [sys.executable, "-m", "pytest"]` then `subprocess.run(cmd, ...)`
+        return any(
+            isinstance(n, ast.Assign) and _is_pytest_command(n.value)
+            and any(isinstance(t, ast.Name) and t.id == command.id for t in n.targets)
+            for n in ast.walk(scope)
+        )
+    return _is_pytest_command(command)
+
+
+def _scrubbed(call: ast.Call, scope: ast.AST, functions: dict[str, ast.AST]) -> bool:
+    """The `env=` of this one call is built by `child_environ()`: directly, through a variable assigned in the same
+    function, or through a helper of the same file whose body calls it. No `env=` means the parent's environment."""
+    env = next((k.value for k in call.keywords if k.arg == "env"), None)
+    if env is None:
+        return False
+    if _calls_child_environ(env):
+        return True
+    if isinstance(env, ast.Name):
+        return any(
+            isinstance(n, (ast.Assign, ast.AnnAssign)) and n.value is not None and _calls_child_environ(n.value)
+            and any(isinstance(t, ast.Name) and t.id == env.id
+                    for t in (n.targets if isinstance(n, ast.Assign) else [n.target]))
+            for n in ast.walk(scope)
+        )
+    if isinstance(env, ast.Call) and (helper := functions.get(_callee(env) or "")) is not None:
+        return _calls_child_environ(helper)
+    return False
+
+
+def unscrubbed_pytest_spawns(source: str, exempt: frozenset[str] = frozenset()) -> list[int]:
+    """Line of every child pytest spawn in `source` whose own `env=` is not built by `child_environ()` (decision 168).
+
+    The check is per spawn, not per file: a file with one scrubbed spawn and one that inherits the job's shard variables
+    reports the second. `exempt` names functions whose spawns run with the raw environment on purpose."""
+    tree = ast.parse(source)
+    functions = {n.name: n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    found: list[int] = []
+
+    def visit(node: ast.AST, scope: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            inner = child if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else scope
+            if isinstance(child, ast.Call) and _is_spawn(child) and _runs_pytest(child, inner):
+                if getattr(inner, "name", None) not in exempt and not _scrubbed(child, inner, functions):
+                    found.append(child.lineno)
+            visit(child, inner)
+
+    visit(tree, tree)
+    return sorted(found)
+
+
+def test_every_child_pytest_spawn_takes_its_own_environment_from_the_shared_helper() -> None:
+    """Class guard (fix round 1, per spawn since P3-SWEEP-1): each spawn of `python -m pytest` in either suite scrubs
+    the shard variables itself; a scrubbed spawn elsewhere in the same file does not cover it."""
     offenders = [
-        p.relative_to(ROOT).as_posix()
+        f"{p.relative_to(ROOT).as_posix()}:{line}"
         for d in SUITES.values()
         for p in sorted((ROOT / d).rglob("*.py"))
-        if spawn in (text := p.read_text(encoding="utf-8")) and "child_environ(" not in text  # a call, not an import
+        for line in unscrubbed_pytest_spawns(
+            p.read_text(encoding="utf-8"), DELIBERATE_RAW_ENV.get(p.relative_to(ROOT).as_posix(), frozenset())
+        )
     ]
     assert offenders == [], f"child pytest started with the parent environment: {offenders}"
+
+
+def test_the_deliberate_raw_environment_spawn_is_the_only_exemption_and_still_exists() -> None:
+    for name, functions in DELIBERATE_RAW_ENV.items():
+        found = unscrubbed_pytest_spawns((ROOT / name).read_text(encoding="utf-8"))
+        assert len(found) == len(functions) == 1, f"{name}: the exemption names a spawn that no longer exists: {found}"
+
+
+_TWO_SPAWNS = '''
+import os
+import subprocess
+import sys
+from ci_shard import child_environ
+
+def scrubbed():
+    return subprocess.run([sys.executable, "-m", "pytest", "-q"], env=child_environ(), check=False)
+
+def inherits():
+    return subprocess.run([sys.executable, "-m", "pytest", "-q"], check=False)
+'''
+
+
+def test_a_file_with_two_pytest_spawns_and_one_scrubbed_is_reported_at_the_other() -> None:
+    """The guard is per spawn: the old per-file text check passed this file because one call used the helper."""
+    assert "child_environ(" in _TWO_SPAWNS  # what the per-file check looked for
+    found = unscrubbed_pytest_spawns(_TWO_SPAWNS)
+    assert found == [_TWO_SPAWNS.splitlines().index("    return subprocess.run([sys.executable, \"-m\", \"pytest\", \"-q\"], check=False)") + 1]
+    same_function = _TWO_SPAWNS.replace("def inherits():\n    return", "def inherits():\n    child_environ()\n    return")
+    assert len(unscrubbed_pytest_spawns(same_function)) == 1  # a helper call nearby is not the spawn's own env
+
+
+@pytest.mark.parametrize(
+    ("body", "reported"),
+    [
+        ('subprocess.run([sys.executable, "-m", "pytest"], env=child_environ())', 0),
+        ('subprocess.Popen([sys.executable, "-m", "pytest"], env=child_environ())', 0),
+        ('subprocess.run([sys.executable, "-m", "pytest"], env=os.environ)', 1),
+        ('subprocess.run([sys.executable, "-m", "pytest"], env=dict(os.environ, X="1"))', 1),
+        ('subprocess.run([sys.executable, "-m", "pytest"], env=None)', 1),
+        ('subprocess.Popen([sys.executable, "-m", "pytest"])', 1),
+        ('subprocess.check_call(("pytest", "-q"))', 1),
+        ('subprocess.run(["pytest", "-q"], env=child_environ({}))', 0),
+        ('cmd = [sys.executable, "-m", "pytest"]\n    subprocess.run(cmd)', 1),
+        ('cmd = [sys.executable, "-m", "pytest"]\n    subprocess.run(cmd, env=child_environ())', 0),
+        ('env = {k: v for k, v in child_environ().items()}\n    subprocess.run([sys.executable, "-m", "pytest"], env=env)', 0),
+        ('env = dict(os.environ)\n    subprocess.run([sys.executable, "-m", "pytest"], env=env)', 1),
+        ('subprocess.run([sys.executable, "-c", "print(1)"])', 0),  # a child that is not pytest
+        ('subprocess.run([sys.executable, "-m", "pytest"], env=build())', 1),  # an unknown helper proves nothing
+    ],
+)
+def test_the_spawn_guard_recognizes_each_way_a_child_pytest_is_started(body: str, reported: int) -> None:
+    source = f"import os, subprocess, sys\nfrom ci_shard import child_environ\n\ndef test_x():\n    {body}\n"
+    assert len(unscrubbed_pytest_spawns(source)) == reported
+
+
+def test_the_spawn_guard_follows_a_same_file_helper_that_builds_the_environment() -> None:
+    source = (
+        "import subprocess, sys\nfrom ci_shard import child_environ\n\n"
+        "def _env():\n    return child_environ()\n\n"
+        "def _raw():\n    return {}\n\n"
+        "def good():\n    subprocess.run([sys.executable, '-m', 'pytest'], env=_env())\n\n"
+        "def bad():\n    subprocess.run([sys.executable, '-m', 'pytest'], env=_raw())\n"
+    )
+    assert unscrubbed_pytest_spawns(source) == [14]
+    assert unscrubbed_pytest_spawns(source, frozenset({"bad"})) == []
 
 
 # --- the workflow file -----------------------------------------------------------------------------------------------------

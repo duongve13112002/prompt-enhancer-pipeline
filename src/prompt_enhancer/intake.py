@@ -21,10 +21,41 @@ from .storage.store import RetainedFileError
 
 
 RETENTION_MESSAGE = 'image copies unavailable; run kb sync to republish'  # protocol-bound operator hint
+INDEX_DAMAGE_MESSAGE = 'knowledge index file missing or changed in the current snapshot'  # protocol-bound operator diagnostic (no remedy: kb sync does not repair a damaged current snapshot)
+_INDEX_PREFIX = 'index/'  # artifact-bound: where K5 keeps its files inside a snapshot (`k5_index.MANIFEST`)
 
 
 class AttachmentRetentionUnavailable(StorageError):
     """A fixed request diagnostic (store state, not configuration) with no values or paths."""
+
+
+class KnowledgeIndexDamaged(StorageError):
+    """A fixed request diagnostic: a K5 index file the manifest lists is missing or has the wrong size."""
+
+
+def _damaged_file_error(store):
+    """`pin` raised `RetainedFileError` without saying which listed file is damaged. Walk the current manifest in the
+    order `pin` checks it and name the cause by the file's place in the snapshot: a K5 index file is its own failure, any
+    other file (an image copy or the layout marker) is the retention case. A manifest that changed or cannot be read
+    since keeps the retention message this refusal always gave. Only fixed messages leave here, never a path (R-014)."""
+    try:
+        current = store.current()
+        if current is not None:
+            directory = store._snapshot_dir(current[0])
+            for row in store._manifest(directory, current[1]):
+                if row['kind'] != 'file':
+                    continue
+                try:
+                    size = store._entry_path(directory, row).stat().st_size
+                except OSError:
+                    size = None
+                if size != row['size_bytes']:
+                    if row['path'].startswith(_INDEX_PREFIX):
+                        return KnowledgeIndexDamaged(INDEX_DAMAGE_MESSAGE)
+                    break
+    except StorageError:
+        pass
+    return AttachmentRetentionUnavailable(RETENTION_MESSAGE)
 
 
 class KnowledgeGateway:
@@ -111,7 +142,8 @@ def _refuse(payload, code, error):
         if error.stage in ('validation', 'profile start', 'profile end', 'image start', 'image end',
                            'snapshot start', 'snapshot end'):
             label += f' at {error.stage}'
-    message = str(error) if isinstance(error, AttachmentRetentionUnavailable) else f'intake refused ({label})'
+    fixed = isinstance(error, (AttachmentRetentionUnavailable, KnowledgeIndexDamaged))
+    message = str(error) if fixed else f'intake refused ({label})'
     payload['error'] = {'code': code, 'message': message}
     # These are schema-bound refusal fields, not model output or inferred retrieval success.
     state = 'disabled' if payload['retrieval']['state'] == 'disabled' else 'failed'
@@ -196,7 +228,7 @@ def intake(request, config, *, project_root, profile_view=None):
             except RetainedFileError:
                 if request['task'] != 'edit' or not effective['edit']['attach_kb_reference_images']:
                     raise
-                raise AttachmentRetentionUnavailable(RETENTION_MESSAGE) from None
+                raise _damaged_file_error(gateway.store) from None
             if snapshot is not None and request['task'] == 'edit' and effective['edit']['attach_kb_reference_images']:
                 # Manifest-only check (no image bytes read); no snapshot at all stays the degraded SNAPSHOT_MISSING path.
                 try:

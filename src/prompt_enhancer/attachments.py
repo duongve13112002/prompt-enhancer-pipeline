@@ -79,9 +79,10 @@ def _discard(store, base, written):
 
 
 def _expiry(store, relative):
-    """The expiry the directory's index names; None when there is no index."""
+    """The expiry the directory's index names; None when there is no index. The read is bounded and never follows a
+    link, like `read_attachment`: an oversized index raises `SourceTooLarge` (an OSError), which the sweep counts as failed."""
     try:
-        data = real_inside(store.root, f'{relative}/{INDEX_NAME}').read_bytes()
+        data = _read_once(store, f'{relative}/{INDEX_NAME}', MAX_INDEX_BYTES)
     except FileNotFoundError:
         return None
     index = strict_json(data.decode('utf-8'))

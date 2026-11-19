@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "eval_judge_scores.v0",
+  "title": "Evaluation judge scores",
+  "$comment": "Draft v0 (T-016 P4, decision 154). One scorer's score file for one judge pack, written outside the product runtime. Closed: no free-text field (agent text is data, never stored or followed), no unknown key. `eval import` additionally checks the rating values against the profile's scale and the ratings against the pack's dimensions; it labels every imported value agent_judged (pilot evidence only).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "pack_id", "scorer", "scores"],
+  "properties": {
+    "schema": {"const": "eval_judge_scores.v0"},
+    "pack_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "scorer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "family", "model"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "family": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1}
+      }
+    },
+    "scores": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["scenario_id", "ratings"],
+        "properties": {
+          "scenario_id": {"type": "string", "minLength": 1},
+          "ratings": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["label", "dimension", "ref", "value"],
+              "properties": {
+                "label": {"enum": ["A", "B"]},
+                "dimension": {"$ref": "eval_judge_pack.v0#/$defs/dimension"},
+                "ref": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+                "value": {"type": "integer"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

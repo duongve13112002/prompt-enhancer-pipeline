@@ -46,13 +46,14 @@ STAGES = {
         ('k0_checkpoint', '_FileCache._identity'), ('k0_checkpoint', '_FileCache._get'),
         ('k0_checkpoint', '_FileCache._put'), ('k0_checkpoint', '_scan_previous'),
         ('k0_checkpoint', '_merge_previous'), ('k0_checkpoint', 'scan_to_checkpoint'),
-        ('k0_scan', 'read_source_file'), ('storage.identity', 'concept_id'), ('storage.identity', 'image_id')]),
+        ('k0_scan', 'read_source_file'), ('k0_scan', 'iter_source_file'), ('storage.identity', 'concept_id'),
+        ('storage.identity', 'image_id')]),
     'k1_image': ('k1_embed', 'K1_IMAGE_REVISION', K1_SHARED + [
         ('k1_embed', 'IMAGE_METADATA_RULE'), ('k1_embed', 'NO_INSTRUCTION'), ('k1_embed', 'DECODE_OK'),
         ('k1_embed', 'UNDECODABLE'), ('k1_embed', 'EXCEEDS'), ('k1_embed', 'Embedder._image_part'),
         ('k1_embed', 'Embedder.image_bodies'), ('k1_embed', '_decode'), ('k1_embed', '_image_record'),
         ('k1_embed', '_image_order'), ('k1_embed', '_batch_members'), ('k1_embed', '_companion_lost'),
-        ('k1_embed', '_read_verified'), ('k0_scan', 'read_source_file'),
+        ('k1_embed', '_read_verified'), ('k0_scan', 'read_source_file'), ('k0_scan', 'iter_source_file'),
         ('model_image', 'prepare_vision_image'), ('model_image', 'prepare_vision_image_with_info'),
         ('model_image', 'prepare_image_with_info'),
         ('model_image', '_vision_args'), ('model_image', '_stored_size'), ('model_image', '_decoding_file_bytes'),
@@ -106,7 +107,8 @@ STAGES = {
     'kb_sync': ('kb_sync', 'KB_SYNC_REVISION', [
         ('kb_sync', 'retain_images'), ('kb_sync', 'concept_texts'), ('kb_sync', '_checkpoint'),
         ('kb_sync', 'sync_knowledge'), ('kb_sync', 'alias_failures'), ('kb_sync', 'require_per_concept'),
-        ('kb_sync', '_PER_CONCEPT_CODES')]),  # which K4 failures publish and what the snapshot records (decision 165)
+        ('kb_sync', '_PER_CONCEPT_CODES'),  # which K4 failures publish and what the snapshot records (decision 165)
+        ('kb_sync', '_alias_content'), ('kb_sync', '_publishes_the_same_snapshot')]),  # identical-publish skip (P3-SWEEP-1)
 }
 
 

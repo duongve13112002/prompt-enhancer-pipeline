@@ -52,7 +52,7 @@ REUSED_REFERENCED = 'REUSED_REFERENCED'  # report code: T-008 Q5
 # artifact-bound: declared revisions of the code that shapes a K1 artifact (KBS-S3-1). They key the artifacts in
 # place of a hash of module source, so an edit outside that code keeps every embedding. Bump one in the same change
 # that edits a function its guard pins (tests/test_stage_revisions.py), because stored artifacts then differ.
-K1_IMAGE_REVISION = 'k1-image-3'
+K1_IMAGE_REVISION = 'k1-image-4'
 K1_TEXT_REVISION = 'k1-text-2'
 
 

@@ -56,8 +56,18 @@ def build_parser():
     _common(enhance_actions.add_parser('serve', help='S0 to S6 over HTTP on serving.host and serving.port; Ctrl+C or SIGTERM stops it'))
     evaluation = commands.add_parser('eval', help='evaluation: build, run, import, fit')
     eval_actions = evaluation.add_subparsers(dest='action', required=True)
-    for name in ('build', 'run', 'import', 'fit'):
+    for name in ('build', 'fit'):
         _common(eval_actions.add_parser(name))
+    run = _common(eval_actions.add_parser('run', help='run a named scenario set through S0 to S6 and write one result per scenario'))
+    run.add_argument('--set', required=True, help='scenario set (Parquet, the T-003 draft layout) inside the project root')
+    run.add_argument('--snapshot', help='the published snapshot the set is run against; required when a scenario runs with retrieval on')
+    run.add_argument('--variants', required=True, choices=('record', 'both'),
+                     help='record: each scenario in the variant its record states; both: also retrieval off for a retrieval-on record')
+    run.add_argument('--split', required=True, choices=('fit', 'test', 'all'), help='the scenarios to run')
+    run.add_argument('--source-images', help='directory of source images (files named by image-id digest) for an edit scenario with retrieval off')
+    imported = _common(eval_actions.add_parser('import', help='import agent score files of a judge pack (pilot evidence only)'))
+    imported.add_argument('--run-id', required=True, help='the run id printed by eval run')
+    imported.add_argument('--scores', required=True, action='append', help='a score file inside the project root; repeat for each scorer')
     return parser
 
 

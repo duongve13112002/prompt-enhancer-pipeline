@@ -30,7 +30,7 @@ LAYOUT = 'kb-sync-v2-retained-images'
 # artifact-bound: declared revision of the sync assembly that shapes a snapshot (KBS-S3-1); it enters the sync
 # identity with the stage revisions, so a stage edit or this module's edit replans the sync but changes no stage key.
 # Bump it with any edit to a function its guard pins (tests/test_stage_revisions.py).
-KB_SYNC_REVISION = 'kb-sync-2'
+KB_SYNC_REVISION = 'kb-sync-3'
 ROLES = ('info_assessor', 'folder_namer', 'observer', 'card_builder', 'alias_generator')
 
 
@@ -94,8 +94,9 @@ _PER_CONCEPT_CODES = frozenset(('SCHEMA_INVALID', 'INCOMPLETE_OR_REFUSED', 'MODE
 
 def require_per_concept(result):
     """K4 under decision 165: per-concept failures publish without that concept's generated aliases; a single
-    run-level code fails the stage as before."""
-    if any(_closed_code(code) not in _PER_CONCEPT_CODES for code in result['report']['failed'].values()):
+    run-level code fails the stage as before. The raw code is checked, not `_closed_code(code)`: that maps an unknown or
+    non-string code to MODEL_CALL_FAILED, a tolerated code, so an unrecognised failure would publish (fail closed)."""
+    if any(type(code) is not str or code not in _PER_CONCEPT_CODES for code in result['report']['failed'].values()):
         require_success('k4', result)
 
 
@@ -107,6 +108,26 @@ def alias_failures(failed):
     codes = Counter(_closed_code(code) for code in failed.values())
     return {'count': len(failed), 'codes': dict(sorted(codes.items())),
             'concept_ids': sorted(key for key in failed if is_concept_id(key))}
+
+
+def _alias_content(rows):
+    return sorted((row['concept_id'], row['alias_text'], row['origin'], row['status'], tuple(row['collides_with'] or ()),
+                   row['language']) for row in rows)
+
+
+def _publishes_the_same_snapshot(store, current, recorded, identity, failures, aliases):
+    """True when a snapshot built now would repeat the current one: same sync identity and layout, the same recorded K4
+    failures, and the same alias rows (the only table whose content depends on which keys failed). The identity covers
+    the sources, settings, prompts, schemas and code revisions, so every other stage is a checkpoint hit (R-017)."""
+    if (current is None or recorded.get('sync_identity') != identity or recorded.get('sync_layout') != LAYOUT
+            or recorded.get('k4_failed') != {'count': failures['count'], 'codes': failures['codes']}):
+        return False
+    store.verify_snapshot(*current)
+    with store.pin() as pin:
+        if pin.snapshot_id != current[0]:
+            return False
+        before = pin.read_rows('aliases')
+    return _alias_content(before) == _alias_content(aliases)
 
 
 def concept_texts(rows):
@@ -202,11 +223,11 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
         overrides = _read_overrides(knowledge, source.resolve(), project)
         identity = sync_identity(config, scanned, overrides, store)
         current = store.current()
+        recorded = {} if current is None else store._registry()[current[0]]['source_scan_summary']
         if current is not None:
-            summary = store._registry()[current[0]]['source_scan_summary']
             # A snapshot that records failed K4 keys is never "unchanged": the next sync retries them (decision 165).
-            if (summary.get('sync_identity') == identity and summary.get('sync_layout') == LAYOUT
-                    and 'k4_failed' not in summary):
+            if (recorded.get('sync_identity') == identity and recorded.get('sync_layout') == LAYOUT
+                    and 'k4_failed' not in recorded):
                 store.verify_snapshot(*current)
                 _previous_for_plan(store, inspect=lambda pin: ServingIndex(pin, config))
                 return {'status': 'unchanged', 'snapshot_id': current[0], 'report': scanned['report']}
@@ -255,6 +276,12 @@ async def sync_knowledge(config, *, project_root, plan=False, force=False, clien
         artifacts.update(aliases.get('artifacts', []))
         failures = alias_failures(aliases['report']['failed'])
         rows.update(aliases['rows'])
+        if failures['count'] and _publishes_the_same_snapshot(store, current, recorded, identity, failures, rows['aliases']):
+            # The retried keys failed again and nothing else differs: a new snapshot would only copy the current one and
+            # push an older snapshot out of `sync.snapshots.keep`. The build directory stays `building` and is marked
+            # `failed` by the next writer session, where GC collects it; the next sync retries the failed keys again.
+            return {'status': 'unchanged', 'publish_skipped': 'identical', 'snapshot_id': current[0],
+                    'report': scanned['report'], 'alias_failures': failures}
         items = concept_texts(rows)
         text = accept('k1_text', await embed_concept_texts(store, config, items, transport=transport, writer=writer))
         rows['concept_text_embeddings'] = text['concept_text_embeddings']

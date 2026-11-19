@@ -23,6 +23,16 @@ sync:
 knowledge:
   root: database                         # the dev machine's knowledge base (decision 61): Git-ignored, read only
 
+evaluation:
+  # `eval run` and `eval import` dev values (T-016 P4): dev-only, none measured, none fitted. 8 MiB is far above the 55-record
+  # draft set (a few hundred KiB); the source-image bound is the 16 MiB retained-image bound above; 2 scenarios in flight
+  # in total, both retrieval variants together, is a small smoke value, the dev backend serves one request at a time
+  # through its own max_concurrency of 1; 64 MiB for any file under eval/runs/ is far above a pack of 55 scenarios;
+  # scale 1 to 5 is an example; `qwen` is an example family identifier (the dev model's family), a deployment declares
+  # its own.
+  run: {max_set_bytes: 8388608, max_source_image_bytes: 16777216, max_concurrency: 2, max_sidecar_bytes: 67108864}
+  judge: {blinding_seed: 20261119, score_min: 1, score_max: 5, under_test_families: [qwen], max_score_file_bytes: 1048576}
+
 serving:
   # dev-only smoke bound, not measured, and a proxy: `request.v0` has no length limit on `source_image` or `prompt`, so no
   # request bound exists to derive it from. It is 22 MiB = the base64 form (22369624 B) of the 16 MiB retained-image bound

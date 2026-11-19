@@ -421,3 +421,16 @@ evaluation:                              # G-evaluation, R-023, decision 22
   languages: [vi, en, ja, zh]            # an example list, not a limit: scenarios fix no language and no input format (decision 56)
   split_by: concept                      # a concept never appears in both the fit and the test split; split values: fit, test
   min_items_per_class: design_required
+  run:                                   # `eval run` (T-016 P4); every value is the user's or the deployment's, none is fitted
+    max_set_bytes: deploy_required       # largest scenario-set file `eval run` reads, in bytes
+    max_source_image_bytes: deploy_required   # largest source-image file read for an edit run with retrieval off, in bytes
+    max_concurrency: deploy_required     # scenarios in flight at once, both retrieval variants together (user decision 149: keep the model servers busy to their own capacity); a unit the pipeline refuses for trace capacity is recorded `not_run` and retried, whatever this value is
+    max_sidecar_bytes: deploy_required   # largest file `eval run` and `eval import` write or read under eval/runs/ (judge pack, unblinding key, manifest, import record), in bytes; the pack is streamed, never held whole
+  judge:                                 # the judge pack and its import (decision 154): pilot evidence only, never a threshold
+    blinding_seed: deploy_required       # seeds the label order of the blinded judge pack; changes the pack only, never a run
+    score_min: design_required           # the integer scale scorers use, lowest value
+    score_max: design_required           # the integer scale scorers use, highest value (above score_min)
+    min_scorers: 2                       # score files `eval import` needs, each from a scorer of a different family (decision 154)
+    under_test_families: deploy_required # families of the models under test, as declared identifiers (compared exactly); a scorer of these is refused
+    rubric_prompt_id: eval_rubric_v0     # prompts/<id>.txt, the rubric text of the judge pack (draft, pending user review); never sent to a pipeline model
+    max_score_file_bytes: deploy_required   # largest score file `eval import` reads, in bytes

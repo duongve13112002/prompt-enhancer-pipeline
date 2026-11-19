@@ -31,10 +31,12 @@ SRC = ROOT / 'src' / 'prompt_enhancer'
 # in review as a rewritten row, never as a silent update.
 PINS = {
     'k0': [('k0-scan-v4', 'a145c7f9b49651f066d5ee260c834c1175771e79b5f458cd1788eddffee3cbab'),
-           ('k0-scan-v5', '65dc9db101a60eb014b05c219304245d1b77362853bca28957fce80dc352851d')],
+           ('k0-scan-v5', '65dc9db101a60eb014b05c219304245d1b77362853bca28957fce80dc352851d'),
+           ('k0-scan-v6', '9bd8b0ef67c283caf135fe492fb42ca5db1a0ce66765eb2a2c8de7ee8c7f2ea5')],
     'k1_image': [('k1-image-1', 'd3c1fdf6d02ac622be705264121b9cedb4c626df8619beb76647767fef9da8e3'),
                  ('k1-image-2', '57e5fa8e1bba3795576532c69a4a99c7a0c5589e3d54e4b619d73108851e94a8'),
-                 ('k1-image-3', '033c211f37c3def09a9103ab23b764777c8ba173debebebe6249a409a3503975')],
+                 ('k1-image-3', '033c211f37c3def09a9103ab23b764777c8ba173debebebe6249a409a3503975'),
+                 ('k1-image-4', '04f50a2531d660924a1c5ec9eea5ab29860fc016c8b7f65e84bbcd59d5ac7149')],
     'k1_text': [('k1-text-1', '861021292f329dd3cd006a65823d398ef6207b145b7779646c83db6291ef3d48'),
                 ('k1-text-2', '9b0bdb7c4d79becd4f75843704812eb8f7d90e5e0a2325794bdffe4d5de69d3e')],
     'model_call': [('model-call-1', 'd343f8ab7bf36edd21b077e7152cf1e9c5404747d0e337e0d8f275e1b0842466'),
@@ -51,7 +53,8 @@ PINS = {
     'k5': [('k5-index-1', 'e1609a9b78845d6465985457b276da2cd022c001a8999dedb7747bba7ee8bf4f'),
            ('k5-index-2', '3a25f1e9a1e1ab8ceebccc0f75c6ef959a1ba201d80809e4554a0b47ac75cfd0')],
     'kb_sync': [('kb-sync-1', '2126cc1a8a831a34add01a3aa8df7a5f2b074359cce34b3505f1d91cd23a607f'),
-                ('kb-sync-2', 'd37741dbeab9763048f69f8983f2ac34e58a228fdeaa8cb0d73e6606f93e870b')],
+                ('kb-sync-2', 'd37741dbeab9763048f69f8983f2ac34e58a228fdeaa8cb0d73e6606f93e870b'),
+                ('kb-sync-3', 'a407996f66c99ae87dd53d4b42e3162c4705d1e36d640abe1f490587ecb46094')],
 }
 ENTRIES = sorted({(module, name) for stage in guard.STAGES.values() for module, name in stage[2]})
 

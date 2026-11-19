@@ -1,4 +1,4 @@
-"""Command handlers behind `python -m prompt_enhancer` for everything except `kb sync`, `kb audit` and `enhance once` (T-016 P1).
+"""Command handlers behind `python -m prompt_enhancer` for everything except `kb sync`, `kb audit`, `enhance once` and `enhance serve` (T-016 P1, P4).
 
 Each handler loads the configuration with its own command read set first (a sentinel or missing key refuses before any
 store, model or file is touched), then calls the production API; none keeps a private copy of store or profile logic.
@@ -27,8 +27,6 @@ STATUS_TABLES = ('folders', 'concepts', 'images', 'cards', 'aliases')  # counted
 NOT_SERVED = {
     'eval build': 'eval build is owned by T-003 (scenario build) and is not part of this tool',
     'eval fit': 'eval fit is owned by T-030 (experiments that fit the fit_from_* values) and is not part of this tool',
-    'eval run': 'eval run is not yet implemented in this build (T-016 phase 4)',
-    'eval import': 'eval import is not yet implemented in this build (T-016 phase 4)',
 }
 
 
@@ -149,10 +147,38 @@ def profile_check(args, root):
     return 0
 
 
+def eval_run(args, root):
+    """Run the named scenario set; JSON on stdout only when every selected scenario has a durable result (exit 0), else
+    the counts go to stderr and the exit status is 1: the durable results stay and the same command resumes."""
+    from .eval_run import RunAborted, run_eval
+    try:
+        summary = run_eval(_config(args, root, 'eval run'), root, args)
+    except RunAborted as error:  # after the manifest: not a refusal; the text names a rule, never a value
+        print(f'failed: {error}', file=sys.stderr)
+        return FAILED
+    units = summary['units']
+    if units['failed'] or units['not_run']:
+        reasons = ', '.join(f'{count} {name}' for name, count in summary['not_run_reasons'].items())
+        print(f"failed: {units['failed']} scenario unit(s) failed and {units['not_run']} not run"
+              f"{f' ({reasons})' if reasons else ''}; "
+              f"completed {units['completed']} of {units['selected']}; once this process has ended, run the same command "
+              'again to resume (never while another eval run of this set is still running)', file=sys.stderr)
+        return FAILED
+    emit_json({'command': 'eval run', **summary})
+    return 0
+
+
+def eval_import(args, root):
+    """Import two or more score files of a judge pack; exit 0 also when the scorers disagree (the report flags them)."""
+    from .eval_judge import import_scores
+    emit_json(import_scores(_config(args, root, 'eval import'), root, args))
+    return 0
+
+
 HANDLERS = {
     'kb status': kb_status, 'kb show': kb_show, 'kb rollback': kb_rollback, 'kb gc': kb_gc,
     'profile register': profile_register, 'profile check': profile_check,
-    'eval run': not_served, 'eval import': not_served,
+    'eval run': eval_run, 'eval import': eval_import,
     'eval build': not_served, 'eval fit': not_served, 'kb only': kb_only,
 }
 

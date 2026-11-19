@@ -68,7 +68,7 @@ import warnings
 import pyarrow as pa
 
 from ..config import SENTINELS, ConfigurationError, _command_reads, _get, _lexical_path, _resolve_within
-from ._anchored import (atomic_write_bytes, lock_file, make_directory, make_root, remove_entry, rename_entry,
+from ._anchored import (atomic_write_bytes, atomic_write_stream, lock_file, make_directory, make_root, remove_entry, rename_entry,
                         write_table_file)
 from ._fs import SUFFIX, StorageError, format_of, read_parquet_bytes, read_table_file, real_inside, sha256_file
 from .identity import artifact_path, check_artifact_key, check_artifact_path, check_kind, check_relative_name, identity_key
@@ -277,7 +277,7 @@ def open_data_store(config, command, *, project_root=None):
     if 'storage.data_root' not in reads or settings['table_format'] is _UNDECLARED:
         raise StorageError(f'command {command!r} does not read storage.data_root and storage.table_format')
     return DataStore(_resolved_path(config, 'storage.data_root', root), project_root=root,
-                     table_format=settings['table_format'])
+                     table_format=settings['table_format'], timeout_s=settings['timeout_s'], poll_s=settings['poll_s'])
 
 
 # ----------------------------------------------------------------------------- knowledge store
@@ -1379,10 +1379,11 @@ _DATA_DIRS = {'request_traces': 'traces', 'eval_scenarios': 'eval', 'eval_labels
 class DataStore:
     """Append-only segments for traces and evaluation tables under storage.data_root."""
 
-    def __init__(self, root, *, project_root, table_format):
+    def __init__(self, root, *, project_root, table_format, timeout_s=_UNDECLARED, poll_s=_UNDECLARED):
         self.root = Path(root).resolve()
         self.catalog = Catalog(project_root)
         self.table_format = table_format
+        self.timeout_s, self.poll_s = timeout_s, poll_s  # storage.lock, when the command reads it (the run lock below)
 
     def _relative(self, name):
         if name not in _DATA_DIRS:
@@ -1413,3 +1414,89 @@ class DataStore:
 
     def read_rows(self, name):
         return self.catalog.rows(name, self.read(name))
+
+    def segments(self, name):
+        """The segment file names of a table, sorted, without reading any (a missing directory is no segment)."""
+        relative = self._relative(name)
+        directory = real_inside(self.root, relative)
+        if not directory.is_dir():
+            return []
+        return [entry for entry in sorted(os.listdir(directory)) if not entry.startswith('.')]
+
+    def read_segment(self, name, entry):
+        """The decoded rows of one segment, validated alone: a caller that walks a table segment by segment holds one
+        segment at a time (R-017); a key repeated across segments is the caller's to detect."""
+        path = real_inside(self.root, f'{self._relative(name)}/{entry}')
+        format_of(path)
+        table = read_table_file(path)
+        self.catalog.validate(name, table)
+        return self.catalog.rows(name, table)
+
+    # -- run sidecars: small files beside the evaluation tables, `eval/runs/<run>/...`, never a table column (T-016 P4)
+
+    def _sidecar(self, relative):
+        parts = relative.split('/')
+        if (len(parts) < 4 or parts[:2] != ['eval', 'runs']
+                or any(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', part) is None for part in parts)):
+            raise StorageError(f'{relative!r} is not a run sidecar path')
+        return relative
+
+    def write_sidecar(self, relative, data):
+        """One file, written whole or not at all (temporary file and rename inside the verified parent)."""
+        _ensure_root(self.catalog.root, self.root)
+        atomic_write_bytes(self.root, self._sidecar(relative), data)
+
+    def write_sidecar_stream(self, relative, produce):
+        """As `write_sidecar`, for a file written piece by piece: `produce(handle)` calls `handle.write(bytes)`."""
+        _ensure_root(self.catalog.root, self.root)
+        atomic_write_stream(self.root, self._sidecar(relative), produce)
+
+    def read_sidecar(self, relative, max_bytes):
+        """The bytes of a sidecar of at most `max_bytes`; FileNotFoundError when it does not exist."""
+        from ..k0_scan import ScanError, read_source_file
+        real_inside(self.root, self._sidecar(relative))  # the path rule: no link on the way
+        if not os.path.lexists(self.root.joinpath(*relative.split('/'))):
+            raise FileNotFoundError(relative)
+        try:
+            return read_source_file(self.root, relative.split('/'), max_bytes=max_bytes)
+        except ScanError as error:
+            raise StorageError(f'{relative}: cannot be read ({type(error).__name__})') from error
+
+    def iter_sidecar_lines(self, relative, max_bytes):
+        """The lines (without the newline) of a sidecar, one at a time, the whole file bounded by `max_bytes`; the last
+        line needs no newline. FileNotFoundError when it does not exist. Close the generator when you stop early."""
+        from ..k0_scan import ScanError, iter_source_file
+        real_inside(self.root, self._sidecar(relative))
+        if not os.path.lexists(self.root.joinpath(*relative.split('/'))):
+            raise FileNotFoundError(relative)
+        blocks, pending = iter_source_file(self.root, relative.split('/'), max_bytes=max_bytes), b''
+        try:
+            for block in blocks:
+                *lines, pending = (pending + block).split(b'\n')
+                yield from lines
+            if pending:
+                yield pending
+        except ScanError as error:
+            raise StorageError(f'{relative}: cannot be read ({type(error).__name__})') from error
+        finally:
+            blocks.close()
+
+    def run_lock(self, run_id, *, create):
+        """The exclusive lock of one evaluation run, `eval/runs/<run>/run.lock`: held by the one process that writes the
+        run's results and sidecars (`eval run`) or rewrites its summary (`eval import`). Opened only through the anchored
+        layer, like the store lock; `storage.lock` is the validated setting the primitive is built with. With `create`
+        false a run that never started has no lock file: FileNotFoundError when the caller tries to acquire it."""
+        if self.timeout_s is _UNDECLARED:
+            raise StorageError('storage.lock is not in the read set of this command')
+        relative = self._sidecar(f'eval/runs/{run_id}/run.lock')
+        real_inside(self.root, relative)
+        if create:
+            _ensure_root(self.catalog.root, self.root)
+        return lock_file(self.root, relative, self.timeout_s, self.poll_s, create=create)
+
+    def list_sidecars(self, relative):
+        """The entry names of a sidecar directory, sorted; none when it does not exist."""
+        self._sidecar(relative + '/x')
+        directory = real_inside(self.root, relative)
+        return [] if not directory.is_dir() else [name for name in sorted(os.listdir(directory))
+                                                  if not name.startswith('.')]

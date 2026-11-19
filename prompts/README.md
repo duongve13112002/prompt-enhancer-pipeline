@@ -53,6 +53,10 @@ Not a role prompt: the header text of the runtime addendum, [runtime_addendum_v0
 
 Role `scenario_generator`. Placeholders: `{folder_declarations}`, `{kind}`, `{task}`. Delimited data: folder names and descriptions. The answer key comes from the declarations, not from the model (R-023). Output schema: `eval_scenario.v0`. A change invalidates generated scenarios and any value fitted on them.
 
+## `eval_rubric_v0` (G, judge pack), status: draft (PM decision, accepted by the user in decision 170)
+
+Not a pipeline prompt and not a role: no pipeline model ever receives it. [The text](eval_rubric_v0.txt) is copied verbatim, with its hash, into the header of each blinded judge pack that `eval run` writes (`evaluation.judge.rubric_prompt_id`), for the two subscription agents that score outside the product runtime (decision 154). It names only the dimensions and the integer scale, in neutral words. A change gives another `pack_id`; it invalidates no result and no fitted value, because scores are pilot evidence (`agent_judged`) and never feed a threshold or `eval fit`.
+
 ## `brief_v0` (S4), status: written (T-015 P1/P1b)
 
 Not a model-facing instruction set but the Enhancement Brief template, rendered per profile manifest into the writer's user message. Placeholders: the manifest's template variables, the raw prompt, `{knowledge_pack}`, `{constraints}`, and for edit `{delta}` and `{preserve}`. Delimited data: the knowledge facts, one per line bound to the entity they serve. Quote characters follow the manifest's quote semantics. No output schema: the output follows the profile. A change invalidates golden tests of every profile that renders it and E2, E6 and E8 results.

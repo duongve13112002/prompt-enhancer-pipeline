@@ -794,7 +794,8 @@ def test_the_lingering_bound_is_capped_by_the_selector_capacity(project_root, mo
 
 
 # The property of a refusal the server decides to send (docs/test-plan.md, Property): its status line reaches the client
-# complete before the close whatever the size of the body the client already sent, up to `server.max_discard_bytes`;
+# complete before the close whatever the size of the body the client already sent, up to `server.max_discard_bytes`
+# (the bytes the server drops after the reply: the body on a route or size refusal, head and body on an over-cap one);
 # beyond that the reply is best effort (the close holds unread bytes and Windows may reset), and the one thing still
 # required is that the connection ends and that a reply which does arrive is a complete status line.
 
@@ -848,11 +849,45 @@ def test_an_oversize_refusal_reaches_the_client_for_bodies_below_at_and_above_th
         _oversize_refusal_property(settings)
 
 
+# The over-cap path (`_turn_away`) never parses the request: the accept loop drops raw bytes from the socket, so the budget
+# is spent on the request head too. P3-SWEEP-1 (the flake): the property used to compare the body alone with the budget,
+# so a body of 99944..100000 bytes (head and body past the budget) was held to the guarantee. The server then closes
+# with the client's last bytes still in flight, the reset can reach a late-scheduled client before it has read the
+# reply, and Windows discards the reply: empty reply, a failure that depended on scheduling (probe: only totals past
+# the budget lost a reply, 1 of 8 runs with a client that reads 0.5 s late; none at or below it).
+OVER_CAP_BODY_SIZES = st.one_of(
+    st.integers(0, 100000),
+    st.integers(99900, 100000),  # the band where head and body reach the budget
+    st.integers(100001, 200000))
+
+
 @hypothesis_settings(max_examples=30, deadline=None)
-@given(size=st.one_of(st.integers(0, 100000), st.just(100000), st.integers(100001, 200000)))
+@given(size=OVER_CAP_BODY_SIZES)
 def _over_cap_refusal_property(settings, size):
-    reply, seconds = refusal_exchange(settings, post_head(settings, size), b'x' * size)
-    assert_refusal_property(reply, seconds, size, settings.max_discard_bytes, 503)
+    head = post_head(settings, size)
+    reply, seconds = refusal_exchange(settings, head, b'x' * size)
+    assert_refusal_property(reply, seconds, len(head) + size, settings.max_discard_bytes, 503)
+
+
+def test_the_over_cap_budget_counts_the_request_head(project_root, model_test_profile, monkeypatch):
+    """Deterministic edge of the property above: everything the client sends, up to the budget, gets its reply, with the
+    head counted; the server drops exactly the budget when the client sends more."""
+    settings, _ = make_settings(project_root, model_test_profile, max_connections=4, max_pending_requests=1,
+                                max_discard_bytes=100000, read_timeout_s=30)
+    budget = settings.max_discard_bytes
+    readers = hold_deadlines(monkeypatch)
+    with running_server(settings) as (base, engine, stop, result):
+        readers.clear()
+        holders = hold(settings, readers, 4)
+        try:
+            # The largest body whose head and body together are exactly the budget (the head's length depends on the digits).
+            size = next(n for n in range(budget, 0, -1) if n + len(post_head(settings, n)) == budget)
+            reply, seconds = refusal_exchange(settings, post_head(settings, size), b'x' * size)
+            assert_refusal_property(reply, seconds, budget, budget, 503)
+            assert reply.startswith(b'HTTP/1.0 503 ') and b'\r\n' in reply
+        finally:
+            for holder in holders:
+                holder.close()
 
 
 def test_an_over_cap_refusal_reaches_the_client_for_bodies_below_at_and_above_the_budget(project_root,

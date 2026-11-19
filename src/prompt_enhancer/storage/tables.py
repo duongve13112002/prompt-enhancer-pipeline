@@ -291,6 +291,15 @@ class Catalog:
         if spec.vector and len({row['embedder_revision'] for row in rows}) > 1:
             raise StorageError(f'{name}: one file holds exactly one embedder_revision (revision isolation)')
 
+    def check_document(self, schema_id, value, where, pointer=''):
+        """Refuse `value` unless it satisfies the contract schema `schema_id` (or its subschema at `pointer`)."""
+        self._check(self._validator(schema_id, pointer), value, where)
+
+    def document_error(self, schema_id, value, pointer=''):
+        """The path of the first violation of the contract schema by `value` (never the value), or None."""
+        error = next(iter(self._validator(schema_id, pointer).iter_errors(value)), None)
+        return None if error is None else '.'.join(str(part) for part in error.absolute_path) or 'root'
+
     @staticmethod
     def _check(validator, value, where):
         error = next(iter(validator.iter_errors(value)), None)

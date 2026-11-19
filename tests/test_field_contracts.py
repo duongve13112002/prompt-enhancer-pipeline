@@ -79,7 +79,9 @@ def set_candidate(config, path, candidate):
 
 
 def options(value):
-    return [False, True, 0, 1, 2, 0.5, '', 'alternative', 'none', 'auto', 'ask', 'off', 'on',
+    return [False, True, 0, 1, 2,
+            3,  # T-016 P4: `evaluation.judge.min_scorers` has a schema floor of 2 and is configurable above it
+            0.5, '', 'alternative', 'none', 'auto', 'ask', 'off', 'on',
             'draft', 'confirmed', 'active', 'plain', 'sectioned',
             'medium', 'cards', 'live', 'json_schema', 'json_object', 'engine_native',
             'response_format', 'from_vision', 'intent_ir.v0', 'verifier_result.v0', '2025-01-01',

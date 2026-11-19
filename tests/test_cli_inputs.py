@@ -217,6 +217,38 @@ def test_read_bounded_allocates_nothing_for_a_large_limit_and_refuses_an_oversiz
             read_bounded(project_root, path, limit, '--request')
 
 
+@pytest.mark.parametrize('limit, extra, message', [
+    (10, 4096, 'larger than serving.http.max_request_bytes'),  # grows at the bound: the next byte is refused
+    (20, 4096, 'larger than serving.http.max_request_bytes'),  # grows far past the bound: read stops one byte past it
+    (100, 5, 'changed while it was read')])  # grows inside the bound: the size check after the read refuses it
+def test_read_bounded_refuses_a_request_file_that_grows_during_the_read(tmp_path, project_root, monkeypatch, limit, extra,
+                                                                        message):
+    from bounded_read_fixtures import grow_after_first_read
+
+    path = tmp_path / 'f.bin'
+    path.write_bytes(b'x' * 10)
+    received = grow_after_first_read(monkeypatch, path, extra)  # labelled double: the growth is hook-driven, no sleep
+    with pytest.raises(Refusal, match=message):
+        read_bounded(project_root, path, limit, '--request')
+    assert received[0] == 10 and sum(received) <= limit + 1  # never more than one byte past the bound
+
+
+def test_read_bounded_refuses_a_request_file_that_grows_during_the_read_through_the_command(
+        capsys, model_test_profile, tmp_path, project_root, monkeypatch):
+    """The same refusal at the command edge: exit 2, the argument named, no request text echoed."""
+    from bounded_read_fixtures import grow_after_first_read
+
+    with model_server() as (handler, port):
+        config = pipeline_config(model_test_profile, tmp_path, project_root, port)
+        config['serving']['http']['max_request_bytes'] = 4096
+        finish_setup(config, project_root, handler)
+        path = write_yaml(project_root, tmp_path, config)
+        request = Path(write_request(tmp_path, GOOD))
+        grow_after_first_read(monkeypatch, request, 1 << 20)
+        code, out, err = run_main(capsys, ['enhance', 'once', '--config', path, '--request', str(request)], project_root)
+    assert code == 2 and out == '' and '--request: larger than serving.http.max_request_bytes' in err
+
+
 def test_read_bounded_refuses_a_directory_and_a_missing_file_by_argument_name(tmp_path, project_root):
     for target in (tmp_path, tmp_path / 'absent.json'):
         with pytest.raises(Refusal, match='^--request: '):
@@ -343,6 +375,35 @@ def test_expiry_counts_each_outcome_exactly(model_test_profile, tmp_path, projec
     assert expire_attachments(store) == (0, 1) and broken.is_dir()  # an unreadable index is a failure and is left alone
     assert expire_attachments(store, now=soon + timedelta(seconds=1)) == (1, 1)  # the live set expired; the broken one stays
     assert not (base / ('live' + 'a' * 28)).exists() and broken.is_dir()
+
+
+def test_expiry_reads_an_index_within_the_bound_and_counts_an_oversized_one_as_failed(
+        model_test_profile, tmp_path, project_root, monkeypatch):
+    """T-016 P3: the expiry sweep reads each index with the bound `read_attachment` uses; an oversized index is
+    never read, is counted failed, stays in place with its copies, and does not stop the sweep of the other sets."""
+    store = store_of(model_test_profile, tmp_path, project_root)
+    base = tmp_path / 'data' / 'attachments'
+    past = datetime.now(timezone.utc) - timedelta(seconds=60)
+    data = b'labelled bytes'
+    image_id = 'sha256:' + hashlib.sha256(data).hexdigest()
+    old = base / ('old' + 'a' * 29)
+    publish_attachments(store, old.name, {image_id: data}, past)
+    real_index = (old / 'index.json').read_bytes()
+    big = base / ('d' * 32)
+    big.mkdir()
+    oversized = real_index + b' ' * 64  # still valid JSON, only larger than the bound
+    (big / 'index.json').write_bytes(oversized)
+    (big / 'copy').write_bytes(b'kept')
+    monkeypatch.setattr(attachments, 'MAX_INDEX_BYTES', len(oversized) - 1)
+    real_read, reads = os.read, []
+    monkeypatch.setattr(os, 'read', lambda fd, count: reads.append(count) or real_read(fd, count))
+    # Sorted order: the oversized set is met first, the valid expired set after it; the first fault does not end the sweep.
+    assert expire_attachments(store) == (1, 1)
+    assert big.is_dir() and (big / 'index.json').read_bytes() == oversized and (big / 'copy').read_bytes() == b'kept'
+    assert not old.exists()
+    assert reads and max(reads) <= len(oversized)  # only the in-bound index was read, each call asking for at most bound + 1
+    reads.clear()
+    assert expire_attachments(store) == (0, 1) and reads == []  # the oversized index alone: failed, no byte read
 
 
 @pytest.mark.parametrize('trace_id', ['', '../x', 'a/b', 'a\\b', 'a:b', 'a.b', 'x' * 129, 'sp ace', 'é'])

@@ -15,7 +15,7 @@ from .storage import StorageError, artifact_key
 
 # artifact-bound: declared revision of the code that shapes a K0 scan artifact (KBS-S3-1); it replaces a hash of the
 # source of four modules. Bump it with any edit to a function its guard pins (tests/test_stage_revisions.py).
-K0_SCAN_REVISION = 'k0-scan-v5'
+K0_SCAN_REVISION = 'k0-scan-v6'
 _REVISION = {'model': 'none', 'prompt': 'none', 'schema': K0_SCAN_REVISION}  # artifact-bound
 _VERSION = 2  # artifact-bound: JSON layout version
 _TABLES = ('folders', 'concepts', 'folder_concepts', 'images', 'folder_images')  # contract-bound

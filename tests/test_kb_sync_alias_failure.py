@@ -71,15 +71,124 @@ def test_the_next_sync_retries_only_the_failed_key_and_publishes_when_it_succeed
     assert invoke(k2_env, server)['status'] == 'unchanged' and server.roles == []
 
 
-def test_a_key_that_keeps_failing_is_recorded_again_and_called_once_per_run(k2_env):
+def live_snapshots(env):
+    """The snapshots a reader could pin or roll back to (the store's LIVE states), not an abandoned build."""
+    return [item['snapshot_id'] for item in env.store.snapshots() if item['state'] in ('validated', 'published', 'retired')]
+
+
+def test_a_key_that_keeps_failing_is_retried_but_publishes_no_duplicate_snapshot(k2_env):
+    """P3-1 (PM decision pending user review): the retried key fails again and nothing else changed, so the sync
+    reports the current snapshot as unchanged, lists the failure, and the live snapshots stay as they are."""
     server = setup(k2_env)
     first = invoke(k2_env, server)
+    current, live = k2_env.store.current(), live_snapshots(k2_env)
     server.roles.clear()
     second = invoke(k2_env, server)
-    assert second['status'] == 'published' and second['snapshot_id'] != first['snapshot_id']
-    assert server.roles == ['alias_generator']  # no loop inside one run, and the done key is not repeated
-    assert second['alias_failures']['concept_ids'] == [NAME]
-    assert summary(k2_env, second['snapshot_id'])['k4_failed']['count'] == 1
+    assert second['status'] == 'unchanged' and second['publish_skipped'] == 'identical'
+    assert second['snapshot_id'] == first['snapshot_id']
+    assert server.roles == ['alias_generator']  # the failed key is still retried once; the done key is not repeated
+    assert second['alias_failures'] == {'count': 1, 'codes': {'SCHEMA_INVALID': 1}, 'concept_ids': [NAME]}
+    assert k2_env.store.current() == current and live_snapshots(k2_env) == live
+    assert summary(k2_env, first['snapshot_id'])['k4_failed']['count'] == 1
+    # The only trace of the skipped run is its abandoned build, which the next writer session marks failed (GC collects it).
+    states = sorted(item['state'] for item in k2_env.store.snapshots())
+    assert states == ['building', 'published']
+    server.fail_role = None
+    assert invoke(k2_env, server)['status'] == 'published'
+    assert sorted(item['state'] for item in k2_env.store.snapshots()) == ['failed', 'published', 'retired']
+
+
+def test_the_retry_still_publishes_after_a_skipped_identical_publish(k2_env):
+    server = setup(k2_env)
+    first = invoke(k2_env, server)
+    assert invoke(k2_env, server)['status'] == 'unchanged'
+    server.fail_role = None
+    server.roles.clear()
+    third = invoke(k2_env, server)
+    assert third['status'] == 'published' and third['snapshot_id'] != first['snapshot_id']
+    assert server.roles == ['alias_generator'] and 'alias_failures' not in third
+    assert rows(k2_env, third['snapshot_id'])[0][NAME] == [('author', 'author'), ('generated', 'Name alias')]
+    fourth = invoke(k2_env, server)  # the ordinary unchanged branch, not the identical-publish skip
+    assert fourth['status'] == 'unchanged' and 'publish_skipped' not in fourth and 'alias_failures' not in fourth
+
+
+def test_the_identity_check_needs_the_same_failures_and_the_same_alias_rows(k2_env):
+    """The skip decision itself: any difference in identity, recorded failures or alias content publishes."""
+    from prompt_enhancer.kb_sync import _publishes_the_same_snapshot
+    first = invoke(k2_env, setup(k2_env))
+    current, recorded = k2_env.store.current(), summary(k2_env, first['snapshot_id'])
+    with k2_env.store.pin() as pin:
+        stored = pin.read_rows('aliases')
+    failures = first['alias_failures']
+
+    def same(**changes):
+        arguments = dict(recorded=recorded, identity=recorded['sync_identity'], failures=failures, aliases=stored)
+        arguments.update(changes)
+        return _publishes_the_same_snapshot(k2_env.store, current, **arguments)
+
+    assert same()
+    assert not same(identity='sha256:other')
+    assert not same(recorded={key: value for key, value in recorded.items() if key != 'k4_failed'})
+    assert not same(failures=dict(failures, count=2))
+    assert not same(failures=dict(failures, codes={'HTTP_ERROR': 1}))
+    assert not same(aliases=stored + [dict(stored[0], alias_text='an extra generated alias')])
+    assert not same(aliases=stored[1:])
+    assert not _publishes_the_same_snapshot(k2_env.store, None, recorded, recorded['sync_identity'], failures, stored)
+
+
+def test_a_pinned_reader_serves_a_snapshot_that_recorded_failed_keys(k2_env):
+    """P3-2: a reader that pins a snapshot with `k4_failed` reads author aliases and no generated alias of the failed
+    concept, through the K5 index too, and keeps that view when a later sync publishes the repaired snapshot."""
+    from prompt_enhancer.k5_index import ServingIndex
+    server = setup(k2_env)
+    first = invoke(k2_env, server)
+    with k2_env.store.pin() as pin:
+        assert pin.snapshot_id == first['snapshot_id']
+        index = ServingIndex(pin, k2_env.config)
+        assert index.exact('author') == [NAME] and index.exact('Name alias') == []
+        assert index.exact('Other alias') == [OTHER]
+        server.fail_role = None
+        second = invoke(k2_env, server)
+        assert second['status'] == 'published' and second['snapshot_id'] != pin.snapshot_id
+        assert not [row for row in pin.read_rows('aliases') if row['concept_id'] == NAME and row['origin'] == 'generated']
+        assert ServingIndex(pin, k2_env.config).exact('Name alias') == []  # the pinned view did not move
+    with k2_env.store.pin() as pin:
+        assert pin.snapshot_id == second['snapshot_id']
+        assert ServingIndex(pin, k2_env.config).exact('Name alias') == [NAME]
+
+
+def test_every_concept_failing_publishes_author_aliases_only(k2_env):
+    """P3-2: with no generated alias at all the snapshot is still valid, serves the author aliases and records every key."""
+    from prompt_enhancer.k5_index import ServingIndex
+    server = setup(k2_env)
+    server.fail_concept = None
+    result = invoke(k2_env, server)
+    assert result['status'] == 'published'
+    assert result['alias_failures'] == {'count': 2, 'codes': {'SCHEMA_INVALID': 2}, 'concept_ids': sorted([NAME, OTHER])}
+    assert summary(k2_env, result['snapshot_id'])['k4_failed'] == {'count': 2, 'codes': {'SCHEMA_INVALID': 2}}
+    aliases, texts = rows(k2_env, result['snapshot_id'])
+    assert aliases == {NAME: [('author', 'author')]}  # no generated row for any concept
+    assert texts.count((NAME, 'alias')) == 1 and (OTHER, 'alias') not in texts
+    with k2_env.store.pin() as pin:
+        assert ServingIndex(pin, k2_env.config).exact('author') == [NAME]
+
+
+def test_every_concept_failing_reaches_the_command_with_exit_0_then_reports_the_skipped_publish(
+        k2_env, monkeypatch, capsys):
+    from prompt_enhancer import __main__ as cli
+    server = setup(k2_env)
+    server.fail_concept = None
+    monkeypatch.setattr(cli, 'load_config', lambda *a, **k: k2_env.config)
+    monkeypatch.setattr(cli, 'sync_config', lambda *a, **k: invoke(k2_env, server))
+    printed = []
+    for _ in range(2):
+        assert cli.main(['kb', 'sync', '--config', 'labelled-double.yaml']) == 0
+        captured = capsys.readouterr()
+        assert MARKER not in captured.out + captured.err
+        printed.append(json.loads(captured.out))
+    assert [item['status'] for item in printed] == ['published', 'unchanged']
+    assert printed[1]['publish_skipped'] == 'identical' and printed[1]['alias_failures']['count'] == 2
+    assert printed[1]['snapshot_id'] == printed[0]['snapshot_id']
 
 
 def test_a_stale_generated_alias_of_the_previous_snapshot_does_not_leak(k2_env):
@@ -129,6 +238,14 @@ def test_a_run_level_alias_code_still_blocks_the_publish(code):
         require_per_concept({'report': {'failed': {NAME: 'SCHEMA_INVALID', OTHER: code}}})
     require_per_concept({'report': {'failed': {NAME: 'SCHEMA_INVALID', OTHER: 'INCOMPLETE_OR_REFUSED'}}})
     require_per_concept({'report': {'failed': {}}})
+
+
+@pytest.mark.parametrize('code', ['NOT_A_KNOWN_CODE', 'schema_invalid', '', None, 7, ('SCHEMA_INVALID',)])
+def test_an_unrecognised_alias_code_blocks_the_publish(code):
+    # Decision 171 review (Gemini) of the P2-1 fix: `_closed_code` maps an unknown or non-string code to
+    # MODEL_CALL_FAILED, which is tolerated; checking that mapped value would publish on an unrecognised failure.
+    with pytest.raises(StorageError, match='^k4: STAGE_FAILED'):
+        require_per_concept({'report': {'failed': {NAME: 'SCHEMA_INVALID', OTHER: code}}})
 
 
 @settings(max_examples=60, deadline=None)

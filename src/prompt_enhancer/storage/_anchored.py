@@ -69,6 +69,12 @@ def atomic_write_bytes(root, relative, data, check=None):
     return size, digest
 
 
+def atomic_write_stream(root, relative, produce):
+    """`atomic_write_bytes` for content produced piece by piece: `produce(handle)` writes bytes to the temporary
+    file, so the whole content is never held at once; the file replaces `relative` only after it was written."""
+    return _write(root, relative, produce, None)
+
+
 def publish_new_bytes(root, relative, data):
     """Publish `data` at `relative` only where no entry exists (FileExistsError otherwise), never replacing one
     (T-012 F2). The fsynced temporary is committed without replace: Windows renames it on its handle with

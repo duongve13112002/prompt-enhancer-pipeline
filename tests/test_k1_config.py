@@ -42,7 +42,14 @@ def set_key(profile, key, value):
         node[parts[-1]] = value
 
 
-DELETE = object()
+class _Delete:
+    """Marker for 'remove this key'; the readable repr gives parametrize ids that are the same in every run."""
+
+    def __repr__(self):
+        return 'DELETE'
+
+
+DELETE = _Delete()
 
 
 def vllm(profile):

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "eval_result_metrics.v0",
+  "title": "Evaluation result metrics",
+  "$comment": "Draft v0. The `metrics` JSON of one `eval_results` row written by `eval run` (T-016 P4): structural evidence only. Set, snapshot, variant and trace provenance live here because the table has no column for them. Semantic metrics and intervals are not_run with a reason until scores are imported; imported scores never enter this table.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "evidence", "variant", "set_sha256", "snapshot_id", "scenario_kind", "split", "envelope", "structural", "semantic", "intervals"],
+  "properties": {
+    "schema": {"const": "eval_result_metrics.v0"},
+    "evidence": {"const": "structural"},
+    "variant": {"enum": ["on", "off"]},
+    "set_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "snapshot_id": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+    "scenario_kind": {"type": "string", "minLength": 1},
+    "split": {"enum": ["fit", "test"]},
+    "envelope": {"type": "object"},
+    "structural": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_valid", "envelope_status", "literal", "links"],
+      "properties": {
+        "schema_valid": {"const": true},
+        "envelope_status": {"enum": ["success", "repaired", "degraded", "needs_clarification", "failed"]},
+        "literal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "items"],
+          "properties": {
+            "state": {"const": "checked"},
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["constraint_id", "present"],
+                "properties": {
+                  "constraint_id": {"type": "string", "minLength": 1},
+                  "present": {"anyOf": [{"type": "boolean"}, {"type": "null"}]}
+                }
+              }
+            }
+          }
+        },
+        "links": {"$ref": "#/$defs/not_run"}
+      }
+    },
+    "semantic": {"$ref": "#/$defs/not_run"},
+    "intervals": {"$ref": "#/$defs/not_run"}
+  },
+  "$defs": {
+    "not_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason"],
+      "properties": {
+        "state": {"const": "not_run"},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

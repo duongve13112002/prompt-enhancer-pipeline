@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "eval_judge_pack.v0",
+  "title": "Evaluation judge pack",
+  "$comment": "Draft v0 (T-016 P4, decision 154). `pack.jsonl` is a header line followed by one item line per scenario; `key.json` is the unblinding key and is never given to a scorer. An item carries the scenario, its answer key, the rubric dimensions that apply and the outputs under blind labels; it carries nothing else about an output (no status, warning, retrieval state, attachment, trace id or variant). Limit of the blinding (PM decision pending user review): it protects the comparison between the two variants of one scenario. An item with two outputs shows them in an order drawn from the blinding seed and carries nothing that tells the labels apart; an item with ONE output (a retrieval-off record, or any run with --variants record) shows the scenario's own variant, and its `kind` (for example rag_off) can reveal that variant to a scorer, so a one-output pack is no blinded comparison of retrieval on against off. Evidence from scores of this pack is agent_judged: pilot only, never a threshold, calibration or fit input.",
+  "oneOf": [
+    {"$ref": "#/$defs/header"},
+    {"$ref": "#/$defs/item"}
+  ],
+  "$defs": {
+    "dimension": {
+      "enum": ["intent_preserved", "constraint_survival", "link_alignment", "family_conflict", "negation", "leakage", "under_editing"]
+    },
+    "header": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "pack_id", "run_id", "rubric", "scale", "items"],
+      "properties": {
+        "schema": {"const": "eval_judge_pack.v0"},
+        "pack_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "run_id": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+        "rubric": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["prompt_id", "sha256", "text"],
+          "properties": {
+            "prompt_id": {"type": "string", "minLength": 1},
+            "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "text": {"type": "string"}
+          }
+        },
+        "scale": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["min", "max"],
+          "properties": {"min": {"type": "integer"}, "max": {"type": "integer"}}
+        },
+        "items": {"type": "integer", "minimum": 0}
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "scenario_id", "kind", "task", "prompt", "source_image", "key", "dimensions", "outputs"],
+      "properties": {
+        "schema": {"const": "eval_judge_pack.item.v0"},
+        "scenario_id": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "minLength": 1},
+        "task": {"enum": ["generate", "edit"]},
+        "prompt": {"type": "string"},
+        "source_image": {"$ref": "eval_scenario.v0#/properties/source_image"},
+        "key": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["expected_concept_links", "expected_constraints", "draft_edit_key", "draft_link_details"],
+          "properties": {
+            "expected_concept_links": {"$ref": "eval_scenario.v0#/properties/expected_concept_links"},
+            "expected_constraints": {"$ref": "constraint_ledger.v0"},
+            "draft_edit_key": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "draft_link_details": {"type": "array", "items": {"type": "object"}}
+          }
+        },
+        "dimensions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["dimension", "ref"],
+            "properties": {
+              "dimension": {"$ref": "#/$defs/dimension"},
+              "ref": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]}
+            }
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "output"],
+            "properties": {
+              "label": {"enum": ["A", "B"]},
+              "output": {"type": ["string", "object", "array", "null"]}
+            }
+          }
+        }
+      }
+    },
+    "key": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "pack_id", "run_id", "blinding_seed", "entries"],
+      "properties": {
+        "schema": {"const": "eval_judge_key.v0"},
+        "pack_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "run_id": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+        "blinding_seed": {"type": "integer", "minimum": 0},
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["scenario_id", "label", "variant", "trace_id"],
+            "properties": {
+              "scenario_id": {"type": "string", "minLength": 1},
+              "label": {"enum": ["A", "B"]},
+              "variant": {"enum": ["on", "off"]},
+              "trace_id": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    }
+  }
+}

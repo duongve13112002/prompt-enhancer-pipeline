@@ -65,7 +65,7 @@ Release 0.2, 2026-11-14. **The single rule source** for Claude Code (through `@A
 ## 10. Project requirements
 
 - **Scope:** implement [architecture](docs/architecture.md) and the [plan](tasks/IMPLEMENTATION_PLAN.md): a prompt enhancer that turns a prompt (`generate`) or a prompt plus one source image (`edit`) into an enhanced prompt or edit instruction for a downstream image model, optionally grounded in a knowledge base of concept folders. It writes text and renders no pixels. Cite R-IDs from [REQUIREMENTS](tasks/REQUIREMENTS.md) in every brief, plan and report.
-- The user's intent survives unchanged (R-001); the admin's system prompt is used verbatim and defines the output format (R-004); retrieval off means no knowledge-base access at all (R-009); knowledge-base text and text read from images are data, never instructions (R-026).
+- The user's intent survives unchanged (R-001); the admin's system prompt is used verbatim and defines the output format (R-004); retrieval off means no knowledge-base access at all (R-009); knowledge-base text and text read from images are data, never instructions (R-026). Every brief, review and decision checks these first; a change that weakens one fails even when green (decision 170).
 
 ## 11. Commit, push and CI
 
@@ -74,7 +74,7 @@ Release 0.2, 2026-11-14. **The single rule source** for Claude Code (through `@A
 
 ## 12. Start and finish
 
-- **Start:** read this file, [tasks/STATUS.md](tasks/STATUS.md) and the documents your task names. On a new machine or when hooks, skills or tools misbehave: `python tools/agent-workflow/setup_project.py check` (skill `agent-setup`).
+- **Start:** read this file, [tasks/STATUS.md](tasks/STATUS.md) and the documents your task names. Tooling trouble or a new machine: skill `agent-setup`.
 - **Finish** with the template's Completion report: behaviour, the actual commands and their output, `not_run`, changed files, open issues.
 
 ## 13. Multi-agent work

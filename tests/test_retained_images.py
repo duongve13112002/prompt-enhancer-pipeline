@@ -518,6 +518,63 @@ def test_intake_refuses_damaged_retention_before_s4(k2_env, model_test_profile, 
     assert not pinned
 
 
+def test_manifest_copy_entry_whose_hash_differs_from_its_id_is_refused_at_intake(k2_env, model_test_profile, tmp_path,
+                                                                                project_root, monkeypatch):
+    """KBS-F3-F3: a listed `images/<hex>` file is a copy of image <hex> only if the manifest's own hash says so."""
+    from prompt_enhancer.storage.store import KnowledgeStore
+
+    config, request, ids, directory = attach_setup(k2_env, model_test_profile, tmp_path, project_root)
+    real = KnowledgeStore._manifest
+
+    def forged_manifest(self, relative, expected_sha=None):  # test-only double: one entry carries another hash
+        rows = real(self, relative, expected_sha)
+        for row in rows:
+            if row['path'] == 'images/' + ids[-1][7:]:
+                row['sha256'] = '0' * 64
+        return rows
+
+    monkeypatch.setattr(KnowledgeStore, '_manifest', forged_manifest)
+    with k2_env.store.pin() as pin, pytest.raises(StorageError, match='not retained in this snapshot'):
+        pin.retained_image_entry(ids[-1])
+    payload, pinned = run_intake(config, request, project_root)
+    assert_kb_sync_refusal(payload, k2_env.store)
+    assert not pinned
+
+
+def grown_copy_setup(k2_env, tmp_path):
+    folder(k2_env, 'f', 'Name\ndescription')
+    invoke(k2_env, SyncServer())
+    pin = k2_env.store.pin()
+    image_id = pin.read_rows('images')[0]['image_id']
+    return pin, image_id, k2_env.store.path(f'{pin._directory}/images/{image_id[7:]}')
+
+
+def test_retained_copy_larger_than_its_manifest_size_is_refused_without_reading_it(k2_env, tmp_path, monkeypatch):
+    """KBS-F3-F3: the copy read is bounded by the manifest size; a larger file is refused before any byte is read."""
+    pin, image_id, path = grown_copy_setup(k2_env, tmp_path)
+    with pin:
+        size = path.stat().st_size
+        path.write_bytes(path.read_bytes() + b'more')
+        real, reads = os.read, []
+        monkeypatch.setattr(os, 'read', lambda fd, count: reads.append(count) or real(fd, count))
+        with pytest.raises(StorageError, match='retained file unavailable') as refused:
+            pin.read_image(image_id)
+        assert path.stat().st_size == size + 4 and reads == []  # refused on the open handle's size, nothing read
+        assert str(path) not in str(refused.value)  # R-014: no machine path in the diagnostic
+
+
+def test_retained_copy_growing_during_the_read_is_never_read_past_its_bound(k2_env, tmp_path, monkeypatch):
+    from bounded_read_fixtures import grow_after_first_read
+
+    pin, image_id, path = grown_copy_setup(k2_env, tmp_path)
+    with pin:
+        size = path.stat().st_size
+        received = grow_after_first_read(monkeypatch, path, 4096)
+        with pytest.raises(StorageError, match='retained file unavailable'):
+            pin.read_image(image_id)
+        assert received[0] == size and sum(received) <= size + 1  # at most one byte beyond the manifest size
+
+
 def test_intake_accepts_three_published_images_and_never_reads_image_bytes(k2_env, model_test_profile, tmp_path,
                                                                            project_root, monkeypatch):
     from prompt_enhancer.storage.store import PinnedSnapshot
@@ -549,6 +606,36 @@ def test_same_size_corruption_is_caught_after_s3_for_selected_images_only(k2_env
         require_attachment_copies(s0, None)
         with pytest.raises(AttachmentRetentionUnavailable, match='kb sync'):
             require_attachment_copies(s0, pack(ids[0], ids[-1]))
+
+
+@pytest.mark.parametrize('damage', ['missing', 'wrong_size'])
+def test_damaged_k5_index_file_is_reported_as_an_index_problem_not_as_missing_image_copies(
+        k2_env, model_test_profile, tmp_path, project_root, damage):
+    """KBS-F3-F3: a K5 index file the manifest lists has its own fixed message; it must not tell the operator that image
+    copies are missing, and it must not carry the machine path."""
+    from prompt_enhancer.intake import INDEX_DAMAGE_MESSAGE, RETENTION_MESSAGE
+
+    config, request, ids, directory = attach_setup(k2_env, model_test_profile, tmp_path, project_root)
+    index_file = k2_env.store.path(f'{directory}/index/exact.arrow')
+    if damage == 'missing':
+        index_file.unlink()
+    else:
+        index_file.write_bytes(index_file.read_bytes() + b'x')
+    payload, pinned = run_intake(config, request, project_root)
+    assert payload['outcome'] == 'refused' and not pinned
+    assert payload['error'] == {'code': 'KNOWLEDGE_FAILED', 'message': INDEX_DAMAGE_MESSAGE}
+    assert INDEX_DAMAGE_MESSAGE != RETENTION_MESSAGE and 'image' not in INDEX_DAMAGE_MESSAGE
+    assert str(tmp_path) not in repr(payload) and not list((k2_env.store.root / 'leases').glob('*/*.lease'))
+
+
+def test_damaged_k5_index_file_is_reported_without_attachments_as_before(k2_env, model_test_profile, tmp_path,
+                                                                         project_root):
+    """The request that attaches nothing keeps its generic refusal label (the index message is the attach path's)."""
+    config, request, ids, directory = attach_setup(k2_env, model_test_profile, tmp_path, project_root)
+    config['edit']['attach_kb_reference_images'] = False
+    k2_env.store.path(f'{directory}/index/exact.arrow').unlink()
+    payload, pinned = run_intake(config, request, project_root)
+    assert payload['error'] == {'code': 'KNOWLEDGE_FAILED', 'message': 'intake refused (RetainedFileError)'} and not pinned
 
 
 def test_no_snapshot_with_attachments_on_stays_degraded(project_root, tmp_path, model_test_profile):
