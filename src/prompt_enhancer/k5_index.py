@@ -428,7 +428,15 @@ class ServingIndex:
             batch = _decode(self._read_file(part['path']))
             keys = list(zip(*(batch.column(key).to_pylist() for key in SPECS[table].key)))
             with np.errstate(over='ignore', invalid='ignore'):
-                scores = _matrix(batch, self.settings['metric']) @ query
+                # A row's score must not depend on its shard: a BLAS matrix-vector product rounds differently per
+                # shard shape and row position, so equal vectors could score apart and break key ties on noise.
+                # The row-wise product-and-sum reduces each row alone, in an order fixed by the dimension (K5-TIE).
+                # `_matrix` returns a fresh array, so the product is formed in place (no second B*D buffer). The
+                # row sum is bitwise shard-independent only on C-contiguous rows, so the layout is enforced here:
+                # no copy when it already holds (today's path), a fresh C-ordered copy for any other layout.
+                weighted = np.ascontiguousarray(_matrix(batch, self.settings['metric']), dtype=SCORE_DTYPE)
+                weighted *= query
+                scores = weighted.sum(axis=1)
             if not np.isfinite(scores).all():
                 raise StorageError('K5: computed nonfinite score')
             # Rows within each shard are already in stable primary-key order.
