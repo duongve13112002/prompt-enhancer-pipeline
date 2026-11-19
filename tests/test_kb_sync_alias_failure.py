@@ -142,4 +142,3 @@ def test_the_recorded_failure_holds_only_concept_ids_and_closed_codes(failed):
     assert set(record['codes']) <= _CLOSED_CODES | {'MODEL_CALL_FAILED'} and sum(record['codes'].values()) == len(failed)
     assert MARKER not in json.dumps(record)
     assert record['concept_ids'] == sorted(record['concept_ids'])
-
