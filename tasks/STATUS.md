@@ -7,7 +7,8 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
 - **2026-11-20 status for the returning user: nothing is running; every next step waits for the user.**
   - main = `7bb9f74`, pushed; CI 39 green; the repository is private again. No workers and no worktrees run; the GPU is free (0 MiB).
   - **S42 tooling fix integrated (`7bb9f74`):** `ci_window` views a run again when `gh run view` answers HTTP 404 right after dispatch, only before the run is first seen and within `dispatch_lookup_timeout_seconds`. Gemini Flash diff-only review PASS. Noticed, not fixed: `gh run cancel` and `gh run list` could meet the same transient 404.
-  - **Waiting for the user:** the T-017 questions in the 02:5x and 00:0x/00:xx rows below (G1 route, dev model size, MS-1 start, golden retrieval switch, S1 code in the envelope, `degraded` in a grounding case, a "not reached" retrieval state), and the PM decisions pending user review in those rows.
+  - **User answers (decisions 194 to 201):** G1 by an admin output schema; quality is tested on Claude Haiku 5.5 through the API, while the local 4B model only tests the local path; MS-1 starts; golden retrieval switch, the S1 code in the envelope, `degraded` never passes a grounding case, a "not reached" retrieval state; the pending PM decisions in the rows below are accepted.
+  - **Asked 2026-11-20 (the PM continues meanwhile):** the Haiku request count and which stages use it; `on_budget_exhausted`; the seed rule for a backend without a seed parameter (the Claude skill docs show none, and Haiku 5.5 refuses non-default sampling values); the PM writing the pilot bundle's output schema; the Anthropic workspace ID.
   - Cleanup pending: `.tmp/worktrees/T-026-retest3` could not be removed ("link or left partially"); not forced.
 
 - **2026-11-20 02:5x: T-017 is blocked on the user.**
