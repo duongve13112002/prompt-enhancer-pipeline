@@ -1,6 +1,6 @@
 # Prompt enhancer pipeline
 
-A documentation-first repository for designing and then building a prompt enhancer: it turns a user's prompt (or a prompt plus one source image to edit) into an enhanced prompt or edit instruction for a downstream image model, in the format the admin's system prompt defines, optionally grounded in a knowledge base of concept folders. **Status: design documents, contracts, configuration examples, a backlog and the multi-agent tooling. No pipeline code yet**; implementation starts only on the user's explicit command ([AGENTS.md](AGENTS.md)).
+A documentation-first repository for designing and then building a prompt enhancer: it turns a user's prompt (or a prompt plus one source image to edit) into an enhanced prompt or edit instruction for a downstream image model, in the format the admin's system prompt defines, optionally grounded in a knowledge base of concept folders. **Status: design documents, contracts, configuration examples, a backlog and the multi-agent tooling, plus the pipeline code built so far under `src/`** (`python -m prompt_enhancer`: `kb`, `profile`, `enhance`, `eval`), tested on the CPU with labelled HTTP doubles; only `kb sync` has run against live local models (a dev-GPU smoke on one folder), nothing has run on the deployment, and nothing is measured. The commands and a first deployment are in the [run guide](docs/run-guide.md). Implementation starts only on the user's explicit command ([AGENTS.md](AGENTS.md)).
 
 ## Layout
 

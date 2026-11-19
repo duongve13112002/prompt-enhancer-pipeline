@@ -5,23 +5,23 @@ How the pipeline runs end to end. Data shapes: [contracts](../contracts/README.m
 ## Where things run (R-020)
 
 - **Everything works on the dev machine first**, end to end, on the example knowledge base and the agent-built scenarios: `kb sync`, admin profile registration, both tasks with retrieval on and off, validation and evaluation. A feature is done only when it runs there. Dev results show that code works, never quality ([dev-machine](dev-machine.md)).
-- **The user runs the deployment.** The agent never logs in to it; it writes a run guide (commands, configuration overlay, expected outputs, how to check VRAM, resume and roll back) and reads the results the user pastes or places in shared storage ([serving](serving.md)).
+- **The user runs the deployment.** The agent never logs in to it; it wrote a run guide (commands, configuration overlay, expected outputs, how to check VRAM, resume and roll back: [run-guide](run-guide.md)) and reads the results the user pastes or places in shared storage ([serving](serving.md)). Only `kb sync` has run against live local models (a dev-GPU smoke on one folder); no command has run on the deployment yet.
 - **Models** are reached over HTTP through the backend each `vlm.roles.<name>` binds to (R-018); request fields follow [VLM_CALL_RULES](rules/VLM_CALL_RULES.md).
 
 ## Commands
 
-Each command refuses at start when a key it reads still holds a sentinel or is missing, naming the key, because a silent default hides a decision nobody made (R-015).
+Each command refuses at start when a key it reads still holds a sentinel or is missing, naming the key, because a silent default hides a decision nobody made (R-015). Invocations, outputs, exit codes and the first-deployment order: [run-guide](run-guide.md); `tests/test_run_guide.py` checks that this table and the guide name exactly the commands the parser has.
 
 | Command | Does | Needs | Refuses |
 | --- | --- | --- | --- |
 | `kb status` | shows the stored snapshots, the current one and its row counts; it does not look at the source folders, so `live_source_changes` is `not_checked` (use `kb sync --plan` for pending changes) | `storage.kb_store`, `storage.lock` | nothing: a missing store is reported (`store_present: false`, exit 0) |
 | `kb sync [--plan] [--force]` | runs K0 to K5 and publishes a snapshot; `--plan` stops after the plan; `--only <folder>` is refused (a scoped sync would treat the other folders as removed) | `knowledge.*`, pinned models and revisions for the roles K1 to K4 use, `sync.*` | a plan over the mass-deletion guard without `--force`; unpinned models (`pin_required`) |
-| `kb rollback <snapshot>` | moves the current pointer to a retained snapshot | the snapshot still retained | a snapshot already collected |
-| `kb gc` | removes unreferenced artifacts and snapshots past retention | `sync.*` retention keys | artifacts a retained snapshot references |
-| `kb audit` | samples card facts and stability labels for human checking (E16) | a published snapshot | nothing |
-| `kb show <concept>` | prints a concept's card, aliases and folders by concept id or name (no lint: the snapshot tables store none) | a published snapshot | unknown concept (reported) |
-| `profile register` | drafts the manifest and conflict list for a system prompt (P) | `profiles.root`, the `manifest_drafter` backend | nothing is activated until the admin confirms |
-| `profile check` | runs conflict lint and golden tests; activates on success | a confirmed manifest and a decision for each conflict | activation while a conflict is `block_activation` or a golden test fails |
+| `kb rollback <snapshot>` | moves the current pointer to a retained snapshot | the snapshot still retained; `storage.kb_store`, `storage.lock` | an unknown, malformed, current or collected snapshot, or a missing store (exit 2) |
+| `kb gc` | removes unreferenced artifacts and snapshots past retention | `sync.gc.retention`, `sync.snapshots.keep`, `storage.*` | a missing store (exit 2); artifacts a retained snapshot references are kept |
+| `kb audit --folder-count N --card-count N --seed N` | samples card facts and stability labels for human checking (E16) | a published snapshot | nothing: without a snapshot it prints `status: SNAPSHOT_MISSING`, exit 0 |
+| `kb show <concept>` | prints a concept's card, aliases and folders by concept id or name (no lint: the snapshot tables store none) | a published snapshot | no snapshot or an unknown concept (exit 2) |
+| `profile register --profile-id <id>` | drafts the manifest and conflict list for a system prompt (P) | `profiles.root`, `creativity`, the `manifest_drafter` backend, `storage.lock` | an existing `manifest.yaml` (exit 2); a failed drafting call (exit 1); nothing is activated until the admin confirms |
+| `profile check --profile-id <id>` | runs conflict lint and golden tests through the pipeline; activates on success | a confirmed manifest and a decision for each conflict; the read set of `enhance once` (it builds the pipeline) | activation while a conflict is undecided or `block_activation` (exit 2) or a golden test fails (exit 1) |
 | `enhance once --request <file>` | runs S0 to S6 for one `request.v0` file and prints the envelope as one JSON line; retained attachments are written first (below) | an active admin profile; with retrieval on, a published snapshot; `serving.http.max_request_bytes` | a task the profile does not support (decision 5); a bad request file |
 | `enhance serve` | serves S0 to S6 over HTTP on `serving.host` and `serving.port` (no flags), one request per connection, until Ctrl+C or SIGTERM (below) | as `enhance once`, plus `serving.host`, `serving.port`, `serving.max_concurrency`, `serving.queue_limit`, `serving.total_deadline_s` and `serving.http.*` | `deploy_required` or `fit_from_bench` values left in those keys; an address that cannot be bound (exit 1) |
 | `eval build` | has agents generate scenarios and answer keys (G); owned by T-003, refused with exit 2 here | a published snapshot, the `scenario_generator` backend, a call budget for paid backends (`ask_user`) | a paid backend without a budget |

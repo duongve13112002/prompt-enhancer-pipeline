@@ -1,6 +1,6 @@
 # Serving and latency
 
-Design only; nothing was implemented or measured (R-021). No latency or throughput figure appears here, and none may be claimed before E13. The agent never starts the production server (R-018): the user runs it from the run guide below.
+The model-serving design below is not measured (R-021): `enhance serve` (the HTTP wrapper) is built and tested with labelled doubles, but it has not run against a model server, and no latency or throughput was measured. No latency or throughput figure appears here, and none may be claimed before E13. The agent never starts the production server (R-018): the user runs it from the [run guide](run-guide.md).
 
 ## Target
 
@@ -43,7 +43,7 @@ Images are embedded offline (K1). Online, only short text is embedded, so the em
 
 ## Run guide
 
-The agent writes a run guide for the user, who starts the server. It states: the exact model repository and revision to load (`pin_required` until pinned); the server command with the thinking default, the image limit per prompt and the memory fraction, each taken from [N121](note/N121-vllm-qwen38-serving.md) and confirmed against the installed version; how to set `serving.*` and `vlm.backends` in the overlay [configs/overlays/deploy-vllm.example.yaml](../configs/overlays/deploy-vllm.example.yaml); the smoke test to run first (E13); the data to return (capability probe result, VRAM, latency under concurrency); and the reminder that the repository starts no production server.
+The [run guide](run-guide.md) is written for the user, who starts the server. It covers every built command, how to set `serving.*` and `vlm.backends` in the overlay [configs/overlays/deploy-vllm.example.yaml](../configs/overlays/deploy-vllm.example.yaml), the VRAM checks, the first-deployment order and what to paste back, and the reminder that the repository starts no production server. It does **not** state a vLLM or SGLang command line: the exact model repository and revision (`pin_required` until pinned), the thinking default, the image limit per prompt and the memory fraction are taken from [N121](note/N121-vllm-qwen38-serving.md) and confirmed against the installed version's own `--help`, and stay unverified here (below). The smoke test to run first is E13; the data to return is the capability probe result, VRAM and latency under concurrency.
 
 ## Not verified
 
