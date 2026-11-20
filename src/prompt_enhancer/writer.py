@@ -9,7 +9,7 @@ from pathlib import Path
 from jsonschema import ValidationError
 
 from .assembly import CHANNEL, attached_note
-from .config import ConfigurationError, resolve_writer_format, validate_writer_reads
+from .config import ConfigurationError, resolve_writer_format, validate_anthropic_writer_schema, validate_writer_reads
 from .model_client import ModelCallError, safe_model_code
 from .model_json import check_json_depth
 from .model_schemas import SchemaRegistry, with_output_schema
@@ -144,8 +144,16 @@ def prepare_write(intake_result, plan_result, assembly_result, *, project_root, 
     resolved_role = resolve_writer_format(config['vlm']['roles'][ROLE], profile.manifest, project_root=root,
                                           profile_schema_id=getattr(profile, 'output_schema_id', None))
     selected_backend = config['vlm']['backends'][resolved_role['backend']]
-    if selected_backend['provider'] != 'openai_compatible' and resolved_role['output']['format'] != 'none':
-        raise ConfigurationError('vlm.roles.writer.output: cloud structured output mapping is not verified')
+    resolved_output = resolved_role['output']
+    if selected_backend['provider'] != 'openai_compatible' and resolved_output['format'] != 'none':
+        if selected_backend['provider'] != 'anthropic':  # the resolved format is `json_schema` here (resolve_writer_format)
+            raise ConfigurationError('vlm.roles.writer.output: cloud structured output mapping is not verified')
+        # T017-FIX4: Anthropic `json_schema` is verified (CLOUD-1); the resolved schema (the bundle's or a contract's)
+        # goes through the same checks a registered schema gets at load, before any request.
+        bundle_id = getattr(profile, 'output_schema_id', None)
+        source = ('output_schema.json' if resolved_output['schema_id'] == bundle_id
+                  else f"schema {resolved_output['schema_id']}")
+        validate_anthropic_writer_schema(registry.get(resolved_output['schema_id'])[0], source)
     prompt_id = config['vlm']['roles'][ROLE]['prompt_id']
     confirmed = getattr(profile, 'writer_brief', None)
     if confirmed is not None and confirmed[0] != prompt_id:

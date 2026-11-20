@@ -271,10 +271,15 @@ def test_cloud_writer_placeholder_resolves_before_provider_refusal(model_test_pr
     client, s0 = WriterDouble(), view(config)
     result = asyncio.run(write(s0, plan(ir()), None, client, project_root=project_root))
     assert result['state'] == 'draft' and len(client.calls) == 1
+    # T017-FIX4: an Anthropic writer may send a resolved schema (CLOUD-1 mapping): one Anthropic can take reaches the
+    # call (the double's text then fails that schema); one it cannot take (open objects) is refused before any call.
     s0.profile.manifest['output_schema_id'] = 'verifier_result.v0'
-    with pytest.raises(ConfigurationError, match='output.*cloud structured'):
+    result = asyncio.run(write(s0, plan(ir()), None, client, project_root=project_root))
+    assert result['state'] == 'failed' and len(client.calls) == 2
+    s0.profile.manifest['output_schema_id'] = 'profile_manifest.v0'
+    with pytest.raises(ConfigurationError, match=r'schema profile_manifest\.v0: cannot be sent to Anthropic'):
         asyncio.run(write(s0, plan(ir()), None, client, project_root=project_root))
-    assert len(client.calls) == 1
+    assert len(client.calls) == 2
 
 
 @pytest.mark.parametrize('field,alternate', [('anthropic_version', '2025-02-01'), ('anthropic_workspace_id', 'workspace'),

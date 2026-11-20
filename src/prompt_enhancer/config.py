@@ -1210,6 +1210,31 @@ def _validate_anthropic_schemas(role_name, schema_id, path, key, project_root):
                                      f'structured output: {error}') from error
 
 
+def validate_anthropic_writer_schema(schema, source):
+    """T017-FIX4: the writer's resolved schema (the admin bundle's or a project contract) must be sendable to Anthropic.
+
+    The writer's schema is unknown at load (`from_profile_manifest`), so the check runs where it becomes known: a
+    profile load (`source` names `output_schema.json`) and the request path (`writer.prepare_write`). It is the same
+    `anthropic_output_schema` check a registered schema gets at load (CLOUD-1); a refusal names `source`, never repairs."""
+    from .model_cloud import anthropic_output_schema
+
+    try:
+        anthropic_output_schema(schema)
+    except ValueError as error:
+        raise ConfigurationError(f'{source}: cannot be sent to Anthropic structured output: {error}') from error
+
+
+def writer_provider(config):
+    """The provider of the writer role's backend, or None while the role or backend is a sentinel or absent."""
+    vlm = config.get('vlm') if isinstance(config, dict) else None
+    roles = vlm.get('roles') if isinstance(vlm, dict) else None
+    role = roles.get('writer') if isinstance(roles, dict) else None
+    name = role.get('backend') if isinstance(role, dict) else None
+    backends = vlm.get('backends') if isinstance(vlm, dict) else None
+    backend = backends.get(name) if isinstance(backends, dict) and isinstance(name, str) else None
+    return backend.get('provider') if isinstance(backend, dict) else None
+
+
 def installed_encoder(name):
     """Whether Pillow can encode `name`, looked up as `Image.save` looks it up: `SAVE[name.upper()]` once every
     plugin is registered (PIL/Image.py:2564-2573). The installed plugins decide, not a list of format words; an

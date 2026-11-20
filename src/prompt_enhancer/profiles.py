@@ -36,7 +36,7 @@ import yaml
 
 from .config import (_AMBIGUOUS_BREAKS, ConfigurationError, _MetaLoader, _StrictSafeLoader, _filename, _inside,
                      _load_yaml, _parse_manifest, _schema, _schema_path, _sentinel, load_profile, manifest_schema_id,
-                     validate_renderer)
+                     validate_anthropic_writer_schema, validate_renderer, writer_provider)
 from .model_client import ModelCallError, safe_model_code
 from .model_json import check_json_depth, strict_json
 from .profile_lint import (ADDENDUM_ID, DECISIONS, conflict_findings, input_variable, key_findings, render_addendum,
@@ -61,6 +61,9 @@ CHECK_LOCK_FILE = 'check.lock'
 # Artifact-bound (T017-FIX3, decision 194): the admin's JSON Schema for the writer reply, beside `system_prompt.txt`;
 # its `$id` is the manifest's `output_schema_id`.
 OUTPUT_SCHEMA_FILE = 'output_schema.json'
+# safety-bound (T017-FIX4): characters of a configuration refusal kept in golden_results.json; no configured or contract
+# limit for failure text exists, and the text is a short key-and-file message, so a fixed cap keeps the report small.
+GOLDEN_ERROR_MESSAGE_CHARS = 1000
 MANIFEST_SCHEMA = 'profile_manifest.v0'  # protocol-bound: the drafter's output contract (manifest schema_version 1)
 MANIFEST_SCHEMA_V1 = 'profile_manifest.v1'  # protocol-bound: the same with the multi-source renderer (schema_version 2)
 GOLDEN_SCHEMA = 'golden_case.v1'  # T017-FIX3 (decisions 197, 199); a golden_case.v0 file is refused
@@ -585,6 +588,12 @@ def _view(profile_id, manifest, manifest_raw, prompt, config, root, activation):
     bundle = _bundle(config, profile_id, root)
     artifacts, hashes = load_validators(bundle, manifest['validator']['checks'], project_root=root)
     output_schema = load_output_schema(manifest, bundle, root)
+    if output_schema is not None and writer_provider(config) == 'anthropic':
+        # T017-FIX4: the writer sends the bundle schema to Anthropic as it is; refuse one it cannot take, naming the file.
+        try:
+            validate_anthropic_writer_schema(output_schema[1], OUTPUT_SCHEMA_FILE)
+        except ConfigurationError as error:
+            raise ProfileError('PROFILE_OUTPUT_SCHEMA_INVALID', str(error)) from error
     return ProfileView(
         profile_id=profile_id, manifest=deepcopy(manifest), system_prompt_sha256=sha256_tag(prompt),
         manifest_sha256=sha256_tag(manifest_raw), system_message=system_message(prompt, fmt, structure),
@@ -833,6 +842,10 @@ async def _check_locked(config, profile_id, runner, bundle, root):
             check_json_depth(diagnostics)
         except Exception as error:  # a runner failure fails the case; it never activates the profile
             entry['error'] = type(error).__name__
+            if isinstance(error, ConfigurationError):
+                # T017-FIX4: a configuration refusal names keys and files, never reply text, so its message is kept
+                # (bounded); a ModelCallError or other exception may carry reply text, so it stays a class and a code (R-026).
+                entry['error_message'] = str(error)[:GOLDEN_ERROR_MESSAGE_CHARS]
             code = getattr(error, 'code', None)
             if code is not None:
                 entry['code'] = _failure_code(code)
