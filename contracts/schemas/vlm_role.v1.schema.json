@@ -1,0 +1,246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vlm_role.v1",
+  "title": "VLM role in a non-template profile (configuration version 3)",
+  "$comment": "Draft v1 (CLOUD-2): vlm_role.v0 plus the output.transport value tool_forced, which only configuration version 3 (enhancer_config.v2) uses and which the loader allows for vlm.roles.planner on an Anthropic backend only. vlm_role.v0 stays byte-identical (contracts/README.md versioning rules). Describes the final form of vlm.roles.<name> (contracts/vlm-request.md). Template sentinels such as fit_from_gt are refused by the loader before this schema applies. Ranges are the schema's own bounds, not engine limits. The role's image field is none or an object that names the image source and where size and encoding come from (the configuration profile block vision).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "mode",
+    "backend",
+    "prompt_id",
+    "image",
+    "max_tokens",
+    "sampling",
+    "reasoning",
+    "output"
+  ],
+  "properties": {
+    "mode": {
+      "enum": [
+        "generate"
+      ]
+    },
+    "backend": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "image": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "format", "quality", "transport"],
+          "properties": {
+            "source": {
+              "enum": ["source_image", "user_reference", "knowledge_reference", "edit_source_only", "edit_source_and_live_look"],
+              "description": "Which images a call may carry: an image role name, edit_source_only (the request's source image) or edit_source_and_live_look (the source image plus knowledge images); enforced per call by the model client (T-014)"
+            },
+            "max_side": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "const": "from_vision"
+                },
+                {
+                  "const": "none"
+                }
+              ],
+              "description": "Longer side in pixels after a downscale that keeps the aspect ratio and never upscales; `none` sends the original image; `from_vision` takes `vision.max_image_side` (decision 84)"
+            },
+            "format": {
+              "type": "string",
+              "minLength": 1
+            },
+            "quality": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "transport": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "max_tokens": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sampling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "temperature",
+        "top_p",
+        "top_k",
+        "min_p",
+        "presence_penalty",
+        "frequency_penalty",
+        "repetition_penalty",
+        "seed",
+        "stop"
+      ],
+      "properties": {
+        "temperature": {
+          "type": "number",
+          "minimum": 0
+        },
+        "top_p": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "top_k": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "min_p": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "presence_penalty": {
+          "type": "number"
+        },
+        "frequency_penalty": {
+          "type": "number"
+        },
+        "repetition_penalty": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "seed": {
+          "anyOf": [
+            {"type": ["integer", "null"]},
+            {"const": "none"}
+          ]
+        },
+        "stop": {
+          "anyOf": [
+            {"type": "array", "items": {"type": "string"}},
+            {"const": "none"}
+          ]
+        }
+      }
+    },
+    "reasoning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "effort",
+        "budget_tokens",
+        "template_kwargs_key"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "off",
+            "on",
+            "auto"
+          ]
+        },
+        "effort": {
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "backend_default"
+          ]
+        },
+        "budget_tokens": {
+          "anyOf": [
+            {"type": ["integer", "null"], "minimum": 0},
+            {"const": "none"}
+          ]
+        },
+        "template_kwargs_key": {
+          "type": "string"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "schema_id",
+        "strict",
+        "transport",
+        "validate_response"
+      ],
+      "properties": {
+        "format": {
+          "enum": [
+            "none",
+            "json_object",
+            "json_schema",
+            "from_profile_manifest"
+          ]
+        },
+        "schema_id": {
+          "type": "string"
+        },
+        "strict": {
+          "type": "boolean"
+        },
+        "transport": {
+          "enum": [
+            "response_format",
+            "engine_native",
+            "tool_forced"
+          ]
+        },
+        "validate_response": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "output": {
+            "properties": {
+              "format": {
+                "enum": [
+                  "json_object",
+                  "json_schema"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "output": {
+            "properties": {
+              "validate_response": {
+                "const": true
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

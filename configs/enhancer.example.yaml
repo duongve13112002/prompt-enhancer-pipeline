@@ -301,7 +301,7 @@ vlm:                                     # R-018: rules name no model; models ar
         format: json_schema
         schema_id: planner_reply.v0      # contracts/schemas/; code builds intent_ir.v0 from it (T-014)
         strict: true
-        transport: response_format
+        transport: response_format       # on an Anthropic backend a long planner schema can exceed the grammar limit (HTTP 400): set tool_forced there (planner only, schema_version 3, validate_response true, no reasoning mode on, backend on_budget_exhausted stop, allow_images true for an image role); CLOUD-2
         validate_response: true          # servers may ignore schema keywords silently, N122
     writer:
       backend: main

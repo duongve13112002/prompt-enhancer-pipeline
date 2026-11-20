@@ -33,6 +33,14 @@ class ProbeArtifactError(ValueError):
     """The independently pinned challenge artifact cannot be trusted."""
 
 
+class ProbeHttpError(RuntimeError):
+    """A probe request answered with a non-2xx status; `status` is the closed integer, never the body."""
+
+    def __init__(self, status):
+        super().__init__(f'probe HTTP {status}')
+        self.status = status
+
+
 class ProbeLimitExhausted(RuntimeError):
     """The backend's run-scoped allowance has no send left."""
 
@@ -263,12 +271,36 @@ def probe_image_challenges(project_root):
         return None
 
 
+# Safety-bound (CLOUD-2): `max_tokens` of a probe request whose reply is never read. The grammar-size refusal of the real
+# planner schema was seen at 16 (experiment, claude-haiku-5-5, 2026-11-20), and a larger value only costs output tokens.
+PROBE_COMPILE_MAX_TOKENS = 16
+
+
+def _compile_max_tokens(role):
+    """The small limit of a probe whose reply is not read; the role's own when thinking is on, because the documented
+    thinking budget must stay below `max_tokens`."""
+    return role['max_tokens'] if role['reasoning']['mode'] == 'on' else min(role['max_tokens'], PROBE_COMPILE_MAX_TOKENS)
+
+
+def accepted_verdict(response):
+    """A reply that arrived as a JSON object; the request was accepted, whatever the `stop_reason` (CLOUD-2)."""
+    try:
+        payload = response.json()
+    except ValueError:
+        return ProbeVerdict(False, 'PROBE_MALFORMED')
+    return ProbeVerdict(True) if type(payload) is dict else ProbeVerdict(False, 'PROBE_MALFORMED')
+
+
 def production_probe_cases(bundle, image_bytes, backend, role, vision, capability, max_side, *, warnings=None,
-                           seed=None):
+                           seed=None, real_schema=None):
     """Build only the demanded challenge; deployment choices come from validated config.
 
     `max_side` is the effective image side generation would use for this role and backend (never re-derived here).
     `seed` replaces `sampling.seed` in every body (a probe retry, decision 188); nothing else changes.
+    `real_schema` (CLOUD-2) is the role's registered reply schema, for an Anthropic role with `json_schema` output:
+    on `output.transport: tool_forced` the json_schema probe is one forced-tool request carrying it, and on
+    `response_format` the `json_schema` capability gains a `schema` challenge that posts it as the sent schema. Both
+    pass on an accepted request, so an API refusal of the real schema shows at start, not at the first real call.
     """
     provider = backend['provider']
     image_case = capability == 'image' or capability.startswith('image+')
@@ -276,8 +308,13 @@ def production_probe_cases(bundle, image_bytes, backend, role, vision, capabilit
     fmt = fmt if fmt in ('json_object', 'json_schema') else 'none'
     if image_case and provider != 'openai_compatible' and not backend['allow_images']:
         raise ValueError('image probe prohibited by backend')
+    tool_forced = fmt == 'json_schema' and role['output'].get('transport') == 'tool_forced'
+    if tool_forced and (provider != 'anthropic' or real_schema is None):
+        raise ValueError('a tool_forced probe needs an anthropic backend and the real schema')
     challenges = zip(image_bytes, [item['answer'] for item in bundle['images']]) if image_case else (
         (None, bundle['text_answer']),)
+    if tool_forced:
+        challenges = list(challenges)[:1]  # one request: the real tool schema, with the image when the capability has one
     result = {}
     for index, (data, answer) in enumerate(challenges):
         prompt = bundle['image'] if image_case else bundle['text']
@@ -286,16 +323,32 @@ def production_probe_cases(bundle, image_bytes, backend, role, vision, capabilit
             images = [prepare_probe_image(data, max_side, backend, role, vision)]
         probe_role = deepcopy(role)
         probe_role['output'] = dict(role['output'], format=fmt, schema_id=BUNDLE_ID)
+        if role['output'].get('transport') == 'tool_forced' and not tool_forced:
+            probe_role['output']['transport'] = 'response_format'  # the text probe of a tool_forced role is plain text
         if seed is not None:
             probe_role['sampling']['seed'] = seed
+        if tool_forced:
+            probe_role['max_tokens'] = _compile_max_tokens(role)
         if provider == 'openai_compatible':
             body, dropped = openai_request(backend, probe_role, None, prompt, schema=PROBE_SCHEMA,
                                            images=images, mapped=True)
         else:
-            body, dropped = cloud_request(provider, backend, probe_role, '', prompt, schema=PROBE_SCHEMA, images=images)
+            body, dropped = cloud_request(provider, backend, probe_role, '', prompt,
+                                          schema=real_schema if tool_forced else PROBE_SCHEMA, images=images)
         if warnings is not None:
             warnings.extend(item for item in dropped if item not in warnings)
-        result[str(index)] = (body, lambda response, answer=answer: probe_verdict(response, provider, answer))
+        verdict = accepted_verdict if tool_forced else (
+            lambda response, answer=answer: probe_verdict(response, provider, answer))
+        result[str(index)] = (body, verdict)
+    if provider == 'anthropic' and capability == 'json_schema' and real_schema is not None and not tool_forced:
+        probe_role = deepcopy(role)
+        probe_role['max_tokens'] = _compile_max_tokens(role)
+        if seed is not None:
+            probe_role['sampling']['seed'] = seed
+        body, dropped = cloud_request(provider, backend, probe_role, '', bundle['text'], schema=real_schema)
+        if warnings is not None:
+            warnings.extend(item for item in dropped if item not in warnings)
+        result['schema'] = (body, accepted_verdict)
     return result
 
 
@@ -306,6 +359,7 @@ class ProbeResult:
     errors: dict
     evidence: tuple = ()
     digests: dict = field(default_factory=dict)  # case name -> reply digest of the last verdict that carried one
+    http_status: dict = field(default_factory=dict)  # case name -> HTTP status of a refused request (CLOUD-2)
 
 
 def summarize_probe_group(result, names, capability):
@@ -320,6 +374,10 @@ def summarize_probe_group(result, names, capability):
         else:
             status = 'complete' if result.capabilities[name] else 'negative'
         case = {'challenge': name, 'status': status}
+        if status == 'failed' and name == 'schema' and name in result.http_status:
+            # CLOUD-2: only the real-schema challenge names its HTTP status (a closed integer); the events of every
+            # other challenge keep their shape, which existing tests pin.
+            case['http_status'] = result.http_status[name]
         if reason in PROBE_CODES:
             case['reason'] = reason
         cases.append(case)
@@ -345,6 +403,7 @@ async def probe_capabilities(cases, max_requests, timeout_s):
         raise ValueError('invalid probe limits')
     capabilities, errors, digests = {}, {}, {}
     failed, incomplete = False, False
+    statuses = {}
     for index, (name, case) in enumerate(cases.items()):
         if index >= max_requests:
             break
@@ -369,9 +428,11 @@ async def probe_capabilities(cases, max_requests, timeout_s):
             return ProbeResult('incomplete', capabilities, {**errors, name: 'PROBE_INCOMPLETE'}, digests=digests)
         except Exception as error:
             failed = True
-            errors[name] = type(error).__name__
+            errors[name] = 'RuntimeError' if isinstance(error, ProbeHttpError) else type(error).__name__
+            if isinstance(error, ProbeHttpError):
+                statuses[name] = error.status
     status = 'failed' if failed else ('incomplete' if incomplete or len(capabilities) < len(cases) else 'complete')
-    return ProbeResult(status, capabilities, errors, digests=digests)
+    return ProbeResult(status, capabilities, errors, digests=digests, http_status=statuses)
 
 
 def require_capabilities(result, required):
@@ -389,7 +450,7 @@ async def probe_backend(transport, endpoint, cases, max_requests, timeout_s, *, 
     async def run_case(body, verifier):
         response = await transport.post(endpoint, body, headers or {})
         if not response.is_success:
-            raise RuntimeError(f'probe HTTP {response.status_code}')
+            raise ProbeHttpError(response.status_code)
         return verifier(response)
 
     calls = {name: (lambda body=body, verifier=verifier: run_case(body, verifier))

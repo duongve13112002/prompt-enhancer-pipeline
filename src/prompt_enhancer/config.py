@@ -1009,14 +1009,20 @@ def _validate_probe_attempts(vlm, path, project_root=None):
         if type(limit) is not int or backend.get('provider') in SENTINELS:
             continue  # not computable from the profile: the runtime keeps PROBE_INCOMPLETE
         structured = 1 if output in ('json_object', 'json_schema') else 0
-        base = 1 + structured + challenges * (1 + structured)
+        # CLOUD-2: on Anthropic a json_schema role also sends its real schema once (`schema` challenge), or, forced
+        # through a tool, replaces its structured probes by one tool request each (text-level and image-level).
+        forced = isinstance(role['output'], dict) and role['output'].get('transport') == 'tool_forced'
+        real = 1 if (backend.get('provider') == 'anthropic' and output == 'json_schema' and not forced) else 0
+        structured_images = 1 if forced else challenges * structured
+        base = 1 + structured + real + challenges + structured_images
         retries = challenges * (attempts - 1)
         if base + retries > limit:
             raise ConfigurationError(
                 f'{path}: {key}: {attempts} attempts make the plain image probe of role {name!r} need up to '
-                f'{base + retries} requests ({base} for its challenges: 1 text + {structured} structured + '
-                f'{challenges * (1 + structured)} image; plus {challenges} challenges x {attempts - 1} retries = '
-                f'{retries}), but vlm.backends.{probed}.probe.max_requests is {limit}')
+                f'{base + retries} requests ({base} for its challenges: 1 text + {structured + real} structured + '
+                f'{challenges + structured_images} image; plus {challenges} challenges x {attempts - 1} retries = '
+                f'{retries}), but vlm.backends.{probed}.probe.max_requests is {limit}; raise it to at least '
+                f'{base + retries}')
 
 
 def _validate_model_bindings(config, path, project_root=None):
@@ -1116,11 +1122,15 @@ def _validate_model_bindings(config, path, project_root=None):
         output = role['output']
         if isinstance(output, dict) and output['format'] == 'json_schema' and output['schema_id'] in ('none', 'from_profile_manifest'):
             raise ConfigurationError(f'{path}: {key}.output.schema_id: json_schema requires a concrete schema')
+        if isinstance(output, dict) and output['transport'] == 'tool_forced':
+            _validate_tool_forced(name, role, provider, path, key, backend)
         if isinstance(output, dict) and provider in ('anthropic', 'gemini'):
             fmt = output['format']
             manifest_bound = (name == 'writer' and fmt == 'from_profile_manifest'
                               and output['schema_id'] == 'from_profile_manifest')
-            if provider == 'anthropic' and fmt == 'json_schema':
+            if provider == 'anthropic' and fmt == 'json_schema' and output['transport'] == 'tool_forced':
+                pass  # a forced non-strict tool carries the schema unchanged: nothing is stripped or compiled
+            elif provider == 'anthropic' and fmt == 'json_schema':
                 _validate_anthropic_schemas(name, output['schema_id'], path, key, project_root)
             elif fmt not in SENTINELS and fmt != 'none' and not manifest_bound:
                 raise ConfigurationError(f'{path}: {key}.output.format: cloud structured output mapping is not verified')
@@ -1137,6 +1147,41 @@ def _validate_model_bindings(config, path, project_root=None):
             if fmt not in SENTINELS and image_media_type(fmt) is None:  # the request header names it (R4F1)
                 raise ConfigurationError(f'{path}: {key}.image.format: {NO_MEDIA_TYPE.format(fmt)}')
     _validate_probe_attempts(vlm, path, project_root)
+
+
+TOOL_FORCED_ROLES = frozenset(('planner',))  # artifact-bound: the roles whose reply the client reads from a tool block
+
+
+def _validate_tool_forced(role_name, role, provider, path, key, backend=None):
+    """CLOUD-2: `output.transport: tool_forced` is implemented only for the planner on an Anthropic backend, with a
+    concrete schema, `validate_response: true` and no manual thinking (the API refuses a forced tool with it). With
+    `backend` given it also refuses the two routes that would send the call to the local default backend, which cannot
+    read a tool reply: a budget fallback and an image the cloud backend does not accept (`allow_images: false`)."""
+    where = f'{path}: {key}.output.transport'
+    allowed = 'tool_forced is allowed only for vlm.roles.planner on an Anthropic backend with format json_schema'
+    if role_name not in TOOL_FORCED_ROLES:
+        raise ConfigurationError(f'{where}: {allowed}; this role uses response_format')
+    if provider != 'anthropic':
+        raise ConfigurationError(f'{where}: {allowed}; backend provider is {provider!r}')
+    output = role['output']
+    if output['format'] != 'json_schema':
+        raise ConfigurationError(f'{where}: {allowed}; format is {output["format"]!r}')
+    if output['validate_response'] is not True:
+        raise ConfigurationError(f'{where}: tool_forced requires {key}.output.validate_response: true')
+    reasoning = role['reasoning']
+    if isinstance(reasoning, dict) and reasoning['mode'] == 'on':
+        raise ConfigurationError(f'{where}: tool_forced is refused with {key}.reasoning.mode on '
+                                 '(a forced tool call is an API error with manual extended thinking)')
+    if isinstance(backend, dict):
+        backend_key = f'vlm.backends.{role["backend"]}'
+        if backend.get('on_budget_exhausted') == 'fallback_to_default_backend':
+            raise ConfigurationError(
+                f'{where}: tool_forced cannot fall back to the local default backend, but {backend_key}.'
+                'on_budget_exhausted is fallback_to_default_backend; set it to stop')
+        if isinstance(role['image'], dict) and backend.get('allow_images') is False:
+            raise ConfigurationError(
+                f'{where}: tool_forced with an image role ({key}.image) would fall back to the local default backend '
+                f'because {backend_key}.allow_images is false; set it to true or use response_format')
 
 
 def _validate_anthropic_schemas(role_name, schema_id, path, key, project_root):
@@ -2022,6 +2067,27 @@ def _role_core(role):
     return role
 
 
+def _planner_role_schema_id(config):
+    """CLOUD-2: the planner of a version-3 file is checked against `vlm_role.v1` (v0 plus `tool_forced`); every other
+    role, and every file below version 3, keeps `vlm_role.v0`, so `tool_forced` is refused there."""
+    return 'vlm_role.v1' if isinstance(config, dict) and config.get('schema_version') == SOURCE_LIMITS_VERSION else (
+        'vlm_role.v0')
+
+
+def _require_tool_forced_version(config, path):
+    """CLOUD-2: `output.transport: tool_forced` exists only in configuration version 3 (`enhancer_config.v2`); a file
+    below it that names it is refused with the key and the version, before the generic enum message."""
+    roles = config.get('vlm', {}).get('roles') if isinstance(config.get('vlm'), dict) else None
+    if config.get('schema_version') == SOURCE_LIMITS_VERSION or not isinstance(roles, dict):
+        return
+    for name, role in roles.items():
+        output = role.get('output') if isinstance(role, dict) else None
+        if isinstance(output, dict) and output.get('transport') == 'tool_forced':
+            raise ConfigurationError(
+                f'{path}: vlm.roles.{name}.output.transport: tool_forced needs schema_version {SOURCE_LIMITS_VERSION} '
+                f'(enhancer_config.v2); migrate the configuration or use response_format')
+
+
 PLANNER_REPLY_SCHEMA = 'planner_reply.v0'  # artifact-bound: S2 builds intent_ir.v0 from this reply shape only
 PLANNER_IMAGE_SOURCE = 'edit_source_only'  # protocol-bound: the only image S2 can send is the request's source image
 
@@ -2041,7 +2107,7 @@ def validate_planner_reads(config, path='configuration', sources=None, project_r
         _validate(value, _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
         _require_finite(value, path, key, sources)
     role = config['vlm']['roles']['planner']
-    _validate(_role_core(role), _schema(root, 'vlm_role.v0'), path, 'vlm.roles.planner', sources)
+    _validate(_role_core(role), _schema(root, _planner_role_schema_id(config)), path, 'vlm.roles.planner', sources)
     # Decision 144: the cap of every backend a planner call may reach, as an exact integer or none.
     for name in sorted({role['backend'], _get(config, 'vlm.default_backend', path)}):
         key = f'vlm.backends.{name}.image.max_side'
@@ -2059,8 +2125,8 @@ def validate_planner_reads(config, path='configuration', sources=None, project_r
     output = role['output']
     if output['format'] != 'json_schema' or output['schema_id'] != PLANNER_REPLY_SCHEMA:
         refuse('vlm.roles.planner.output', f'expected format json_schema with schema_id {PLANNER_REPLY_SCHEMA}')
-    if output['transport'] != 'response_format':
-        refuse('vlm.roles.planner.output.transport', 'only response_format is implemented by the model client')
+    if output['transport'] not in ('response_format', 'tool_forced'):
+        refuse('vlm.roles.planner.output.transport', 'expected response_format, or tool_forced on an Anthropic backend')
     if role['image'] != 'none' and role['image']['source'] != PLANNER_IMAGE_SOURCE:
         refuse('vlm.roles.planner.image.source', f'S2 can send only the request source image ({PLANNER_IMAGE_SOURCE}) '
                'or no image (image: none)')
@@ -2216,11 +2282,16 @@ def _extend_source_limits(root, schema):
         image['properties']['max_images_per_call'] = _inline_defs(defs['backend_image_limit'], defs)
         image['required'] = [*image['required'], 'max_images_per_call']
         roles['properties'] = {}
+        # CLOUD-2: only the planner may name `tool_forced`; its transport values are those of `vlm_role.v1`.
+        planner_transports = _schema(root, 'vlm_role.v1')['properties']['output']['properties']['transport']['enum']
         for name, fragment in (('planner', 'planner_multi_source'), ('writer', 'writer_multi_source')):
             variants = deepcopy(alternatives)
             role = variants[0]
             role['properties']['multi_source'] = _inline_defs(defs[fragment], defs)
             role['required'] = [*role['required'], 'multi_source']
+            if name == 'planner':
+                role['properties']['output']['anyOf'][0]['properties']['transport']['anyOf'][0]['enum'] = list(
+                    planner_transports)
             roles['properties'][name] = {'anyOf': variants}
     except (KeyError, IndexError, TypeError) as error:
         raise ConfigurationError('configuration: invalid local configuration schema reference') from error
@@ -2808,6 +2879,7 @@ def _validate_loaded_config(config, command, root, path, sources, *, prompts=Tru
         _require_source_limits_version(config, path)  # first: one migrate message (target 3) for every version below 3
         _require_validation_version(config, path)
         _require_attachment_support(config, path, sources)
+    _require_tool_forced_version(config, path)
     try:
         config_schema = _configuration_schema(root, config)
     except ConfigurationError as error:
@@ -2858,7 +2930,8 @@ def _validate_loaded_config(config, command, root, path, sources, *, prompts=Tru
             _require_finite(value, path, key, sources)
         if key.startswith('vlm.roles.'):
             try:
-                role_schema = _schema(root, 'vlm_role.v0')
+                role_schema = _schema(root, _planner_role_schema_id(config) if key == 'vlm.roles.planner'
+                                      else 'vlm_role.v0')
             except ConfigurationError as error:
                 raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {error}') from error
             _validate(_role_core(value), role_schema, path, key, sources)

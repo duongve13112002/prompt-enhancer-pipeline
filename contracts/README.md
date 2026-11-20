@@ -266,7 +266,7 @@ Version 2 merges closed `pipeline_runtime.v0` into its runtime reads. Request de
 - The literal string `none` means an optional setting is off or is not sent; it is not silently converted to YAML null. For `vision.max_image_side`, it keeps the original image (decision 84). `computed_at_registration` is retained for registration; `from_profile_manifest` is a per-request reference resolved from the loaded manifest, with unresolved references refused.
 - **Sentinels** mark values not known yet; a run refuses a sentinel only in keys its stages read: `fit_from_gt` (fitted on the evaluation set), `fit_from_bench` (measured on the machine), `fit_from_pilot` (from a pilot run), `pin_required` (exact model revision), `deploy_required` (set per machine), `design_required` (decided by the implementing task with evidence), `ask_user` (a paid-call budget). Only `ask_user` is ever a question for the user. No threshold is typed by hand (R-015).
 - **YAML 1.1 pitfall:** parsers read unquoted `off`, `on`, `yes`, `no` as booleans. Enum values are quoted and the loader parses with a schema.
-- VLM roles follow [vlm-request.md](vlm-request.md) and [vlm_role.v0](schemas/vlm_role.v0.schema.json).
+- VLM roles follow [vlm-request.md](vlm-request.md) and [vlm_role.v0](schemas/vlm_role.v0.schema.json). Configuration version 3 checks the planner role against [vlm_role.v1](schemas/vlm_role.v1.schema.json) (v0 plus `output.transport: tool_forced`, CLOUD-2) and composes the same value into its own `enhancer_config.v2` role fragment for the planner only; `vlm_role.v0` and `enhancer_config.v0` to `v1` never change, and a file below version 3 that names `tool_forced` is refused with the key and the version.
 
 ### Settings owned by later tasks
 

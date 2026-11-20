@@ -129,8 +129,49 @@ def _refuse_recursion(schema):
     visit(schema, frozenset())
 
 
+# Protocol-bound (CLOUD-2): the one tool a `tool_forced` reply is read from. A non-strict tool is not compiled into a
+# grammar, so its schema is not subject to the grammar size limit (experiment, claude-haiku-5-5, 2026-11-20: the planner
+# schema got HTTP 400 "compiled grammar is too large" as `output_config.format` or as a `strict` tool, and HTTP 200 as a
+# forced non-strict tool, stripped or not). The name only identifies the block; the description is a fixed identifier text.
+TOOL_FORCED_NAME = 'submit_reply'
+TOOL_FORCED_DESCRIPTION = 'Submit the reply object as the tool input.'
+
+
+class ToolReplyError(ValueError):
+    """A forced-tool reply whose structure is wrong; `code` is a closed identifier, never reply text."""
+
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def tool_reply_input(content):
+    """The `input` object of the single `tool_use` block of a forced-tool reply, or `ToolReplyError`.
+
+    Structure only: the number of tool blocks, the tool name and the type of the input. Other blocks (text) are not the
+    reply and are ignored; the object is validated against the schema by the caller.
+    """
+    calls = [part for part in content if part['type'] == 'tool_use']
+    if not calls:
+        raise ToolReplyError('TOOL_USE_MISSING')
+    if len(calls) > 1:
+        raise ToolReplyError('TOOL_USE_MULTIPLE')
+    if calls[0].get('name') != TOOL_FORCED_NAME:
+        raise ToolReplyError('TOOL_NAME_MISMATCH')
+    if type(calls[0].get('input')) is not dict:
+        raise ToolReplyError('TOOL_INPUT_NOT_OBJECT')
+    return calls[0]['input']
+
+
 def cloud_request(provider, backend, role, system_prompt, user_text, *, schema=None, images=(), addendum=None):
-    """Build text-only fragments; unverified required output capabilities fail closed."""
+    """Build text-only fragments; unverified required output capabilities fail closed.
+
+    `output.transport: tool_forced` (CLOUD-2, Anthropic `json_schema` only) sends `schema` unchanged as the
+    `input_schema` of one forced non-strict tool instead of `output_config.format`.
+    """
+    tool_forced = role['output'].get('transport') == 'tool_forced'
+    if tool_forced and (provider != 'anthropic' or role['output']['format'] != 'json_schema'):
+        raise ValueError('output.transport tool_forced needs provider anthropic and format json_schema')
     if provider == 'anthropic' and role['reasoning']['mode'] == 'on':
         budget = role['reasoning']['budget_tokens']
         # A: documented minimum and required relationship to max_tokens.
@@ -145,12 +186,24 @@ def cloud_request(provider, backend, role, system_prompt, user_text, *, schema=N
     warnings.extend(dropped)
     output = role['output']
     sent_schema = None
+    tool = None
     if provider == 'anthropic' and output['format'] == 'json_schema':
         if schema is None:
             raise ValueError('json_schema output needs a schema')
-        if 'output_config' in backend.get('extra_body', {}):
-            raise ValueError('engine extras cannot replace output_config of a structured request')
-        sent_schema = anthropic_output_schema(schema)
+        if tool_forced:
+            # Documented: forced tool use is an error with manual extended thinking (define-tools, "Forcing tool use").
+            if role['reasoning']['mode'] == 'on':
+                raise ValueError('output.transport tool_forced is refused with reasoning.mode on')
+            if set(backend.get('extra_body', {})) & {'tools', 'tool_choice'}:
+                raise ValueError('engine extras cannot replace the forced tool of a structured request')
+            if not isinstance(schema, dict) or schema.get('type') != 'object':
+                raise ValueError('a forced tool needs an object schema')
+            tool = {'name': TOOL_FORCED_NAME, 'description': TOOL_FORCED_DESCRIPTION,
+                    'input_schema': deepcopy(schema)}
+        else:
+            if 'output_config' in backend.get('extra_body', {}):
+                raise ValueError('engine extras cannot replace output_config of a structured request')
+            sent_schema = anthropic_output_schema(schema)
     elif output['format'] != 'none':
         raise ValueError('cloud structured output mapping is not yet verified')
     if addendum is not None and (not isinstance(addendum, str) or set(backend.get('extra_body', {})) & {
@@ -170,6 +223,9 @@ def cloud_request(provider, backend, role, system_prompt, user_text, *, schema=N
         if sent_schema is not None:  # A: output_config.format; merged with output_config.effort, never replacing it
             body['output_config'] = {**body.get('output_config', {}),
                                      'format': {'type': 'json_schema', 'schema': sent_schema}}
+        if tool is not None:  # A: tools + tool_choice {type: tool}: the reply is the tool_use block's input
+            body['tools'] = [tool]
+            body['tool_choice'] = {'type': 'tool', 'name': TOOL_FORCED_NAME}
     elif provider == 'gemini':
         if images:
             raise ValueError('Gemini image field members are not verified')

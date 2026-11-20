@@ -12,7 +12,7 @@ from jsonschema.exceptions import SchemaError, ValidationError
 
 from .config import (ConfigurationError, NO_MEDIA_TYPE, _sentinel, attempt_seed_refusal, image_media_type,
                      resolve_backend_engine, resolve_writer_format)
-from .model_cloud import cloud_headers, cloud_request
+from .model_cloud import ToolReplyError, cloud_headers, cloud_request, tool_reply_input
 from .model_json import strict_json
 from .model_mapping import effective_system_hash, openai_request, provider_maps_seed, seed_field_note
 from .model_image import configure_decode_backstop, prepare_image
@@ -30,7 +30,7 @@ from pathlib import Path
 # artifact-bound: declared revision of the shared model-call path (request mapping, image preparation, reply parsing)
 # that every K2, K3 and K4 artifact passes through (KBS-S3-1). It keys those artifacts in place of a hash of module
 # source; bump it in the same change that edits a function its guard pins (tests/test_stage_revisions.py).
-MODEL_CALL_REVISION = 'model-call-7'  # T017-HAIKU: `$comment` and `minProperties` removed from Anthropic schemas
+MODEL_CALL_REVISION = 'model-call-8'  # CLOUD-2: `tool_forced` transport (a forced non-strict tool carries the schema)
 
 # Protocol-bound public failure codes; never expose arbitrary exception/model text.
 MODEL_CODES = frozenset(('MODEL_CALL_FAILED', 'MODEL_CALL_INVALID', 'CAPABILITY_UNAVAILABLE',
@@ -538,8 +538,15 @@ class RoleClient:
             attempted[capability] = 'incomplete'
             try:
                 dropped = []
+                real_schema = None
+                if (backend['provider'] == 'anthropic' and output == 'json_schema'
+                        and capability in ('json_schema', 'image+json_schema')
+                        and role['output']['schema_id'] not in ('none', 'from_profile_manifest')):
+                    # CLOUD-2: the role's real schema, so a refusal of it shows here, before the first real request.
+                    real_schema = deepcopy(self.schemas.get(role['output']['schema_id'])[0])
                 cases = production_probe_cases(bundle, self._bundle_images(), backend, role,
-                                               self.config['vision'], capability, side, warnings=dropped)
+                                               self.config['vision'], capability, side, warnings=dropped,
+                                               real_schema=real_schema)
             except (ValueError, TypeError, KeyError) as error:
                 self.probe_events.append({'role': role_name, 'capability': capability,
                     'status': 'failed', 'sent': transport.allowance.sent,
@@ -849,6 +856,9 @@ class RoleClient:
             output = role['output'] if reply_schema is None else dict(role['output'], schema_id=reply_schema)
             if output['format'] != 'none' and output['validate_response'] is not True:
                 raise ModelCallError('structured output requires response validation')
+            tool_forced = output.get('transport') == 'tool_forced'
+            if tool_forced and provider != 'anthropic':  # e.g. a budget or image fallback onto the local backend
+                raise ModelCallError('CONFIGURATION_INVALID: output.transport tool_forced needs an anthropic backend')
             required = ['text'] if self._production else []
             if output['format'] != 'none':
                 required.append(output['format'])
@@ -869,7 +879,15 @@ class RoleClient:
                     # Stable demand order: unfinished text cannot be hidden by a later output proof.
                     codes = [proof.errors.get(cap) for cap in missing]
                     code = next((code for code in codes if code in PROBE_CODES), 'CAPABILITY_UNAVAILABLE')
-                    raise ModelCallError(code + ': required capability is unproved') from error
+                    hint = ''
+                    if any(item.get('capability') == 'json_schema' and any(
+                            case.get('challenge') == 'schema' and case.get('http_status') == 400
+                            for case in item.get('challenges', ())) for item in proof.evidence):
+                        # CLOUD-2: the API answered HTTP 400 to the real schema (a timeout, a 5xx or an unfinished
+                        # probe keeps its own code), so name the key that changes the transport.
+                        hint = (f': the backend refused the real schema of role {role_name!r}; '
+                                f'see vlm.roles.{role_name}.output.transport')
+                    raise ModelCallError(code + ': required capability is unproved' + hint) from error
                 raise ModelCallError('CAPABILITY_UNAVAILABLE: required capability is unproven') from error
             capabilities = proof.capabilities
             cloud_images = []
@@ -934,7 +952,8 @@ class RoleClient:
                                                      schema=cloud_schema, images=cloud_images, addendum=addendum_text)
                 warnings.extend(cloud_warnings)
                 if provider == 'anthropic' and output['format'] == 'json_schema':
-                    schema_hashes['sent_schema_hash'] = _digest(body['output_config']['format']['schema'])
+                    posted = body['tools'][0]['input_schema'] if tool_forced else body['output_config']['format']['schema']
+                    schema_hashes['sent_schema_hash'] = _digest(posted)
             body_hash = _digest(body)
             system_hash = effective_system_hash(provider, body)  # T017-FIX: over the system texts of the posted body
             image_config = role['image']
@@ -993,7 +1012,9 @@ class RoleClient:
                 record['http_status'] = response.status_code
                 return None, record
             try:
-                payload = response.json()
+                # A tool input is a JSON object inside the response body, so the body gets the strict hooks the text
+                # path applies to a reply (duplicate names, nonfinite numbers, depth): CLOUD-2 fix round 1.
+                payload = strict_json(response.text) if tool_forced else response.json()
                 if provider == 'openai_compatible':
                     choice = payload['choices'][0]  # O: Chat response
                     message = choice['message']
@@ -1001,9 +1022,12 @@ class RoleClient:
                     accepted = ('stop',)
                 elif provider == 'anthropic':
                     reason = payload['stop_reason']  # A: provider-docs response
-                    text = ''.join(part['text'] for part in payload['content'] if part['type'] == 'text')
+                    # A forced tool call ends with `tool_use`; any other finish that is not a truncation or a refusal
+                    # (`end_turn`) has no tool block and is refused below as an invalid reply, so it is retried.
+                    text = None if tool_forced else ''.join(
+                        part['text'] for part in payload['content'] if part['type'] == 'text')
                     refused = reason == 'refusal'
-                    accepted = ('end_turn', 'stop_sequence')
+                    accepted = ('tool_use', 'end_turn', 'stop_sequence') if tool_forced else ('end_turn', 'stop_sequence')
                 else:
                     choice = payload['candidates'][0]  # G: generateContent response
                     reason = choice['finishReason']
@@ -1016,11 +1040,18 @@ class RoleClient:
                                                                     'MAX_TOKENS', 'SAFETY') else 'other'
                     record['usage'] = _usage(payload, provider)
                     return None, record
-                if not isinstance(text, str) or not text:
-                    raise ValueError('response content is empty or not text')
-                value = text
-                if output['format'] != 'none':
-                    value = strict_json(text)
+                if tool_forced:
+                    try:
+                        value = tool_reply_input(payload['content'])
+                    except ToolReplyError as error:
+                        record['tool_reply_check'] = error.code  # a closed identifier; it joins the invalid-reply path
+                        raise
+                else:
+                    if not isinstance(text, str) or not text:
+                        raise ValueError('response content is empty or not text')
+                    value = text
+                    if output['format'] != 'none':
+                        value = strict_json(text)
                 if output['validate_response'] and schema_id != 'none':
                     self.schemas.validate(schema_id, value)
                 if sent_schema is not None:

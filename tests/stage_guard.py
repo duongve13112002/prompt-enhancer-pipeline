@@ -23,6 +23,8 @@ MODEL_CALL = [
     ('model_cloud', 'anthropic_output_schema'), ('model_cloud', '_strip_schema'),  # CLOUD-1: the schema sent to Anthropic
     ('model_cloud', 'ANTHROPIC_UNSUPPORTED_KEYWORDS'), ('model_cloud', '_SCHEMA_MAPS'),
     ('model_cloud', '_SCHEMA_LISTS'), ('model_cloud', '_REFUSED_APPLICATORS'),
+    ('model_cloud', 'TOOL_FORCED_NAME'), ('model_cloud', 'TOOL_FORCED_DESCRIPTION'),  # CLOUD-2: the forced tool request
+    ('model_cloud', 'tool_reply_input'), ('model_cloud', 'ToolReplyError.__init__'),  # and the reply read from it
     ('model_mapping', 'system_messages'),  # T017-FIX: the system messages and the addendum layout of a request body
     ('model_mapping', 'system_texts'), ('model_mapping', 'effective_system_hash'),  # the system hash in a call record
     ('model_mapping', 'SAMPLING'), ('model_mapping', 'LOCAL_REASONING_EFFORT'),  # their fixed request values
