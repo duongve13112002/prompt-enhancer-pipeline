@@ -66,6 +66,45 @@ def _label(value):
     return _token(value, 'abcdefghijklmnopqrstuvwxyz')  # protocol-bound: stage states and fallback names
 
 
+def _repair_calls(written, checked):
+    """The S5 repair calls: calls S5 appended after the draft's whose record carries the writer's `attempt` entry
+    (`writer.write` adds it to every writer record; a verifier record has none)."""
+    if not isinstance(checked, dict):
+        return []
+    found = []
+    for call in checked.get('calls', [])[len(written.get('calls', [])):]:
+        try:
+            record = json.loads(call['record_json'])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if isinstance(record, dict) and isinstance(record.get('attempt'), dict):
+            found.append(call)
+    return found
+
+
+_ITEM_ID_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_:@.-'  # protocol-bound id shape
+
+
+def _failed_items(checked):
+    """Failed S5 ledger items of the last round as id and closed check code, never a note or evidence text (R-026).
+
+    An id the pipeline made (`@s5:...`) is kept; any other id came from the planner reply and is kept only when it
+    has the shape of an identifier."""
+    items = []
+    for item in checked.get('verdicts', []) if isinstance(checked, dict) else []:
+        if not isinstance(item, dict) or item.get('verdict') != 'fail':
+            continue
+        identifier = item.get('id')
+        if not (isinstance(identifier, str) and 0 < len(identifier) <= 96
+                and all(char in _ITEM_ID_CHARS for char in identifier)):
+            identifier = 'UNRECOGNISED'
+        kind = identifier.split(':')[1] if identifier.startswith('@s5:') and identifier.count(':') >= 2 else None
+        code = {'complete': 'COMPLETE_RESPONSE', 'contract': 'PROFILE_CONTRACT', 'validator': 'VALIDATOR_CHECK'}.get(
+            kind, 'VERIFIER_FAIL' if item.get('method') == 'verifier' else 'STRUCTURAL_FAIL')
+        items.append({'id': identifier, 'code': code})
+    return items
+
+
 def case_diagnostics(planned, written, checked, fatal_codes=(), probe_events=()):
     """T017-FIX (F3): why a case ended as it did, per stage, as codes and protocol labels only.
 
@@ -86,14 +125,16 @@ def case_diagnostics(planned, written, checked, fatal_codes=(), probe_events=())
         planner = {'state': _label(planned['state']), 'code': error_code(planned),
                    'cause': _code(error.get('cause')), 'warnings': warning_codes(planned),
                    'calls': [_code(call.get('status')) for call in planned.get('calls', [])]}
-    writer = None if written is None else {'state': _label(written['state']), 'code': error_code(written),
-                                           'calls': [_code(call.get('status')) for call in written.get('calls', [])]}
+    writer = None if written is None else {
+        'state': _label(written['state']), 'code': error_code(written),
+        'calls': [_code(call.get('status')) for call in [*written.get('calls', []), *_repair_calls(written, checked)]]}
     validation = None
     if checked is not None:
         validation = {'status': _label(checked['status']), 'code': error_code(checked),
                       'warnings': warning_codes(checked),
                       'fallback_attempts': [{'name': _label(item['name']), 'available': item['available'] is True}
-                                            for item in checked.get('fallback_attempts', [])]}
+                                            for item in checked.get('fallback_attempts', [])],
+                      'failed_items': _failed_items(checked)}  # T017-FIX5: ids and codes of the failed S5 items
     return {'planner': planner, 'writer': writer, 'validation': validation,
             'fatal': [_code(code) for code in fatal_codes], 'probe_events': safe_probe_events(list(probe_events))}
 
@@ -393,7 +434,9 @@ class GoldenAdapter:
     deployment already has retrieval off, else a second, separately owned `Pipeline` built on first use (the pattern
     of `eval_run.execute`). That pipeline opens no knowledge store and runs no S1, S3 or K stage (R-009), and the switch
     never reaches another case. Use as an async context manager, so the second pipeline is closed."""
-    identity = 's0-s6.v3'  # artifact-bound adapter revision (v3, T017-FIX3: per-case retrieval switch, envelope v1)
+    # artifact-bound adapter revision (v3, T017-FIX3: per-case retrieval switch, envelope v1; v4, T017-FIX5: the
+    # diagnostics name the S5 failed items and the repair call, and S5 judges a schema-bound reply's text)
+    identity = 's0-s6.v4'
 
     def __init__(self, pipeline):
         self.pipeline = pipeline

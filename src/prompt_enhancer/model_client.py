@@ -13,7 +13,7 @@ from jsonschema.exceptions import SchemaError, ValidationError
 from .config import (ConfigurationError, NO_MEDIA_TYPE, _sentinel, attempt_seed_refusal, image_media_type,
                      resolve_backend_engine, resolve_writer_format)
 from .model_cloud import ToolReplyError, cloud_headers, cloud_request, tool_reply_input
-from .model_json import strict_json
+from .model_json import strict_json, with_reply_text
 from .model_mapping import effective_system_hash, openai_request, provider_maps_seed, seed_field_note
 from .model_image import configure_decode_backstop, prepare_image
 from .model_probe import (ProbeResult, probe_backend, probe_local_image_pair, probe_local_thinking_pair,
@@ -30,7 +30,8 @@ from pathlib import Path
 # artifact-bound: declared revision of the shared model-call path (request mapping, image preparation, reply parsing)
 # that every K2, K3 and K4 artifact passes through (KBS-S3-1). It keys those artifacts in place of a hash of module
 # source; bump it in the same change that edits a function its guard pins (tests/test_stage_revisions.py).
-MODEL_CALL_REVISION = 'model-call-8'  # CLOUD-2: `tool_forced` transport (a forced non-strict tool carries the schema)
+MODEL_CALL_REVISION = 'model-call-9'  # T017-FIX5: one forced tool call; a writer value carries its reply text
+WRITER_ROLE = 'writer'  # protocol-bound role name: the one role whose output the admin validators check
 
 # Protocol-bound public failure codes; never expose arbitrary exception/model text.
 MODEL_CODES = frozenset(('MODEL_CALL_FAILED', 'MODEL_CALL_INVALID', 'CAPABILITY_UNAVAILABLE',
@@ -1052,6 +1053,10 @@ class RoleClient:
                     value = text
                     if output['format'] != 'none':
                         value = strict_json(text)
+                        if role_name == WRITER_ROLE:
+                            # T017-FIX5: the admin's text checks (`minified_json`, `single_line`) judge the exact reply
+                            # text, so a schema-bound writer value carries it beside the decoded structure.
+                            value = with_reply_text(value, text)
                 if output['validate_response'] and schema_id != 'none':
                     self.schemas.validate(schema_id, value)
                 if sent_schema is not None:

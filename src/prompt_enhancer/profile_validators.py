@@ -8,7 +8,7 @@ from pathlib import Path
 from jsonschema import ValidationError
 
 from .config import ConfigurationError, _EXACT_INTEGERS, _schema, _schema_path
-from .model_json import check_json_depth, strict_json
+from .model_json import check_json_depth, reply_text, strict_json
 from .profile_prompt import ProfileError, sha256_tag
 from .storage._fs import StorageError, check_segment, real_inside
 
@@ -149,6 +149,10 @@ def check_output(output, validators, *, project_root, output_format='none'):
         operator, params = artifact['operator'], artifact['parameters']
         try:
             value = output
+            # T017-FIX5: `json`, `minified_json` and `single_line` are properties of the reply text; the other
+            # operators read the decoded value. A schema-bound output is decoded, so its text is the exact one the
+            # client carried (None when it has none: the check then fails, never judged on a re-serialization).
+            text = reply_text(output) if output_format == 'json' else output if isinstance(output, str) else None
             if operator in ('json', 'minified_json'):
                 if output_format == 'json_text':
                     pass  # Already parsed once above, independently of selector/operator order.
@@ -158,9 +162,10 @@ def check_output(output, validators, *, project_root, output_format='none'):
                     strict_json(value)
                 else:
                     strict_json(json.dumps(value, allow_nan=False))
-                passed = operator == 'json' or (output_format != 'json' and isinstance(value, str) and not _has_outer_space(value))
+                passed = operator == 'json' or (text is not None and not _has_outer_space(text))
             elif operator == 'single_line':
-                passed = isinstance(value, str) and (value == '' or value.splitlines() == [value])
+                line = text if text is not None else value if isinstance(value, str) else None  # a decoded string root has no carrier
+                passed = line is not None and (line == '' or line.splitlines() == [line])
             else:
                 value = _select(decoded, params.get('pointer', ''))
                 if operator == 'keys':

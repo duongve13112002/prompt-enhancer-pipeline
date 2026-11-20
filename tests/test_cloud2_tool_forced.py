@@ -113,7 +113,7 @@ def test_request_forces_one_non_strict_tool_with_the_unstripped_schema_and_no_fo
     assert body['tools'] == [{'name': TOOL_FORCED_NAME, 'description': body['tools'][0]['description'],
                               'input_schema': FULL}]  # nothing stripped: minimum, maxItems, $schema stay
     assert 'strict' not in body['tools'][0]  # a strict tool is compiled into a grammar, which is the point
-    assert body['tool_choice'] == {'type': 'tool', 'name': TOOL_FORCED_NAME}
+    assert body['tool_choice'] == {'type': 'tool', 'name': TOOL_FORCED_NAME, 'disable_parallel_tool_use': True}
     assert 'format' not in body.get('output_config', {})
     assert body['thinking'] == {'type': 'disabled'} and body['output_config'] == {'effort': 'medium'}
     assert body['system'] == admin and body['messages'] == [{'role': 'user', 'content': user}]  # R-004, R-001
@@ -362,7 +362,8 @@ def test_the_planner_reads_its_reply_from_the_forced_tool_and_keeps_the_invarian
     assert result['state'] == 'ready' and len(transport.bodies) == 2           # the one retry, same request
     first, second = transport.bodies
     assert first == second and 'output_config' in first and 'format' not in first['output_config']
-    assert first['tool_choice'] == {'type': 'tool', 'name': TOOL_FORCED_NAME} and 'seed' not in first
+    assert first['tool_choice'] == {'type': 'tool', 'name': TOOL_FORCED_NAME,
+                                    'disable_parallel_tool_use': True} and 'seed' not in first
     sent = first['tools'][0]['input_schema']
     bounded = bounded_reply_schema(SchemaRegistry(SCHEMAS), GENERATE_REPLY_SCHEMA, [], {})
     assert sent == bounded and 'maxItems' in json.dumps(sent)  # the bounded schema, unstripped

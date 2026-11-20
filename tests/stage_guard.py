@@ -200,6 +200,12 @@ LEFT_OUT = [
     ('model_client', 'binds a profile bundle\'s writer output schema to one request (T017-FIX3); no K-stage role has a '
      'profile, so it never reaches a K artifact', ['ModelClientRun.use_output_schema',
                                                    'BoundModelClient.use_output_schema']),
+    ('model_client', 'the writer value carries its reply text for the admin text checks (T017-FIX5); no K-stage role is '
+     'the writer, so it never reaches a K artifact', ['WRITER_ROLE']),
+    ('model_json', 'a decoded writer reply remembers its exact text (T017-FIX5); the decoded content, the only thing a '
+     'stored artifact holds, is unchanged', ['JsonObject.__deepcopy__', 'JsonObject.__reduce__',
+                                            'JsonArray.__deepcopy__', 'JsonArray.__reduce__', '_restore',
+                                            'with_reply_text', 'reply_text']),
     ('model_cloud', LIFECYCLE, ['cloud_headers']),
     ('model_cloud', CHECK, ['_refuse_recursion']),
     ('model_mapping', CHECK, ['ANTHROPIC_MODEL_REQUEST_RULES', 'anthropic_reasoning_refusal']),

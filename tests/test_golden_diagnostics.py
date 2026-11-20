@@ -94,7 +94,7 @@ def golden(model_test_profile, tmp_path, project_root, monkeypatch):
 
 def test_real_golden_adapter_writes_the_planner_cause_and_probe_reasons(golden):
     """Replay F3: the J4a2 shape (planner PROBE_MALFORMED) is visible in golden_results.json."""
-    assert golden.results['runner'] == 's0-s6.v3'
+    assert golden.results['runner'] == 's0-s6.v4'
     first, second = golden.results['cases']
     assert first['id'] == 'g1' and first['diagnostics'] is not None
     planner = first['diagnostics']['planner']

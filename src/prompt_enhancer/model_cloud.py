@@ -225,7 +225,9 @@ def cloud_request(provider, backend, role, system_prompt, user_text, *, schema=N
                                      'format': {'type': 'json_schema', 'schema': sent_schema}}
         if tool is not None:  # A: tools + tool_choice {type: tool}: the reply is the tool_use block's input
             body['tools'] = [tool]
-            body['tool_choice'] = {'type': 'tool', 'name': TOOL_FORCED_NAME}
+            # A: "disable_parallel_tool_use": true makes Claude use at most one tool per response (T017-FIX5: Haiku
+            # once answered a forced call with two tool_use blocks).
+            body['tool_choice'] = {'type': 'tool', 'name': TOOL_FORCED_NAME, 'disable_parallel_tool_use': True}
     elif provider == 'gemini':
         if images:
             raise ValueError('Gemini image field members are not verified')
