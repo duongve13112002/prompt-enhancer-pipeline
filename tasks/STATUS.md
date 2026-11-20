@@ -10,7 +10,9 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
   - **MS-1:** multi-source contracts (`request.v1`, `intake_result.v2`, `planner_reply.v1`, `intent_ir.v1`, `plan_result.v2`) and prompt drafts; no runtime change.
   - **Server impact:** `model-call-6`, `k2-observe-4` and `k3-card-4` make K2, K3 and K4 recompute once at the next `kb sync`; v0 golden cases are refused, so profile golden cases move to `golden_case.v1`; envelopes are v1.
   - Reviews: each task Gemini Flash PASS and Claude Sonnet PASS, no fix round.
-  - **Next (PM, decisions 202 to 208):** one-call Haiku probe; pilot `output_schema.json`; migrate the pilot golden cases; bind the pilot VLM roles to Haiku 5.5 with `call_budget` and `stop`; record the approval gate; golden J4 on Haiku; then the decision 189 chain.
+  - CI 40 failed on one stale test (`test_probe_retry`, the refusal decision 205 removed); CLOUD-1 fix round 1 (`a26ca13`, Gemini diff-only PASS) made CI 41 green; private again.
+  - **T017-HAIKU (blocked on the user, decision 207):** the live probe stopped in the key loader (`api_key_file is missing or unreadable` for `.secrets/claude.api-key`); 0 of 3000 Haiku requests used. Ready in the Git-ignored pilot: `output_schema.json` (`$id` `pilot_v1.writer_output.v1`, since the loader refuses hyphens), the 3 golden cases on `golden_case.v1`, planner, writer and verifier bound to Haiku 5.5 (3000, `stop`). **PM decisions pending user review:** the knowledge-base roles stay local; `allow_images: true` (the edit case's source image goes to Anthropic); `max_concurrency: 1`; `smoke-edit-local-04` requires grounding.
+  - **Next after the key check:** the probe (3 requests); record the approval gate (decision 208); golden J4 on Haiku; then the decision 189 chain.
   - Noticed, not fixed: `gh run cancel` and `gh run list` could meet the transient 404 that `ci_window` handles for `gh run view`; `.tmp/worktrees/T-026-retest3` could not be removed ("link or left partially"), not forced.
 
 - **2026-11-20 02:5x: T-017 was blocked on the user; answered by decisions 194 to 196.**
