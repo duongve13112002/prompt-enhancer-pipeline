@@ -10,13 +10,14 @@ import uuid
 
 from PIL import Image
 
-from .config import ConfigurationError, _schema, _validate, effective_request_config
+from .config import ConfigurationError, _schema, _validate, check_limit, effective_request_config
 from .envelope import intake_retrieval
 from .model_image import (
     ImageRejected, UndecodableImage, configure_decode_backstop, prepare_vision_image_with_info,
 )
 from .profile_prompt import ProfileError, sha256_tag
 from .profiles import AttachmentRendererMismatch, resolve_profile
+from .request_shape import SOURCES, V1, request_version, source_images, structure_refusal, v0_refusal
 from .storage import StorageError, open_knowledge_store
 from .storage.store import RetainedFileError
 
@@ -27,6 +28,14 @@ RETENTION_MESSAGE = 'image copies unavailable in the current snapshot'
 REPUBLISH_MESSAGE = 'image copies unavailable; run kb sync to republish'  # a snapshot built before copies were kept
 INDEX_DAMAGE_MESSAGE = 'knowledge index file missing or changed in the current snapshot'  # protocol-bound operator diagnostic (no remedy: kb sync does not repair a damaged current snapshot)
 _INDEX_PREFIX = 'index/'  # artifact-bound: where K5 keeps its files inside a snapshot (`k5_index.MANIFEST`)
+# protocol-bound refusal codes of the several-source request (MS-3, docs/stages/S0-intake.md)
+TOO_MANY_CODE = 'SOURCE_IMAGES_TOO_MANY'
+DUPLICATE_CODE = 'SOURCE_IMAGE_DUPLICATE'
+# MS-3 boundary: S0 builds several source images, but S2 and S4 take one until MS-4 and MS-5, so the pipeline refuses
+# them here and does not send one image of several. Removed with the planner and writer work (decision 179).
+MULTI_SOURCE_CODE = 'MULTI_SOURCE_UNAVAILABLE'
+MULTI_SOURCE_MESSAGE = 'several source images are not yet supported by this build; send one source image'
+MANIFEST_V0_LIMIT = 1  # protocol-bound: a version-1 manifest states no source limit and means one image (MS-2)
 
 
 class AttachmentRetentionUnavailable(StorageError):
@@ -110,29 +119,68 @@ class IntakeResult:
 
 
 class _Refusal(ValueError):
-    def __init__(self, code, message, *, stage=None):
+    """A refusal raised by S0. `safe` marks a message that code built from field names, indexes and integers only (never
+    from a request value), so the refusal may show it; every other message is reduced to its code (R-026)."""
+
+    def __init__(self, code, message, *, stage=None, safe=False):
         super().__init__(message)
         self.code = code
         self.stage = stage
+        self.safe = safe
 
 
-def _image(data):
+def _image(data, index=None):
+    """The bytes of one base64 string. `index` (0-based) is given for a `request.v1` list, whose refusal names it."""
     try:
         return base64.b64decode(data, validate=True)
     except (ValueError, binascii.Error) as error:
-        raise _Refusal('IMAGE_UNDECODABLE', 'source_image must contain valid base64 image bytes') from error
+        if index is None:
+            raise _Refusal('IMAGE_UNDECODABLE', 'source_image must contain valid base64 image bytes') from error
+        raise _Refusal('IMAGE_UNDECODABLE', f'{SOURCES}[{index}] is not valid base64', safe=True) from None
+
+
+def _prepare(raw, vision, index=None):
+    """Decode and resize one image under the vision limits; a list item that fails is refused naming its index only."""
+    try:
+        prepared, _ = prepare_vision_image_with_info(raw, vision, vision['max_decode_pixels'])
+        return prepared
+    except ImageRejected:
+        if index is None:
+            raise
+        raise _Refusal('IMAGE_REJECTED', f'{SOURCES}[{index}] was rejected by the vision limits', safe=True) from None
+    except (UndecodableImage, Image.DecompressionBombError):
+        if index is None:
+            raise
+        raise _Refusal('IMAGE_UNDECODABLE', f'{SOURCES}[{index}] is not a decodable image', safe=True) from None
+
+
+def source_cap(effective, profile):
+    """`(cap, key)`: the most source images one request may carry and the setting that sets it.
+
+    It is the smaller of `edit.max_source_images` and the manifest's `renderer.max_source_images`; a version-1 manifest
+    states no limit and means one image (MS-2). A missing, sentinel or non-integer limit is refused (R-015)."""
+    configured = check_limit(effective['edit'].get('max_source_images'), 'configuration', 'edit.max_source_images')
+    manifest = profile.manifest
+    if manifest['schema_version'] == 1:
+        return (configured, 'edit.max_source_images') if configured <= MANIFEST_V0_LIMIT else (
+            MANIFEST_V0_LIMIT, 'the version-1 profile manifest')
+    declared = check_limit(manifest['renderer'].get('max_source_images'), 'manifest.yaml', 'renderer.max_source_images')
+    return (configured, 'edit.max_source_images') if configured <= declared else (declared, 'renderer.max_source_images')
 
 
 def validate_request(request, *, project_root):
     """Validate structure only: arbitrary prompt strings are never interpreted or normalized."""
+    shape = structure_refusal(request)
+    if shape is not None:
+        raise _Refusal(shape[0], f'{shape[1]}: {shape[2]}', safe=True)
+    version = request_version(request)
     try:
-        _validate(request, _schema(project_root, 'request.v0'), 'request')
+        _validate(request, _schema(project_root, version), 'request')
     except ConfigurationError as error:
         raise ConfigurationError(f'request validation failed ({type(error).__name__})') from None
-    if request['task'] == 'edit' and request.get('source_image') is None:
-        raise _Refusal('SOURCE_IMAGE_REQUIRED', 'edit requires a source_image')
-    if request['task'] == 'generate' and request.get('source_image') is not None:
-        raise _Refusal('SOURCE_IMAGE_UNEXPECTED', 'generate does not accept a source_image')
+    rule = v0_refusal(request) if version != V1 else None
+    if rule is not None:
+        raise _Refusal(rule[0], f'source_image: {rule[1]}')
     return request
 
 
@@ -147,12 +195,14 @@ def _refuse(payload, code, error):
                            'snapshot start', 'snapshot end'):
             label += f' at {error.stage}'
     fixed = isinstance(error, (AttachmentRetentionUnavailable, KnowledgeIndexDamaged, AttachmentRendererMismatch))
-    message = str(error) if fixed else f'intake refused ({label})'
+    safe = isinstance(error, _Refusal) and error.safe  # built by code from field names and integers only
+    message = str(error) if fixed else f'intake refused ({label}): {error}' if safe else f'intake refused ({label})'
     payload['error'] = {'code': code, 'message': message}
     # These are schema-bound refusal fields, not model output or inferred retrieval success.
     state = 'disabled' if payload['retrieval']['state'] == 'disabled' else 'failed'
     payload['retrieval'] = {'state': state, 'snapshot_id': None}
-    source = payload['source_image']
+    # Several sources have no single binding in response_envelope.v1; its successor is MS-5's.
+    source = payload.get('source_image')
     payload['envelope'] = {
         'status': 'failed', 'output': None, 'attachments': [],
         'source_binding': None if source is None else {'source_image_id': source['image_id']},
@@ -165,6 +215,16 @@ def _refuse(payload, code, error):
 def refuse_attachments(result, error):
     """Turn a ready S0 result into the same refusal intake gives, for a failure found after S3 and before S4."""
     _refuse(result.payload, 'KNOWLEDGE_FAILED', error)
+
+
+def refuse_multi_source(result):
+    """The MS-3 boundary: turn a ready S0 result that holds several source images into a refusal (a fixed code and text)
+    before S1, because S2 and S4 would otherwise take one image of several. Nothing changes for 0 or 1 image.
+    Returns whether it refused. Removed by MS-4 and MS-5."""
+    if 'source_images' not in result.payload:
+        return False
+    _refuse(result.payload, MULTI_SOURCE_CODE, _Refusal(MULTI_SOURCE_CODE, MULTI_SOURCE_MESSAGE, safe=True))
+    return True
 
 
 def intake(request, config, *, project_root, profile_view=None):
@@ -215,13 +275,35 @@ def intake(request, config, *, project_root, profile_view=None):
         boundary('profile end')
 
         boundary('image start')
-        if request.get('source_image') is not None:
-            raw = _image(request['source_image'])
+        sources = source_images(request)
+        if len(sources) > 1:
+            # The count comes first: a list over the cap is refused before one byte of it is decoded, never truncated.
+            cap, key = source_cap(effective, profile)
+            if len(sources) > cap:
+                raise _Refusal(TOO_MANY_CODE, f'{SOURCES}: {len(sources)} images, at most {cap} allowed by {key}',
+                               safe=True)
+        if sources:
+            listed = request_version(request) == V1  # only a request.v1 refusal names the index of an image
+            raws = [_image(item, index if listed else None) for index, item in enumerate(sources)]
+            ids = [sha256_tag(raw) for raw in raws]
+            first = {}
+            for index, image_id in enumerate(ids):  # same bytes twice carry nothing and blur the indexes
+                if first.setdefault(image_id, index) != index:
+                    raise _Refusal(DUPLICATE_CODE, f'{SOURCES}[{index}] repeats {SOURCES}[{first[image_id]}]', safe=True)
             vision = effective['vision']
             configure_decode_backstop([vision['max_decode_pixels']])
-            prepared, _ = prepare_vision_image_with_info(raw, vision, vision['max_decode_pixels'])
-            payload['source_image'] = {'image_id': sha256_tag(raw), 'role': 'source_image',
-                                       'data': base64.b64encode(prepared).decode('ascii')}
+            images = []
+            for index, raw in enumerate(raws):
+                if index:
+                    boundary('image start')  # the deadline is checked between images
+                prepared = _prepare(raw, vision, index if listed else None)
+                images.append({'index': index + 1, 'image_id': ids[index], 'role': 'source_image',
+                               'data': base64.b64encode(prepared).decode('ascii')})
+            if len(images) == 1:  # one image keeps today's payload (intake_result.v1), whichever request version it came in
+                payload['source_image'] = {key: images[0][key] for key in ('image_id', 'role', 'data')}
+            else:  # intake_result.v2: no `source_image` key, so no stage can take image 1 for all of them
+                del payload['source_image']
+                payload.update(request_version=V1, source_images=images)
         boundary('image end')
 
         boundary('snapshot start')

@@ -14,7 +14,9 @@ from .assembly import build_assembly
 from .candidates import build_candidates, query_embedder_settings
 from .config import ConfigurationError, effective_request_config, validate_pipeline_reads
 from .envelope import build_envelope, build_trace_row
-from .intake import RETENTION_MESSAGE, AttachmentRetentionUnavailable, intake, refuse_attachments
+from .intake import (
+    RETENTION_MESSAGE, AttachmentRetentionUnavailable, intake, refuse_attachments, refuse_multi_source,
+)
 from .model_client import MODEL_CODES, ModelCallError, compose_model_client, safe_model_code, safe_probe_events
 from .model_json import strict_json
 from .planner import plan
@@ -282,6 +284,7 @@ class Pipeline:
             try:
                 async with asyncio.timeout(runtime['request_deadline_s'] - (time.monotonic() - started)):
                     s0 = intake(request, self.config, project_root=self.root, profile_view=profile)
+                    refuse_multi_source(s0)  # MS-3 boundary, before S1: S2 and S4 take one image until MS-4 and MS-5
                     if s0.payload['outcome'] != 'refused':
                         if effective['rag']['enabled']:
                             from .k1_embed import Embedder

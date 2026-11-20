@@ -1,7 +1,8 @@
 """Strict input and output helpers of the command line (T-016): a request file in, UTF-8 JSON out.
 
 Nothing here reads meaning from text. A request is decoded as UTF-8, parsed as JSON that refuses duplicate keys,
-non-finite numbers and excessive nesting, checked against `request.v0`, and handed on exactly as written (R-001, R-004).
+non-finite numbers and excessive nesting, checked against `request.v0` or `request.v1` (`request_shape`), and handed on
+exactly as written (R-001, R-004).
 Refusal messages name the argument, the field path and the schema keyword, never a value, so a private prompt or image
 does not reach a log (R-026).
 """
@@ -17,6 +18,7 @@ from jsonschema import Draft202012Validator
 from .config import REQUEST_LIMIT_KEY, ConfigurationError, LinkedPath, _inside, _lexical_path, _schema
 from .k0_scan import LinkRefused, ScanError, SourceTooLarge, read_source_file
 from .model_json import strict_json
+from .request_shape import SOURCE, SOURCES, V1, request_version, structure_refusal, v0_refusal
 
 
 class Refusal(Exception):
@@ -105,8 +107,12 @@ def parse_request(data, root):
         raise Refusal('request: a string holds a lone surrogate, which UTF-8 cannot carry')
     if not isinstance(request, dict):
         raise Refusal('request: expected a JSON object')
+    shape = structure_refusal(request)
+    if shape is not None:
+        raise Refusal(f'{shape[1]}: {shape[2]}')
+    version = request_version(request)
     try:
-        errors = sorted(Draft202012Validator(_schema(root, 'request.v0')).iter_errors(request),
+        errors = sorted(Draft202012Validator(_schema(root, version)).iter_errors(request),
                         key=lambda item: ([str(part) for part in item.absolute_path], item.validator))
     except ConfigurationError as error:
         raise Refusal(f'request: {error}') from None
@@ -114,16 +120,22 @@ def parse_request(data, root):
         error = errors[0]
         what = 'unknown field' if error.validator == 'additionalProperties' else f'violates {error.validator}'
         raise Refusal(f'{_error_path(error)}: {what}')
-    source = request.get('source_image')
-    if request['task'] == 'edit' and source is None:
-        raise Refusal('request.source_image: required by task edit')
-    if request['task'] == 'generate' and source is not None:
-        raise Refusal('request.source_image: not accepted by task generate')
+    if version == V1:
+        for index, item in enumerate(request[SOURCES]):
+            try:
+                base64.b64decode(item, validate=True)
+            except (ValueError, binascii.Error):
+                raise Refusal(f'request.{SOURCES}[{index}]: not valid base64') from None
+        return request
+    rule = v0_refusal(request)
+    if rule is not None:
+        raise Refusal(f'request.{SOURCE}: {rule[1]}')
+    source = request.get(SOURCE)
     if source is not None:
         try:
             base64.b64decode(source, validate=True)
         except (ValueError, binascii.Error):
-            raise Refusal('request.source_image: not valid base64') from None
+            raise Refusal(f'request.{SOURCE}: not valid base64') from None
     return request
 
 

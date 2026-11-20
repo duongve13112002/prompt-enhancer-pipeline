@@ -52,7 +52,7 @@ def build_parser():
     enhance = commands.add_parser('enhance', help='run S0 to S6: once, serve')
     enhance_actions = enhance.add_subparsers(dest='action', required=True)
     once = _common(enhance_actions.add_parser('once', help='one request file in, one envelope on stdout'))
-    once.add_argument('--request', required=True, help='request.v0 JSON file inside the project root')
+    once.add_argument('--request', required=True, help='request.v0 or request.v1 JSON file inside the project root')
     _common(enhance_actions.add_parser('serve', help='S0 to S6 over HTTP on serving.host and serving.port; Ctrl+C or SIGTERM stops it'))
     evaluation = commands.add_parser('eval', help='evaluation: build, run, import, fit')
     eval_actions = evaluation.add_subparsers(dest='action', required=True)

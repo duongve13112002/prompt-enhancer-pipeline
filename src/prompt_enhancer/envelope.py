@@ -90,7 +90,14 @@ def build_envelope(intake_result, planned=None, assembled=None, checked=None, *,
                             'bind_to': item['bound_entity'], 'use_for': list(item['facets'])} for item in images]
         else:
             status = 'degraded'
-    source = payload['source_image']
+    if 'source_images' in payload:
+        # intake_result.v2 (several sources): response_envelope.v1 holds one binding, so only a refusal can be built here;
+        # the multi-source success envelope is MS-5's (response_envelope.v2). Never bind it to image 1.
+        if payload['outcome'] != 'refused':
+            raise NotImplementedError('several source images need response_envelope.v2 (MS-5)')
+        source = None
+    else:
+        source = payload['source_image']
     result = {'status': status, 'output': output, 'attachments': attachments,
               'source_binding': None if source is None else {'source_image_id': source['image_id']},
               'retrieval': retrieval, 'warnings': [item for item in warnings if item in WARNINGS],

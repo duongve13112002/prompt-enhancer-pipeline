@@ -1,0 +1,283 @@
+{
+ "bad_base64": {
+  "intake": {
+   "config_hash": "<hash>",
+   "effective_config": "<config>",
+   "envelope": {
+    "attachments": [],
+    "output": null,
+    "retrieval": {
+     "error": null,
+     "snapshot_id": null,
+     "state": "disabled"
+    },
+    "source_binding": null,
+    "status": "failed",
+    "trace_id": "<id>",
+    "warnings": []
+   },
+   "error": {
+    "code": "IMAGE_UNDECODABLE",
+    "message": "intake refused (IMAGE_UNDECODABLE)"
+   },
+   "outcome": "refused",
+   "profile_id": "p1",
+   "prompt": "original intent",
+   "request_id": "<id>",
+   "retrieval": {
+    "snapshot_id": null,
+    "state": "disabled"
+   },
+   "source_image": null,
+   "task": "edit",
+   "warnings": []
+  },
+  "parse": {
+   "refused": "request.source_image: not valid base64"
+  }
+ },
+ "edit_null_source": {
+  "intake": {
+   "config_hash": "<hash>",
+   "effective_config": "<config>",
+   "envelope": {
+    "attachments": [],
+    "output": null,
+    "retrieval": {
+     "error": null,
+     "snapshot_id": null,
+     "state": "disabled"
+    },
+    "source_binding": null,
+    "status": "failed",
+    "trace_id": "<id>",
+    "warnings": []
+   },
+   "error": {
+    "code": "SOURCE_IMAGE_REQUIRED",
+    "message": "intake refused (SOURCE_IMAGE_REQUIRED)"
+   },
+   "outcome": "refused",
+   "profile_id": null,
+   "prompt": "original intent",
+   "request_id": "<id>",
+   "retrieval": {
+    "snapshot_id": null,
+    "state": "disabled"
+   },
+   "source_image": null,
+   "task": "edit",
+   "warnings": []
+  },
+  "parse": {
+   "refused": "request.source_image: required by task edit"
+  }
+ },
+ "edit_without_source": {
+  "intake": {
+   "config_hash": "<hash>",
+   "effective_config": "<config>",
+   "envelope": {
+    "attachments": [],
+    "output": null,
+    "retrieval": {
+     "error": null,
+     "snapshot_id": null,
+     "state": "disabled"
+    },
+    "source_binding": null,
+    "status": "failed",
+    "trace_id": "<id>",
+    "warnings": []
+   },
+   "error": {
+    "code": "SOURCE_IMAGE_REQUIRED",
+    "message": "intake refused (SOURCE_IMAGE_REQUIRED)"
+   },
+   "outcome": "refused",
+   "profile_id": null,
+   "prompt": "original intent",
+   "request_id": "<id>",
+   "retrieval": {
+    "snapshot_id": null,
+    "state": "disabled"
+   },
+   "source_image": null,
+   "task": "edit",
+   "warnings": []
+  },
+  "parse": {
+   "refused": "request.source_image: required by task edit"
+  }
+ },
+ "generate": {
+  "intake": {
+   "config_hash": "<hash>",
+   "effective_config": "<config>",
+   "envelope": null,
+   "error": null,
+   "outcome": "ready",
+   "profile_id": "p1",
+   "prompt": "original intent",
+   "request_id": "<id>",
+   "retrieval": {
+    "snapshot_id": null,
+    "state": "disabled"
+   },
+   "source_image": null,
+   "task": "generate",
+   "warnings": []
+  },
+  "parse": {
+   "accepted": {
+    "prompt": "original intent",
+    "task": "generate"
+   }
+  }
+ },
+ "generate_with_source": {
+  "intake": {
+   "config_hash": "<hash>",
+   "effective_config": "<config>",
+   "envelope": {
+    "attachments": [],
+    "output": null,
+    "retrieval": {
+     "error": null,
+     "snapshot_id": null,
+     "state": "disabled"
+    },
+    "source_binding": null,
+    "status": "failed",
+    "trace_id": "<id>",
+    "warnings": []
+   },
+   "error": {
+    "code": "SOURCE_IMAGE_UNEXPECTED",
+    "message": "intake refused (SOURCE_IMAGE_UNEXPECTED)"
+   },
+   "outcome": "refused",
+   "profile_id": null,
+   "prompt": "original intent",
+   "request_id": "<id>",
+   "retrieval": {
+    "snapshot_id": null,
+    "state": "disabled"
+   },
+   "source_image": null,
+   "task": "generate",
+   "warnings": []
+  },
+  "parse": {
+   "refused": "request.source_image: not accepted by task generate"
+  }
+ },
+ "not_an_image": {
+  "intake": {
+   "config_hash": "<hash>",
+   "effective_config": "<config>",
+   "envelope": {
+    "attachments": [],
+    "output": null,
+    "retrieval": {
+     "error": null,
+     "snapshot_id": null,
+     "state": "disabled"
+    },
+    "source_binding": null,
+    "status": "failed",
+    "trace_id": "<id>",
+    "warnings": []
+   },
+   "error": {
+    "code": "IMAGE_UNDECODABLE",
+    "message": "intake refused (UndecodableImage)"
+   },
+   "outcome": "refused",
+   "profile_id": "p1",
+   "prompt": "original intent",
+   "request_id": "<id>",
+   "retrieval": {
+    "snapshot_id": null,
+    "state": "disabled"
+   },
+   "source_image": null,
+   "task": "edit",
+   "warnings": []
+  },
+  "parse": {
+   "accepted": {
+    "prompt": "original intent",
+    "source_image": "YmFkIGJ5dGVz",
+    "task": "edit"
+   }
+  }
+ },
+ "ready": {
+  "intake": {
+   "config_hash": "<hash>",
+   "effective_config": "<config>",
+   "envelope": null,
+   "error": null,
+   "outcome": "ready",
+   "profile_id": "p1",
+   "prompt": "original intent",
+   "request_id": "<id>",
+   "retrieval": {
+    "snapshot_id": null,
+    "state": "disabled"
+   },
+   "source_image": {
+    "data": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAEklEQVR4nGP8z4AdMOEQJ0MCAGSRAQfIidsoAAAAAElFTkSuQmCC",
+    "image_id": "sha256:80ab0ad17b1dcaaf5295735196061a7eb1300f34be7a867dd0e9b42ec02a0b3a",
+    "role": "source_image"
+   },
+   "task": "edit",
+   "warnings": []
+  },
+  "parse": {
+   "accepted": {
+    "prompt": "original intent",
+    "source_image": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAEklEQVR4nGP8z4AdMOEQJ0MCAGSRAQfIidsoAAAAAElFTkSuQmCC",
+    "task": "edit"
+   }
+  }
+ },
+ "unknown_field": {
+  "intake": {
+   "config_hash": "<hash>",
+   "effective_config": "<config>",
+   "envelope": {
+    "attachments": [],
+    "output": null,
+    "retrieval": {
+     "error": null,
+     "snapshot_id": null,
+     "state": "disabled"
+    },
+    "source_binding": null,
+    "status": "failed",
+    "trace_id": "<id>",
+    "warnings": []
+   },
+   "error": {
+    "code": "CONFIGURATION_INVALID",
+    "message": "intake refused (ConfigurationError)"
+   },
+   "outcome": "refused",
+   "profile_id": null,
+   "prompt": "original intent",
+   "request_id": "<id>",
+   "retrieval": {
+    "snapshot_id": null,
+    "state": "disabled"
+   },
+   "source_image": null,
+   "task": "edit",
+   "warnings": []
+  },
+  "parse": {
+   "refused": "request: unknown field"
+  }
+ }
+}

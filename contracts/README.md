@@ -56,7 +56,7 @@ Values are exact strings; the schema files use the same spelling.
 
 | Enum | Values and meaning |
 | --- | --- |
-| task | `generate` (text prompt), `edit` (text prompt plus one source image in `request.v0`; several in `request.v1`, a draft nothing reads yet, decision 176 and [Multi-source contracts](#multi-source-contracts-designed-not-yet-implemented)) |
+| task | `generate` (text prompt), `edit` (text prompt plus one source image in `request.v0`; several in `request.v1`, read by S0 since MS-3 but refused before S1 until MS-4 and MS-5 (`MULTI_SOURCE_UNAVAILABLE`), decision 176 and [Multi-source contracts](#multi-source-contracts-designed-not-yet-implemented)) |
 | edit kind | `local_edit` (change one object, attribute, region or text), `global_transform` (medium, style, weather, lighting of the whole image), `subject_recompose` (a new image of this subject) |
 | link status | `resolved` (one concept), `family` (the mention is broader than the knowledge base, several candidates), `no_match` |
 | context fit | `fits`, `neutral`, `conflicts`: how well a candidate suits the prompt's context; orders `family` and variant choices and never empties them (decisions 15, 16 and 69) |
@@ -134,7 +134,7 @@ Decisions 9, 10, 30 and 31, R-007. Details for authors: [kb/README.md](../kb/REA
 ## Intake contract (S0)
 
 `request.v0` accepts a verbatim string prompt, an explicit generate/edit task, optional admin profile ID,
-one optional base64 source image and typed overrides keyed by exact dotted configuration paths. A several-image `request.v1` is designed, not implemented ([Multi-source contracts](#multi-source-contracts-designed-not-yet-implemented)).
+one optional base64 source image and typed overrides keyed by exact dotted configuration paths. A several-image `request.v1` is parsed and taken by S0 (MS-3, [S0](../docs/stages/S0-intake.md)); S2 to S6 for it are designed, not implemented ([Multi-source contracts](#multi-source-contracts-designed-not-yet-implemented)).
 `request_overrides.allowed_keys` is required in a configuration profile; an empty list permits no overrides.
 Every allowed path must already exist and name a leaf; the policy cannot authorize changing itself.
 Overrides are copied into an effective configuration and fully revalidated before any profile or knowledge access.
@@ -292,7 +292,7 @@ Status (MS-1, decisions 176, 179 and 196; MS-2 landed): these are contract draft
 | Today (kept, never edited) | New draft | Used when | Written by |
 | --- | --- | --- | --- |
 | `request.v0` | [`request.v1`](schemas/request.v1.schema.json) | the caller sends `source_images` (`source_image` is gone; both together are refused) | MS-1 |
-| `intake_result.v0`, `intake_result.v1` (T017-FIX3) | [`intake_result.v2`](schemas/intake_result.v2.schema.json) | S0 result once MS-3 lands; a `request.v0` becomes a list of one and `request_version` records the shape; its refusal envelope is `response_envelope.v1` | MS-1 |
+| `intake_result.v0`, `intake_result.v1` (T017-FIX3) | [`intake_result.v2`](schemas/intake_result.v2.schema.json) | S0 result for two or more source images (MS-3); one image, from `request.v0` or a one-item `request.v1`, keeps `intake_result.v1` (the schema's own note that a `request.v0` becomes a list of one is superseded: design Q3, decision 179); its refusal envelope is `response_envelope.v1` | MS-1, MS-3 |
 | `planner_reply.v0`, `intent_ir.v0` | [`planner_reply.v1`](schemas/planner_reply.v1.schema.json), [`intent_ir.v1`](schemas/intent_ir.v1.schema.json) | n is 2 or more | MS-1 |
 | `plan_result.v1` | [`plan_result.v2`](schemas/plan_result.v2.schema.json) | n is 2 or more | MS-1 |
 | `response_envelope.v0`, `response_envelope.v1` (T017-FIX3) | `response_envelope.v2` | the request was v1 | MS-5 |
@@ -307,7 +307,7 @@ Unchanged: `constraint_ledger.v0`, `knowledge_pack.v0`, `assembly_result.v0`, `w
 **Why `intake_result.v2`, `response_envelope.v2` and `golden_case.v2`.** The same collision, found after the design note: T017-FIX3, which lands before the multi-source tasks, owns `intake_result.v1` (the refusal envelope under `response_envelope.v1`), `response_envelope.v1` (a closed `retrieval.error` code and the state `not_reached`, decisions 198 and 200) and `golden_case.v1` (the golden retrieval switch). The multi-source successors take the next number: `intake_result.v2` (MS-1), `response_envelope.v2` (MS-5), `golden_case.v2` (MS-6). The design note's version for each of the three reads one lower.
 
 **Reading by version.** Nothing stored is rewritten; readers dispatch.
-- A request is `request.v1` when it holds `source_images` and `request.v0` when it holds `source_image` or neither (a `generate`); both fields is a refusal. S0 turns either into one list.
+- A request is `request.v1` when it holds `source_images` and `request.v0` when it holds `source_image` or neither (a `generate`); both fields is a refusal (`SOURCE_IMAGES_CONFLICT`). S0 (MS-3) builds today's one-image payload for one image of either shape and `intake_result.v2` (the list) for two or more; the pipeline refuses the latter before S1 until MS-4 and MS-5 (`MULTI_SOURCE_UNAVAILABLE`).
 - The stage contracts follow n, the length of that list: 1 keeps today's, 2 or more uses the drafts above. S3 and S4 accept `plan_result.v1` and `plan_result.v2`.
 - The response envelope follows `request_version`: a `request.v0` keeps the envelope of today's path (`response_envelope.v0`, or `response_envelope.v1` once T017-FIX3 lands); a `request.v1` gets `response_envelope.v2` (MS-5).
 - Stored rows (traces, profile bundles, evaluation sets) are read by the version they record; a row without one is v0 and is never rewritten.
@@ -322,7 +322,7 @@ Unchanged: `constraint_ledger.v0`, `knowledge_pack.v0`, `assembly_result.v0`, `w
 | an entity or attribute has `source_indexes` exactly when its source is `source_image` | `intent_ir.v1` only | `planner_reply.v1` |
 | the task is `edit` and `edit_kind` is not null | yes (`intent_ir.v1`, `planner_reply.v1`) | the choice between v0 and v1 by n |
 | edit needs at least one image, generate none, an empty list is refused, both fields are refused | yes (`request.v1`, `intake_result.v2`) | the same, before any decoding |
-| the caps: `edit.max_source_images`, `renderer.max_source_images`, the backend's `image.max_images_per_call` | no (they are configuration values, so no `maxItems`) | yes: over any cap is refused (`SOURCE_IMAGES_TOO_MANY`), never truncated |
+| the caps: `edit.max_source_images`, `renderer.max_source_images`, the backend's `image.max_images_per_call` | no (they are configuration values, so no `maxItems`) | yes: over any cap is refused (`SOURCE_IMAGES_TOO_MANY`), never truncated; S0 (MS-3) checks the smaller of the first two, on the list length before any decoding; the backend limit is checked at configuration load (MS-2) |
 
 **`intake_result.v2.envelope`.** It references `response_envelope.v1`, written by T017-FIX3, which lands first. A tree that does not hold that file yet cannot resolve the reference, so the fixture test of `intake_result.v2` is skipped there with a stated reason and is re-run after the merge. `response_envelope.v2`, the multi-source envelope, is MS-5's; which envelope a refused `request.v1` carries is settled there.
 
