@@ -51,7 +51,9 @@ PINS = {
                    # T017-FIX3 (the writer branch passes the bundle output schema id; no K-role request changes)
                    # and CLOUD-1 (the Anthropic structured-output schema, x-api-key, thinking disabled, sent
                    # hash), integrated under one bump
-                   ('model-call-6', '5a8e0706acd2e112374d9abfda7d8f400bc2531ffb75e5bd63ea085cbb439236')],
+                   ('model-call-6', '5a8e0706acd2e112374d9abfda7d8f400bc2531ffb75e5bd63ea085cbb439236'),
+                   # T017-HAIKU: `$comment` and `minProperties` removed from the schema sent to Anthropic
+                   ('model-call-7', 'ac3acc47fa1b66619fa4a55236ded5cb6f0b14a391fea1ae3872930e15c16b63')],
     'k2_naming': [('k2-naming-1', 'f7c8bc6ccac88fd3bde0d29807ee60669e67b67f6e7b054ded05998ca6e11fa5'),
                   ('k2-naming-2', '9028bbc88242340042e849112324d30d03e9568f25384d5863bf5dac1976eba6')],
     'k2_draw': [('k2-draw-v1', '085e0f67f4a98374df27d6c6103d10119f223e71975675382c3e1763dc71117b')],

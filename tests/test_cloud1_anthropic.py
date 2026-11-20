@@ -79,6 +79,60 @@ def test_a_schema_anthropic_cannot_take_is_refused_not_changed(schema):
         anthropic_output_schema(schema)
 
 
+def test_comment_and_min_properties_are_removed_at_every_level():
+    # T017-HAIKU keyword matrix: Haiku 5.5 answered 400 for both on an object node.
+    schema = {'$comment': 'root note', 'type': 'object', 'additionalProperties': False, 'minProperties': 1,
+              'required': ['a'], 'properties': {'a': {'$comment': 'leaf note', 'type': 'string'},
+                                                '$comment': {'type': 'string'}}}
+    sent = anthropic_output_schema(schema)
+    assert sent == {'type': 'object', 'additionalProperties': False, 'required': ['a'],
+                    'properties': {'a': {'type': 'string'}, '$comment': {'type': 'string'}}}
+
+
+def schema_keys(node):
+    """Every key at schema level, walking all subschema positions (property names are not keywords)."""
+    if isinstance(node, list):
+        return set().union(*map(schema_keys, node)) if node else set()
+    if not isinstance(node, dict):
+        return set()
+    found = set(node)
+    for key, value in node.items():
+        if key in ('properties', '$defs', 'definitions'):
+            found |= set().union(*map(schema_keys, value.values())) if value else set()
+        elif key in ('items', 'anyOf', 'allOf'):
+            found |= schema_keys(value)
+    return found
+
+
+# Independent of the module's constant, so dropping a keyword from it fails here: the documented constraints and the two
+# keywords Haiku 5.5 refused on an object node in the T017-HAIKU keyword matrix.
+REJECTED_BY_ANTHROPIC = frozenset((
+    'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'minLength', 'maxLength',
+    'maxItems', 'uniqueItems', 'minProperties', '$comment'))
+
+
+@pytest.mark.parametrize('path', sorted(SCHEMAS.glob('*.schema.json')), ids=lambda p: p.name)
+def test_every_contract_schema_anthropic_takes_is_sent_without_a_rejected_keyword(path):
+    schema = json.loads(path.read_text(encoding='utf-8'))
+    try:
+        sent = anthropic_output_schema(schema)
+    except ValueError:
+        return  # refused at start-up instead (config.py), never sent
+    assert not schema_keys(sent) & REJECTED_BY_ANTHROPIC
+
+
+def test_the_contract_schema_sweep_is_not_vacuous():
+    # The schema of the first live Haiku 400 (T017-HAIKU) must be accepted, so the sweep above really asserts.
+    accepted = []
+    for path in sorted(SCHEMAS.glob('*.schema.json')):
+        try:
+            anthropic_output_schema(json.loads(path.read_text(encoding='utf-8')))
+        except ValueError:
+            continue
+        accepted.append(path.name)
+    assert 'info_assessment.v0.schema.json' in accepted
+
+
 def test_a_local_non_recursive_ref_is_kept():
     schema = {'type': 'object', 'additionalProperties': False, 'required': ['a'], 'properties': {
         'a': {'$ref': '#/$defs/n'}}, '$defs': {'n': {'type': 'integer', 'maximum': 3}}}

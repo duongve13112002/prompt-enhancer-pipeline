@@ -33,9 +33,12 @@ def cloud_headers(provider, backend, project_root):
 # Protocol-bound. JSON Schema keywords the Anthropic structured output does not support (Claude API skill docs,
 # structured-outputs page, cache dated 2026-11-03): numerical constraints, string length constraints and array
 # constraints. Removing them only loosens the request; the client validates the reply against the full schema.
+# `$comment` and `minProperties`: experiment (T017-HAIKU keyword matrix, 2026-11-20, claude-haiku-5-5): each returned
+# HTTP 400 "For 'object' type, property '<keyword>' is not supported". `$comment` is an annotation, so removing it
+# everywhere never changes which instances are valid; `minProperties` only loosens, like the constraints above.
 ANTHROPIC_UNSUPPORTED_KEYWORDS = frozenset((
     'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'minLength', 'maxLength',
-    'minItems', 'maxItems', 'uniqueItems'))
+    'minItems', 'maxItems', 'uniqueItems', 'minProperties', '$comment'))
 # Keywords whose subschemas are only ever "and"-ed or applied positively: a keyword removed below them can only widen
 # the set of accepted instances. Anything else that holds a subschema (`not`, `if`, `oneOf`, ...) could turn a removal
 # into a narrowing, so a schema using it is refused instead of changed.

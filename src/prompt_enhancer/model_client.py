@@ -30,7 +30,7 @@ from pathlib import Path
 # artifact-bound: declared revision of the shared model-call path (request mapping, image preparation, reply parsing)
 # that every K2, K3 and K4 artifact passes through (KBS-S3-1). It keys those artifacts in place of a hash of module
 # source; bump it in the same change that edits a function its guard pins (tests/test_stage_revisions.py).
-MODEL_CALL_REVISION = 'model-call-6'  # T017-FIX3 bundle schema id in `_call`; CLOUD-1 Anthropic structured output
+MODEL_CALL_REVISION = 'model-call-7'  # T017-HAIKU: `$comment` and `minProperties` removed from Anthropic schemas
 
 # Protocol-bound public failure codes; never expose arbitrary exception/model text.
 MODEL_CODES = frozenset(('MODEL_CALL_FAILED', 'MODEL_CALL_INVALID', 'CAPABILITY_UNAVAILABLE',
