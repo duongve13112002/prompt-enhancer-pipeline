@@ -29,7 +29,8 @@ def test_real_example_contracts():
     assert (overlay_path.parent / overlay['overlay_of']).is_file()
     assert 'unsupported_param_policy' not in overlay['vlm']['backends']['main']
     manifest = yaml.safe_load((ROOT / 'configs/profiles/_example/manifest.yaml').read_bytes())
-    manifest_schema = json.loads((ROOT / 'contracts/schemas/profile_manifest.v0.schema.json').read_bytes())
+    assert manifest['schema_version'] == 2  # MS-2 (Q5): the example moved to the multi-source renderer, profile_manifest.v1
+    manifest_schema = json.loads((ROOT / 'contracts/schemas/profile_manifest.v1.schema.json').read_bytes())
     jsonschema.Draft202012Validator(manifest_schema).validate(manifest)
     assert manifest['output_schema_id'] == 'none'
 

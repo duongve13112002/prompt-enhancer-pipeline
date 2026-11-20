@@ -182,7 +182,9 @@ def test_loaded_profile_composes_role_client(tmp_path, project_root, monkeypatch
                        endpoints={'chat': 'chat', 'health': 'health'}, max_concurrency=2,
                        http=dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
                                  max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[]),
-                       probe=dict(max_requests=20, timeout_s=1, image_attempts=1), image=dict(max_decode_pixels=1000, max_side='none'), extra_body={},
+                       probe=dict(max_requests=20, timeout_s=1, image_attempts=1),
+                       image=dict(max_decode_pixels=1000, max_side='none', max_images_per_call=1),  # test-only limit (decision 179)
+                       extra_body={},
                        addendum_layout='separate_system_message',  # test-only layout (T017-FIX)
                        addendum_separator='none')  # the base example states deploy_required (decision 193)
         backend['model'].update(id='model-base', revision='revision-base')
@@ -234,7 +236,9 @@ def test_loaded_profile_composes_role_client(tmp_path, project_root, monkeypatch
                            if observation == 'base_url' else deepcopy(value))
         role_name = 'writer' if observation == 'writer_manifest' else 'manifest_drafter'
         if role_name == 'writer':
+            multi_source = profile['vlm']['roles']['writer']['multi_source']  # the replaced role keeps its required MS-2 block
             profile['vlm']['roles']['writer'] = deepcopy(role)
+            profile['vlm']['roles']['writer']['multi_source'] = multi_source
         path = tmp_path / 'profile.yaml'
         path.write_text(yaml.safe_dump(profile), encoding='utf-8')
         loaded = load_config(path, 'profile register', project_root=project_root)
@@ -367,7 +371,8 @@ def test_cloud_budget_is_shared_by_roles_from_same_run(tmp_path, project_root, p
                      endpoints={'chat': 'chat', 'health': 'health'}, max_concurrency=1,
                      http=dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
                                max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[]),
-                     probe=dict(max_requests=1, timeout_s=1, image_attempts=1), image=dict(max_decode_pixels=1000, max_side='none'),
+                     probe=dict(max_requests=1, timeout_s=1, image_attempts=1),
+                     image=dict(max_decode_pixels=1000, max_side='none', max_images_per_call=1),  # test-only limit (decision 179)
                      addendum_layout='separate_system_message',  # test-only layout (T017-FIX)
                      addendum_separator='none')  # the base example states deploy_required (decision 193)
         local['model'].update(id='local', revision='revision')

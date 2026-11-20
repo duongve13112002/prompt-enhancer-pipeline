@@ -2,7 +2,7 @@
 # It extends the dev profile and switches only the embedder. A deployment overlay cannot do this (`embedding` is not an
 # overlay key), so the comparison selects this file instead of enhancer.dev.example.yaml. Smoke only: the comparison
 # never sets the full profile's embedding.chosen (experiment E5 does, R-020).
-schema_version: 1
+schema_version: 3
 extends: enhancer.dev.example.yaml
 status: template
 purpose: smoke

@@ -122,7 +122,7 @@ def test_command_role_and_backend_validation(config, tmp_path):
     backend['http'] = dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
                            max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[])
     backend['probe'] = dict(max_requests=1, timeout_s=1, image_attempts=1)
-    backend['image'] = dict(max_decode_pixels=1000, max_side='none')
+    backend['image'] = dict(max_decode_pixels=1000, max_side='none', max_images_per_call=1)  # test-only (decision 179)
     backend['addendum_layout'] = 'separate_system_message'  # test-only layout (T017-FIX)
     backend['addendum_separator'] = 'none'  # the base example states deploy_required; separate takes none (decision 193)
     path = save_config(tmp_path, config)
@@ -164,7 +164,7 @@ def test_model_backend_read_refuses_operational_sentinel(config, tmp_path, secti
     backend['http'] = dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
                            max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[])
     backend['probe'] = dict(max_requests=1, timeout_s=1, image_attempts=1)
-    backend['image'] = dict(max_decode_pixels=1000, max_side='none')
+    backend['image'] = dict(max_decode_pixels=1000, max_side='none', max_images_per_call=1)  # test-only (decision 179)
     backend[section][field] = sentinel
     with pytest.raises(ConfigurationError, match=field + '.*unresolved sentinel'):
         load_config(save_config(tmp_path, config), 'profile register')
@@ -402,7 +402,7 @@ def test_overlay_rejects_policy(config, tmp_path):
     ('http', {'connect_timeout_s': 1, 'read_timeout_s': 2, 'write_timeout_s': 3, 'pool_timeout_s': 4,
               'max_retries': 1, 'backoff_initial_s': 0, 'backoff_max_s': 1, 'retry_statuses': [503]}),
     ('probe', {'max_requests': 2, 'timeout_s': 3, 'image_attempts': 1}),
-    ('image', {'max_decode_pixels': 1000, 'max_side': 512}),  # decision 144: a deployment sets its backend cap
+    ('image', {'max_decode_pixels': 1000, 'max_side': 512, 'max_images_per_call': 1}),  # decision 144: a deployment sets its backend cap; the limit is test-only (decision 179)
     ('anthropic_version', '2025-01-01'),
     ('anthropic_workspace_id', 'workspace-123'),
     ('engine', {'name': 'vllm', 'version': 'test-version'}),
@@ -441,7 +441,7 @@ def test_profile_and_overlay_versions_refused(config, tmp_path):
     with pytest.raises(ConfigurationError, match='overlay.yaml.*schema_version'):
         load_config(base, 'kb status', overlay=overlay)
     manifest = yaml.safe_load((PROFILE / 'manifest.yaml').read_bytes())
-    manifest['schema_version'] = 2
+    manifest['schema_version'] = 3  # versions 1 and 2 load since MS-2 (profile_manifest.v0 and .v1); 3 is unknown
     (tmp_path / 'manifest.yaml').write_text(yaml.safe_dump(manifest), encoding='utf-8')
     with pytest.raises(ConfigurationError, match='manifest.yaml.*schema_version'):
         load_profile(tmp_path)

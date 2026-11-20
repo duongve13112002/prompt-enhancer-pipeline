@@ -11,7 +11,7 @@
 #   design_required  decided by the implementing task with evidence
 #   ask_user         only for paid call budgets: the PM asks the user
 # [P] = PM proposal (not a user decision), [A] = assumption to verify.
-schema_version: 2
+schema_version: 3                        # 3 adds edit.max_source_images, backend image.max_images_per_call and the roles' multi_source (decision 179); a version-2 file still loads for commands that read none of them, and request commands refuse it
 status: template
 purpose: production                      # production | smoke (dev results never fit a sentinel, R-020)
 
@@ -141,6 +141,7 @@ assembly:                                # S3
 edit:
   attach_kb_reference_images: false      # true requires a snapshot republished with retained image copies, and a profile whose renderer.accepts_reference_images is true when it supports edit (decision 177; refused otherwise)
   max_kb_reference_images: fit_from_gt   # read only when attach_kb_reference_images is true
+  max_source_images: deploy_required     # decision 179: the enhancer's own cap on source images per edit request (the planner and the writer each carry every image); a request over it, over renderer.max_source_images or over a backend's image.max_images_per_call is refused, never truncated. A request cannot raise it (request_overrides refuses it in allowed_keys)
   source_entity_linking: false           # the source image is not linked to knowledge-base concepts by default
   default_preservation:                  # per edit kind (R-002); name what stays instead of describing it, N100
     local_edit: preserve_all_outside_target
@@ -204,7 +205,7 @@ vlm:                                     # R-018: rules name no model; models ar
       max_concurrency: fit_from_bench
       http: &model_http {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
       probe: &model_probe {max_requests: design_required, timeout_s: design_required, image_attempts: fit_from_bench}   # image_attempts: requests per challenge of the plain `image` probe on a malformed reply (decision 188); fitted by the seed experiment
-      image: &model_image {max_decode_pixels: deploy_required, max_side: none}   # max_side (decision 144): this backend's longest image side; a chat call uses the smaller of it and the role's side; none = no backend limit; embedder backends keep none until K1 includes it
+      image: &model_image {max_decode_pixels: deploy_required, max_side: none, max_images_per_call: deploy_required}   # max_images_per_call (decision 179, MS-2): how many images one call may carry, equal to the server's own per-prompt limit (llama-server and vLLM name their flag); the planner's and the writer's backend must not be below edit.max_source_images. max_side (decision 144): this backend's longest image side; a chat call uses the smaller of it and the role's side; none = no backend limit; embedder backends keep none until K1 includes it
       addendum_layout: deploy_required   # T017-FIX: separate_system_message (the addendum as a second system message) or joined_system_message (one system message: admin bytes unchanged and first, then addendum_separator, then the addendum); depends on the deployment model's chat template (a Qwen3.5 template refuses a second system message, docs/stages/S4-writer.md)
       addendum_separator: deploy_required   # T017-FIX, decision 193: joined_system_message needs a non-empty string (e.g. "\n\n") and refuses none; separate_system_message takes only none (any other value is refused); cloud and embedding-only backends take neither key; a sentinel here is refused at start, never defaulted
     embedder_qwen3vl8b:                  # T-018: Qwen3-VL-Embedding-8B on this project's embedding server (decision 137); selected with embedding.backend, never run on the dev machine
@@ -278,6 +279,7 @@ vlm:                                     # R-018: rules name no model; models ar
       backend: main
       mode: generate
       prompt_id: planner_v1
+      multi_source: {prompt_id: planner_v2, schema_id: planner_reply.v1}   # decision 179: used only for an edit with two or more source images; a one-image request keeps prompt_id and output below
       image: {source: edit_source_only, max_side: from_vision, format: from_vision, quality: design_required, transport: data_uri}   # the planner sees the source image for edit (S2)
       max_tokens: design_required
       sampling: &sampling_default
@@ -305,6 +307,7 @@ vlm:                                     # R-018: rules name no model; models ar
       backend: main
       mode: generate
       prompt_id: brief_v0
+      multi_source: {prompt_id: brief_v1}   # decision 179: the Enhancement Brief template for two or more source images (exactly one {{data}}); one image keeps brief_v0
       image: {source: edit_source_and_live_look, max_side: from_vision, format: from_vision, quality: design_required, transport: data_uri}   # the edit source image, plus knowledge images when live_look reads them (internal, S3); nothing extra goes downstream
       max_tokens: design_required
       sampling: *sampling_default

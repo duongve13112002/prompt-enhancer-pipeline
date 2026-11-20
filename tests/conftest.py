@@ -31,9 +31,10 @@ def model_test_profile():
                    base_urls=['http://127.0.0.1:8080'], endpoints={'chat': 'chat', 'health': 'health'},
                    max_concurrency=1, http=dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1,
                    pool_timeout_s=1, max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[]),
-                   probe={'max_requests': 1, 'timeout_s': 1, 'image_attempts': 1}, image={'max_decode_pixels': 1000, 'max_side': 'none'},
+                   probe={'max_requests': 1, 'timeout_s': 1, 'image_attempts': 1}, image={'max_decode_pixels': 1000, 'max_side': 'none', 'max_images_per_call': 1},
                    addendum_layout='separate_system_message')  # test-only layout (T017-FIX)
     backend.pop('addendum_separator', None)
+    profile['edit']['max_source_images'] = 1  # test-only (decision 179): the multi-source cap of the synthetic profile
     backend['model'].update(id='synthetic', revision='test')
     for name in ('observer', 'info_assessor', 'folder_namer', 'card_builder', 'alias_generator'):
         role = profile['vlm']['roles'][name]
@@ -71,6 +72,11 @@ def project_root(tmp_path_factory):
     shutil.copytree(schemas, root / 'contracts' / 'schemas')
     # The production capability-probe bundle (KBS-F1): production entry points load it from the project root.
     shutil.copytree(schemas.parent / 'probes', root / 'contracts' / 'probes')
+    # MS-2: a request command reads the multi_source prompt files when it loads the configuration, so every test that
+    # loads one from this root finds the pipeline-owned prompts (the same copy profile_fixtures.install_prompts makes).
+    (root / 'prompts').mkdir(exist_ok=True)
+    for prompt in (schemas.parents[1] / 'prompts').glob('*.txt'):
+        shutil.copyfile(prompt, root / 'prompts' / prompt.name)
     return root
 
 

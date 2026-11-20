@@ -1,7 +1,7 @@
 # Example admin profile manifest for system_prompt.txt (the user's admin prompt `v1`, decision 70). Built and tested on the CPU with labelled doubles; an example only, not a deployment profile. How to run: docs/run-guide.md.
 # Drafted by a model at registration and confirmed by the admin (decision 6). The system prompt text is never edited.
-# Shape: contracts/schemas/profile_manifest.v0.schema.json. Meaning of each field: docs/stages/P-profiles.md.
-schema_version: 1
+# Shape: contracts/schemas/profile_manifest.v1.schema.json (schema_version 2; a schema_version 1 manifest is profile_manifest.v0 and still loads for one source image). Meaning of each field: docs/stages/P-profiles.md.
+schema_version: 2
 profile_id: _example
 status: draft                           # draft | confirmed | active; only the admin confirms
 system_prompt_hash: computed_at_registration   # hash of system_prompt.txt, written by `profile register`
@@ -18,9 +18,11 @@ template_variables: [aspect_ratio, original_prompt]   # the [USER] section; the 
 template_values:                         # decision 81: fixed values for variables other than the input variable
   aspect_ratio: auto
 quote_semantics: literal_text           # a quoted string in the input becomes a text element, so a brief puts no quotes around concept names
-renderer:
+renderer:                               # decision 179: two numbered image groups, each counted from 1; a syntax is `none` or a string with exactly one {n} (for example "<source_{n}>")
   accepts_reference_images: false
-  image_reference_syntax: none
+  max_source_images: 1                  # how many source images the image model accepts in one edit (the admin confirms the drafted number)
+  source_image_syntax: none             # none is allowed only with max_source_images 1
+  reference_image_syntax: none          # none is required while accepts_reference_images is false
 validator:
   checks:
     - single_line_minified_json

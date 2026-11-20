@@ -7,7 +7,7 @@
 | File | Content |
 | --- | --- |
 | `system_prompt.txt` | The admin's system prompt for one image model; it serves every task the manifest lists in `supported_tasks` (here both generate and edit). |
-| `manifest.yaml` | What the prompt implies (tasks, output kind, renderer limits, quote semantics, validators, conflicts), drafted by a model and confirmed by the admin (decision 6). |
+| `manifest.yaml` | What the prompt implies (tasks, output kind, quote semantics, validators, conflicts and the `renderer` block: `accepts_reference_images`, `max_source_images`, `source_image_syntax`, `reference_image_syntax`; manifest `schema_version: 2`, decision 179), drafted by a model and confirmed by the admin (decision 6). The example states one source image and no image syntax. |
 
 ## Rules
 

@@ -1,7 +1,7 @@
 # Dev-machine profile: extends the full profile and overrides only what differs. Built and tested on the CPU with labelled doubles; values stay sentinels until fitted. How to run: docs/run-guide.md.
 # Everything must work here first (R-020, decision 20). Dev results show that the code works; they never fit a sentinel
 # and never support a timing claim. The quantisation file below is a profile value: change it per run (experiment E15, N123).
-schema_version: 2
+schema_version: 3
 extends: enhancer.example.yaml
 status: template
 purpose: smoke
@@ -70,6 +70,9 @@ vision:
   max_decode_pixels: deploy_required      # No measured dev decode limit; independent of VLM backend limits
   max_image_side: 1024                   # decision 84: experiments and benchmarks keep the longer side at 1024 (aspect ratio kept, no upscale)
 
+edit:
+  max_source_images: 1                   # decision 179: dev smoke takes one source image; the limits are never request overrides
+
 request_overrides:
   allowed_keys: []
 
@@ -104,7 +107,7 @@ vlm:
       max_concurrency: 1
       http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
       probe: {max_requests: design_required, timeout_s: design_required, image_attempts: fit_from_bench}
-      image: {max_decode_pixels: deploy_required, max_side: none}
+      image: {max_decode_pixels: deploy_required, max_side: none, max_images_per_call: 1}   # dev smoke carries one image per call [A]: the llama-server flag that sets its own limit is not confirmed here (decision 179)
       addendum_layout: joined_system_message   # T017-FIX: the Qwen3.5 chat template refuses a second system message (J4a2 call 18: HTTP 500 "System message must be at the beginning")
       addendum_separator: "\n\n"         # decision 190 (a child that switches to separate_system_message states none, decision 193)
     embedder:                            # K1 embedding server: EmbeddingGemma 2 from its original weights (T-018); the weights sit under models/ and are verified against models/manifest.json
@@ -117,7 +120,7 @@ vlm:
       max_concurrency: 1
       http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
       probe: {max_requests: design_required, timeout_s: design_required, image_attempts: fit_from_bench}   # unused by K1; required by the backend schema
-      image: {max_decode_pixels: deploy_required, max_side: none}
+      image: {max_decode_pixels: deploy_required, max_side: none, max_images_per_call: 1}   # dev smoke carries one image per call [A]: the llama-server flag that sets its own limit is not confirmed here (decision 179)
       endpoints: {embeddings: v1/embeddings, health: health}
       server:                            # T-018; every key is a profile value, the server has no defaults
         family: embedding_gemma2
@@ -147,7 +150,7 @@ vlm:
       max_concurrency: 1
       http: {connect_timeout_s: deploy_required, read_timeout_s: deploy_required, write_timeout_s: deploy_required, pool_timeout_s: deploy_required, max_retries: design_required, backoff_initial_s: design_required, backoff_max_s: design_required, retry_statuses: design_required}
       probe: {max_requests: design_required, timeout_s: design_required, image_attempts: fit_from_bench}
-      image: {max_decode_pixels: deploy_required, max_side: none}
+      image: {max_decode_pixels: deploy_required, max_side: none, max_images_per_call: 1}   # dev smoke carries one image per call [A]: the llama-server flag that sets its own limit is not confirmed here (decision 179)
       endpoints: {embeddings: v1/embeddings, health: health}
       server:
         family: qwen3_vl_embedding

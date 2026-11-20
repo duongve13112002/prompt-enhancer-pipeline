@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "enhancer_config.v2",
+  "title": "Enhancer configuration, several source images",
+  "$comment": "v2 (MS-2, decision 179), configuration schema_version 3. It is enhancer_config.v1 plus four keys: edit.max_source_images, vlm.backends.<b>.image.max_images_per_call, vlm.roles.planner.multi_source.{prompt_id, schema_id} and vlm.roles.writer.multi_source.prompt_id. Unchanged top-level keys are references to enhancer_config.v1; `edit` is written out below; the three `vlm` additions are the fragments under $defs, which config._configuration_schema composes into the `vlm` node of enhancer_config.v0 (as it composes `runtime` for v1), so no schema text is copied. Version 2 configurations stay loadable for commands that read none of the new keys. Value rules beyond the types (limits are positive exact integers, the backend limit is at least edit.max_source_images, the prompt ids exist, the writer template has one {{data}}, schema_id is planner_reply.v1) live in config.py and fail with the key named.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "status", "purpose", "knowledge", "sync", "embedding", "observe", "cards", "aliases", "index",
+    "rag", "candidates", "planner", "resolution", "clarification", "assembly", "edit", "creativity", "writer",
+    "validation", "vision", "request_overrides", "profiles", "vlm", "runtime", "storage", "serving", "evaluation"
+  ],
+  "properties": {
+    "schema_version": {"const": 3},
+    "status": {"$ref": "enhancer_config.v1#/properties/status"},
+    "purpose": {"$ref": "enhancer_config.v1#/properties/purpose"},
+    "knowledge": {"$ref": "enhancer_config.v1#/properties/knowledge"},
+    "sync": {"$ref": "enhancer_config.v1#/properties/sync"},
+    "embedding": {"$ref": "enhancer_config.v1#/properties/embedding"},
+    "observe": {"$ref": "enhancer_config.v1#/properties/observe"},
+    "cards": {"$ref": "enhancer_config.v1#/properties/cards"},
+    "aliases": {"$ref": "enhancer_config.v1#/properties/aliases"},
+    "index": {"$ref": "enhancer_config.v1#/properties/index"},
+    "rag": {"$ref": "enhancer_config.v1#/properties/rag"},
+    "candidates": {"$ref": "enhancer_config.v1#/properties/candidates"},
+    "planner": {"$ref": "enhancer_config.v1#/properties/planner"},
+    "resolution": {"$ref": "enhancer_config.v1#/properties/resolution"},
+    "clarification": {"$ref": "enhancer_config.v1#/properties/clarification"},
+    "assembly": {"$ref": "enhancer_config.v1#/properties/assembly"},
+    "edit": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["attach_kb_reference_images", "max_kb_reference_images", "max_source_images", "source_entity_linking", "default_preservation"],
+          "properties": {
+            "attach_kb_reference_images": {"anyOf": [{"type": "boolean"}, {"$ref": "#/$defs/sentinel"}]},
+            "max_kb_reference_images": {"anyOf": [{"type": "integer", "minimum": 0}, {"$ref": "#/$defs/sentinel"}]},
+            "max_source_images": {
+              "description": "The enhancer's own cap on source images per edit request (latency: the planner and the writer each carry every image). A positive integer; a request over it is refused, never truncated. deploy_required in the base example.",
+              "anyOf": [{"type": "integer", "minimum": 1}, {"$ref": "#/$defs/sentinel"}]
+            },
+            "source_entity_linking": {"anyOf": [{"type": "boolean"}, {"$ref": "#/$defs/sentinel"}]},
+            "default_preservation": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["local_edit", "global_transform", "subject_recompose"],
+                  "properties": {
+                    "local_edit": {"anyOf": [{"type": "string"}, {"$ref": "#/$defs/sentinel"}]},
+                    "global_transform": {"anyOf": [{"type": "string"}, {"$ref": "#/$defs/sentinel"}]},
+                    "subject_recompose": {"anyOf": [{"type": "string"}, {"$ref": "#/$defs/sentinel"}]}
+                  }
+                },
+                {"$ref": "#/$defs/sentinel"}
+              ]
+            }
+          }
+        },
+        {"$ref": "#/$defs/sentinel"}
+      ]
+    },
+    "creativity": {"$ref": "enhancer_config.v1#/properties/creativity"},
+    "writer": {"$ref": "enhancer_config.v1#/properties/writer"},
+    "validation": {"$ref": "enhancer_config.v1#/properties/validation"},
+    "vision": {"$ref": "enhancer_config.v1#/properties/vision"},
+    "request_overrides": {"$ref": "enhancer_config.v1#/properties/request_overrides"},
+    "profiles": {"$ref": "enhancer_config.v1#/properties/profiles"},
+    "vlm": {"$ref": "enhancer_config.v1#/properties/vlm"},
+    "runtime": {"$ref": "enhancer_config.v1#/properties/runtime"},
+    "storage": {"$ref": "enhancer_config.v1#/properties/storage"},
+    "serving": {"$ref": "enhancer_config.v1#/properties/serving"},
+    "evaluation": {"$ref": "enhancer_config.v1#/properties/evaluation"}
+  },
+  "$defs": {
+    "sentinel": {
+      "enum": ["fit_from_gt", "fit_from_bench", "fit_from_pilot", "pin_required", "deploy_required", "design_required", "ask_user"]
+    },
+    "backend_image_limit": {
+      "$comment": "Added to every vlm.backends.<b>.image: how many images one call to this backend may carry. It must equal what the server accepts (llama-server and vLLM name their own flag); deploy_required in the base example. The planner's and the writer's backend must not be below edit.max_source_images.",
+      "anyOf": [{"type": "integer", "minimum": 1}, {"$ref": "#/$defs/sentinel"}]
+    },
+    "planner_multi_source": {
+      "$comment": "Added to vlm.roles.planner: the prompt and the reply schema S2 uses when a request has two or more source images (planner_v2, planner_reply.v1). One-image requests keep prompt_id and output of the role.",
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["prompt_id", "schema_id"],
+          "properties": {
+            "prompt_id": {"anyOf": [{"type": "string", "minLength": 1}, {"$ref": "#/$defs/sentinel"}]},
+            "schema_id": {"anyOf": [{"type": "string", "minLength": 1}, {"$ref": "#/$defs/sentinel"}]}
+          }
+        },
+        {"$ref": "#/$defs/sentinel"}
+      ]
+    },
+    "writer_multi_source": {
+      "$comment": "Added to vlm.roles.writer: the Enhancement Brief template for two or more source images (brief_v1). The writer's output schema stays from_profile_manifest.",
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["prompt_id"],
+          "properties": {
+            "prompt_id": {"anyOf": [{"type": "string", "minLength": 1}, {"$ref": "#/$defs/sentinel"}]}
+          }
+        },
+        {"$ref": "#/$defs/sentinel"}
+      ]
+    }
+  }
+}

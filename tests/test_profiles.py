@@ -206,6 +206,8 @@ def test_register_refuses_existing_manifest(tmp_path, project_root):
 def test_example_profile_registers_with_known_conflicts(tmp_path, project_root):
     data = config_data(tmp_path)
     data['profiles']['exclude'] = []
+    # the example manifest is a version-2 manifest (MS-2, Q5), so the drafter that returns it uses profile_manifest.v1
+    data['vlm']['roles']['manifest_drafter']['output']['schema_id'] = 'profile_manifest.v1'
     folder = bundle(tmp_path, '_example', (EXAMPLE / 'system_prompt.txt').read_bytes())
     config = load(tmp_path, project_root, data, 'profile register')
     run(register_profile(config, '_example', DrafterDouble(example_draft()), project_root=project_root))

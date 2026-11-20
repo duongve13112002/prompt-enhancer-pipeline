@@ -228,7 +228,9 @@ def cloud_planner_profile(env, *, main_attempts, cloud_attempts, seed=BASE_SEED,
     cloud.update({'allow_images': False, **cloud_changes})
     cloud['probe']['image_attempts'] = cloud_attempts
     env.config['vlm']['backends']['cloud'] = cloud
+    multi_source = env.config['vlm']['roles']['planner']['multi_source']  # the replaced role keeps its required MS-2 block
     planner = env.config['vlm']['roles']['planner'] = deepcopy(env.config['vlm']['roles']['observer'])  # a resolved role
+    planner['multi_source'] = multi_source
     planner['backend'] = 'cloud'
     planner['output'] = {**planner['output'], 'format': 'none', 'schema_id': 'none', 'strict': False,
                          'validate_response': False}

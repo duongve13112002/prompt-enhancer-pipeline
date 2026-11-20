@@ -12,6 +12,7 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator, ValidationError
 import pytest
+import yaml
 
 from prompt_enhancer.model_schemas import SchemaRegistry
 
@@ -160,17 +161,41 @@ def test_plan_result_v1_stays_the_t017_fix_file_and_v2_is_the_multi_source_one(r
         assert v2['properties'][key] == v1['properties'][key]
 
 
+MULTI_SOURCE_KEYS = {'planner_v2': 'vlm.roles.planner.multi_source.prompt_id',
+                     'brief_v1': 'vlm.roles.writer.multi_source.prompt_id'}  # the only keys that may name a draft prompt
+
+
+def selections(node, prompt_id, trail=''):
+    """The dotted key paths in a parsed configuration whose string value equals `prompt_id`."""
+    if isinstance(node, dict):
+        return {hit for key, value in node.items() for hit in selections(value, prompt_id, f'{trail}.{key}'.lstrip('.'))}
+    if isinstance(node, list):
+        return {hit for item in node for hit in selections(item, prompt_id, trail)}
+    return {trail} if node == prompt_id else set()
+
+
 @pytest.mark.parametrize('prompt_id', DRAFT_PROMPTS)
 def test_draft_prompts_exist_and_no_code_or_configuration_selects_them(prompt_id):
     text = (ROOT / 'prompts' / f'{prompt_id}.txt').read_text(encoding='utf-8')
     assert text.strip()
     for directory in ('src', 'configs'):
         for path in (ROOT / directory).rglob('*'):
-            if path.is_file() and path.suffix in ('.py', '.yaml', '.yml', '.json', '.txt'):
-                assert prompt_id not in path.read_text(encoding='utf-8', errors='replace'), f'{path} selects {prompt_id}'
+            if not path.is_file() or path.suffix not in ('.py', '.yaml', '.yml', '.json', '.txt'):
+                continue
+            if directory == 'configs' and path.suffix in ('.yaml', '.yml'):
+                # MS-2 (decision 179): a configuration names the two draft prompts only as the value of the matching
+                # role's `multi_source.prompt_id`; no other key selects them, and no source file does.
+                assert selections(yaml.safe_load(path.read_bytes()), prompt_id) <= {MULTI_SOURCE_KEYS.get(prompt_id)}, path
+                continue
+            assert prompt_id not in path.read_text(encoding='utf-8', errors='replace'), f'{path} selects {prompt_id}'
     readme = (ROOT / 'prompts' / 'README.md').read_text(encoding='utf-8')
     entry = readme.split(f'## `{prompt_id}`', 1)[1].split('\n## ', 1)[0]
-    assert 'status: draft, not selected' in entry
+    heading = entry.split('\n', 1)[0]
+    if prompt_id in MULTI_SOURCE_KEYS:  # F4: the examples name it under multi_source.prompt_id; no request path uses it yet
+        assert 'status: draft, named by `multi_source.prompt_id`' in heading and 'no request path uses it yet' in heading
+        assert 'not selected' not in heading
+    else:
+        assert 'status: draft, not selected' in heading
 
 
 @pytest.mark.parametrize('prompt_id', ('planner_v2', 'brief_v1'))

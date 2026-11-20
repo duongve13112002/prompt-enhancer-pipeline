@@ -43,7 +43,8 @@ def config_data(tmp_path):
     backend['http'] = dict(connect_timeout_s=1, read_timeout_s=1, write_timeout_s=1, pool_timeout_s=1,
                            max_retries=0, backoff_initial_s=0, backoff_max_s=0, retry_statuses=[])
     backend['probe'] = dict(max_requests=1, timeout_s=1, image_attempts=1)
-    backend['image'] = dict(max_decode_pixels=1000, max_side='none')
+    backend['image'] = dict(max_decode_pixels=1000, max_side='none', max_images_per_call=1)
+    config['edit']['max_source_images'] = 1  # test-only (decision 179)
     backend['addendum_layout'] = 'separate_system_message'  # test-only layout (T017-FIX)
     backend.pop('addendum_separator', None)
     config['profiles'].update(root=str(tmp_path / 'profiles'), exclude=['_example'], default_profile_id='p1')

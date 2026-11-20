@@ -35,7 +35,8 @@ from jsonschema import Draft202012Validator, exceptions as schema_exceptions
 import yaml
 
 from .config import (_AMBIGUOUS_BREAKS, ConfigurationError, _MetaLoader, _StrictSafeLoader, _filename, _inside,
-                     _load_yaml, _parse_manifest, _schema, _schema_path, _sentinel, load_profile)
+                     _load_yaml, _parse_manifest, _schema, _schema_path, _sentinel, load_profile, manifest_schema_id,
+                     validate_renderer)
 from .model_client import ModelCallError, safe_model_code
 from .model_json import check_json_depth, strict_json
 from .profile_lint import (ADDENDUM_ID, DECISIONS, conflict_findings, input_variable, key_findings, render_addendum,
@@ -60,7 +61,8 @@ CHECK_LOCK_FILE = 'check.lock'
 # Artifact-bound (T017-FIX3, decision 194): the admin's JSON Schema for the writer reply, beside `system_prompt.txt`;
 # its `$id` is the manifest's `output_schema_id`.
 OUTPUT_SCHEMA_FILE = 'output_schema.json'
-MANIFEST_SCHEMA = 'profile_manifest.v0'  # protocol-bound: the drafter's output contract
+MANIFEST_SCHEMA = 'profile_manifest.v0'  # protocol-bound: the drafter's output contract (manifest schema_version 1)
+MANIFEST_SCHEMA_V1 = 'profile_manifest.v1'  # protocol-bound: the same with the multi-source renderer (schema_version 2)
 GOLDEN_SCHEMA = 'golden_case.v1'  # T017-FIX3 (decisions 197, 199); a golden_case.v0 file is refused
 GOLDEN_RETIRED_VERSION = 1  # artifact-bound: golden_case.v0's schema_version
 ENVELOPE_SCHEMA = 'response_envelope.v1'
@@ -69,7 +71,15 @@ GOLDEN_STATUS_UNEXPECTED = 'GOLDEN_STATUS_UNEXPECTED'
 GOLDEN_GROUNDING_DEGRADED = 'GOLDEN_GROUNDING_DEGRADED'
 GOLDEN_NOT_GROUNDED = 'GOLDEN_NOT_GROUNDED'
 GOLDEN_RETRIEVAL_NOT_DISABLED = 'GOLDEN_RETRIEVAL_NOT_DISABLED'
-CHECK_SCHEMAS = (MANIFEST_SCHEMA, GOLDEN_SCHEMA, ENVELOPE_SCHEMA, VALIDATOR_SCHEMA)
+CHECK_SCHEMAS = (MANIFEST_SCHEMA, GOLDEN_SCHEMA, ENVELOPE_SCHEMA, VALIDATOR_SCHEMA)  # the schemas a version-1 manifest binds
+CHECK_SCHEMAS_V1 = (MANIFEST_SCHEMA_V1, GOLDEN_SCHEMA, ENVELOPE_SCHEMA, VALIDATOR_SCHEMA)  # and a version-2 manifest binds
+ALL_CHECK_SCHEMAS = (MANIFEST_SCHEMA, MANIFEST_SCHEMA_V1, GOLDEN_SCHEMA, ENVELOPE_SCHEMA, VALIDATOR_SCHEMA)
+
+
+def check_schemas(manifest):
+    """The schema ids an activation binds for this manifest: its own version's manifest schema plus the shared ones, so
+    a profile checked with a version-1 manifest keeps the record it already has (the bound set is unchanged)."""
+    return CHECK_SCHEMAS_V1 if manifest['schema_version'] == 2 else CHECK_SCHEMAS
 # Protocol-bound: the distributions whose behaviour the verdict depends on (YAML reading, schema validation).
 CHECK_LIBRARIES = ('PyYAML', 'jsonschema')
 HASH_PLACEHOLDER = 'computed_at_registration'  # contracts/README.md: retained for registration
@@ -131,7 +141,7 @@ def _schema_bytes(root, schema_id):
 def _schema_snapshot(root):
     """Read each check schema once: the hash the record binds and the value the check validates with (RT4)."""
     snapshot = {}
-    for schema_id in CHECK_SCHEMAS:
+    for schema_id in ALL_CHECK_SCHEMAS:
         path, raw = _schema_bytes(root, schema_id)
         try:
             value = json.loads(raw)
@@ -142,8 +152,8 @@ def _schema_snapshot(root):
     return snapshot
 
 
-def _schema_hashes(root):
-    return {schema_id: sha256_tag(_schema_bytes(root, schema_id)[1]) for schema_id in CHECK_SCHEMAS}
+def _schema_hashes(root, schema_ids):
+    return {schema_id: sha256_tag(_schema_bytes(root, schema_id)[1]) for schema_id in schema_ids}
 
 
 def _ast_digest(source):
@@ -290,8 +300,10 @@ async def register_profile(config, profile_id, drafter, *, project_root):
     role = config['vlm']['roles']['manifest_drafter']
     _sentinel(role, 'config', 'vlm.roles.manifest_drafter', {})
     _sentinel(config['creativity'], 'config', 'creativity', {})
-    if role['output']['schema_id'] != MANIFEST_SCHEMA:
-        raise ConfigurationError(f'vlm.roles.manifest_drafter.output.schema_id: expected {MANIFEST_SCHEMA}')
+    manifest_schema = role['output']['schema_id']
+    if manifest_schema not in (MANIFEST_SCHEMA, MANIFEST_SCHEMA_V1):
+        raise ConfigurationError(f'vlm.roles.manifest_drafter.output.schema_id: expected {MANIFEST_SCHEMA} or '
+                                 f'{MANIFEST_SCHEMA_V1}')
     bundle = _bundle(config, profile_id, root)
     lock = _bundle_lock(config, bundle, root, 'profile register')  # refused here, before the paid call
     if (bundle / MANIFEST_FILE).exists():
@@ -301,7 +313,7 @@ async def register_profile(config, profile_id, drafter, *, project_root):
     meta = parse_meta(prompt, structure)
     variables = placeholders(structure.body(prompt, 'USER')) if structure.template_format == 'sectioned' else []
     drafter_prompt = load_prompt(root, role['prompt_id'])
-    code_owned = {'schema_version': 1, 'profile_id': profile_id, 'status': 'draft',
+    code_owned = {'schema_version': 2 if manifest_schema == MANIFEST_SCHEMA_V1 else 1, 'profile_id': profile_id, 'status': 'draft',
                   'system_prompt_hash': sha256_tag(prompt), 'template_format': structure.template_format,
                   'template_variables': variables, 'golden_tests': []}
     if meta is not None:
@@ -319,7 +331,7 @@ async def register_profile(config, profile_id, drafter, *, project_root):
     if record.get('status') != 'OK':
         raise ProfileError('PROFILE_DRAFT_FAILED', str(record.get('status')), model_code=record.get('status'),
                            record=record)
-    schema = _schema(root, MANIFEST_SCHEMA)
+    schema = _schema(root, manifest_schema)
     errors = _errors(schema, value) if isinstance(value, dict) else ['root: expected an object']
     if errors:
         raise ProfileError('PROFILE_DRAFT_INVALID', errors[0], errors=errors, record=record)
@@ -518,6 +530,37 @@ class AttachmentRendererMismatch(ConfigurationError):
         super().__init__(self.MESSAGE)
 
 
+class SourceLimitManifestMismatch(AttachmentRendererMismatch):
+    """Decision 179: the configuration allows several source images but the manifest is a version-1 manifest.
+
+    A subclass of `AttachmentRendererMismatch` with fixed text (the numbers are not in it), so intake passes it through its
+    redacting boundary and every command shows the same message."""
+
+    MESSAGE = ('edit.max_source_images is 2 or more but the profile manifest is schema_version 1 (profile_manifest.v0), '
+               'which states no source image limit and no image syntax: run profile register with the version-2 '
+               'manifest drafter (profile_manifest.v1) to draft a schema_version 2 manifest, or set '
+               'edit.max_source_images to 1')
+
+    def __init__(self):
+        ConfigurationError.__init__(self, self.MESSAGE)  # the parent's initializer takes no argument and sets its own text
+
+
+def _require_source_pairing(manifest, config):
+    """An edit-capable version-1 manifest means one source image; a configured cap of 2 or more is refused (decision 179).
+    A version-1 manifest that supports only generate still loads (no source image exists for it). For a version-2
+    manifest the reference syntax is re-checked against `edit.max_kb_reference_images`, because the manifest does not
+    cap the knowledge references. Attachments with a version-1 manifest stay as they are (MS-5 owns that)."""
+    limit = config['edit'].get('max_source_images')  # absent only in a hand-built configuration; load refuses version 2
+    if manifest['schema_version'] == 1:
+        if type(limit) is int and limit >= 2 and 'edit' in manifest['supported_tasks']:
+            raise SourceLimitManifestMismatch()
+        return
+    references = config['edit']['max_kb_reference_images']
+    attaches = config['edit']['attach_kb_reference_images'] is True and 'edit' in manifest['supported_tasks']
+    if attaches and type(references) is int and references > manifest['renderer']['max_source_images']:
+        validate_renderer(manifest['renderer'], 'manifest.yaml', reference_count=references)
+
+
 def _require_attachable_renderer(manifest, config):
     """Decision 177: attaching KB images needs a renderer that takes reference images; a mismatch is refused, not degraded.
 
@@ -531,6 +574,7 @@ def _require_attachable_renderer(manifest, config):
 
 def _view(profile_id, manifest, manifest_raw, prompt, config, root, activation):
     _require_attachable_renderer(manifest, config)
+    _require_source_pairing(manifest, config)
     structure = _structure(prompt)
     fmt = manifest['template_format']
     template = user_template(prompt, fmt, structure)
@@ -826,7 +870,7 @@ async def _check_locked(config, profile_id, runner, bundle, root):
                   'config_keys_sha256': _config_fingerprint(manifest, config),
                   'golden_inputs_sha256': golden_inputs_sha256,  # the bytes the runner was given
                   'golden_results_sha256': sha256_tag(report_bytes),
-                  'schemas_sha256': {schema_id: sha for schema_id, (sha, _) in schemas.items()},
+                  'schemas_sha256': {schema_id: schemas[schema_id][0] for schema_id in check_schemas(manifest)},
                   'check_code_sha256': CHECK_CODE_SHA256, 'runner': str(runner.identity),
                   'writer_brief': writer_binding,
                   'checked_at': datetime.now(timezone.utc).isoformat()}
@@ -842,7 +886,7 @@ async def _check_locked(config, profile_id, runner, bundle, root):
             or current_validator_hashes != view.validator_hashes \
             or current_output_schema != view.output_schema \
             or _golden_fingerprint(current_inputs) != golden_inputs_sha256 \
-            or _schema_hashes(root) != activation['schemas_sha256'] \
+            or _schema_hashes(root, check_schemas(manifest)) != activation['schemas_sha256'] \
             or _writer_binding(_writer_brief(config, root, 'PROFILE_CHANGED')) != writer_binding \
             or (current_addendum and current_addendum['sha256']) != (addendum and addendum['sha256']):
         raise ProfileError('PROFILE_CHANGED', 'the profile or an input of its check changed during the check; '
@@ -875,8 +919,8 @@ def resolve_profile(config, profile_id=None, *, project_root):
     if activation.get('check_code_sha256') != CHECK_CODE_SHA256:
         raise ProfileError('PROFILE_NOT_CHECKED', 'the check code or its libraries differ from the checked ones; '
                            'run profile check')
-    if activation.get('schemas_sha256') != _schema_hashes(root):
-        raise ProfileError('PROFILE_NOT_CHECKED', f'a schema of the check ({", ".join(CHECK_SCHEMAS)}) differs from '
+    if activation.get('schemas_sha256') != _schema_hashes(root, check_schemas(manifest)):
+        raise ProfileError('PROFILE_NOT_CHECKED', f'a schema of the check ({", ".join(check_schemas(manifest))}) differs from '
                            'the checked one; run profile check')
     _require_keys(manifest, config, bundle / MANIFEST_FILE)
     if activation.get('config_keys_sha256') != _config_fingerprint(manifest, config):

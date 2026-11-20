@@ -44,6 +44,9 @@ LOCAL_ENGINES = ('vllm', 'llama_cpp', 'embed_server')
 MODEL_VISION_READS = tuple('vision.' + field for field in
                            ('max_image_side', 'alpha_policy', 'format', 'quality', 'transport'))
 REQUEST_COMMANDS = ('enhance once', 'enhance serve', 'eval run')  # protocol-bound command names
+CONFIG_VERSIONS = (1, 2, 3)  # artifact-bound: the schema_version values of enhancer_config.v0, .v1 and .v2
+SOURCE_LIMITS_VERSION = 3  # artifact-bound: the first version that carries the multi-source keys (decision 179)
+MANIFEST_VERSIONS = (1, 2)  # artifact-bound: manifest schema_version of profile_manifest.v0 and .v1
 
 # Only documented reads are listed; later stage tasks complete their read sets.
 COMMAND_READS = {
@@ -728,8 +731,8 @@ def _load_chain(path, root, stack, sources):
     if path in stack:
         raise ConfigurationError(f'{path}: extends: cycle')
     data = _read_yaml(path)
-    if type(data.get('schema_version')) is not int or data['schema_version'] not in (1, 2):
-        raise ConfigurationError(f'{path}: schema_version: expected 1 or 2')
+    if type(data.get('schema_version')) is not int or data['schema_version'] not in CONFIG_VERSIONS:
+        raise ConfigurationError(f'{path}: schema_version: expected one of {list(CONFIG_VERSIONS)}')
     if 'extends' in data and 'overlay_of' in data:
         raise ConfigurationError(f'{path}: extends: cannot combine with overlay_of')
     if 'overlay_of' in data:
@@ -745,9 +748,10 @@ def _load_chain(path, root, stack, sources):
             base = _load_chain(path.parent / ref, root, (*stack, path), sources)
         except ConfigurationError as error:
             raise ConfigurationError(f'{path}: {ref_key}: {error}') from error
-        if base['schema_version'] == 2 and own['schema_version'] == 1:
-            # A legacy partial overlay inherits the base's explicit new contract; no values are injected.
-            own['schema_version'] = 2
+        if base['schema_version'] >= 2 and own['schema_version'] < base['schema_version']:
+            # A legacy partial child inherits the base's explicit new contract (a version-1 or 2 child of a version-3
+            # base becomes 3); no values are injected.
+            own['schema_version'] = base['schema_version']
         data = _merge(base, own)
         _mark_sources(own, path, sources)
     else:
@@ -1317,7 +1321,7 @@ def validate_embedder_reads(config, path, sources, project_root=None):
         value = _get(config, key, path)
         _sentinel(None if key in partial and isinstance(value, dict) else value, path, key, sources)
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
-    schema = _schema(root, 'enhancer_config.v0')
+    schema = _reads_schema(root, config)
     for key in keys:
         value = _get(config, key, path)
         node = _schema_at(schema, key)
@@ -1419,7 +1423,7 @@ def validate_embed_server_reads(config, path, sources, project_root=None):
     for key in keys:
         _sentinel(_get(config, key, path), path, key, sources)
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
-    schema = _schema(root, 'enhancer_config.v0')
+    schema = _reads_schema(root, config)
     for key in keys:
         value = _get(config, key, path)
         _validate(value, _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
@@ -1496,7 +1500,7 @@ def validate_reference_check_reads(config, path, sources, project_root=None):
     validate_embed_server_reads(config, path, sources, project_root)
     name = config['embedding']['backend']
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
-    schema = _schema(root, 'enhancer_config.v0')
+    schema = _reads_schema(root, config)
     for field in REFERENCE_CHECK_READS:
         key = f'vlm.backends.{name}.{field}'
         value = _get(config, key, path)
@@ -1516,7 +1520,7 @@ def validate_naming_reads(config, path='configuration', sources=None, project_ro
     """The same strict K2 preflight at load and standalone entry, before source reads or model calls."""
     sources = sources or {}
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
-    schema = _schema(root, 'enhancer_config.v0')
+    schema = _reads_schema(root, config)
 
     def checked(key, node=None):
         value = _get(config, key, path)
@@ -1598,7 +1602,7 @@ def validate_observation_reads(config, path='configuration', sources=None, proje
     """Validate the standalone/command observer read set before reads, checkpoints or model activity."""
     sources = sources or {}
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
-    schema = _schema(root, 'enhancer_config.v0')
+    schema = _reads_schema(root, config)
 
     def checked(key, node=None):
         value = _get(config, key, path)
@@ -1679,7 +1683,7 @@ def validate_card_reads(config, path='configuration', sources=None, project_root
     """Validate K3's complete read set before opening a writer or composing a model client."""
     sources = sources or {}
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
-    schema = _schema(root, 'enhancer_config.v0')
+    schema = _reads_schema(root, config)
 
     def checked(key, node=None):
         value = _get(config, key, path)
@@ -1755,7 +1759,7 @@ def validate_alias_reads(config, path='configuration', sources=None, project_roo
     """Validate K4's complete read set before constructing a writer or model client."""
     sources = sources or {}
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
-    schema = _schema(root, 'enhancer_config.v0')
+    schema = _reads_schema(root, config)
 
     def checked(key, node=None):
         value = _get(config, key, path)
@@ -1907,8 +1911,8 @@ def load_config(path, command, *, overlay=None, project_root=None):
     if overlay is not None:
         overlay_path = _inside(overlay, root)
         data = _read_yaml(overlay_path)
-        if type(data.get('schema_version')) is not int or data['schema_version'] not in (1, 2):
-            raise ConfigurationError(f'{overlay_path}: schema_version: expected 1 or 2')
+        if type(data.get('schema_version')) is not int or data['schema_version'] not in CONFIG_VERSIONS:
+            raise ConfigurationError(f'{overlay_path}: schema_version: expected one of {list(CONFIG_VERSIONS)}')
         _overlay(data, overlay_path)
         ref = data.get('overlay_of')
         if not isinstance(ref, str) or not ref:
@@ -1923,8 +1927,8 @@ def load_config(path, command, *, overlay=None, project_root=None):
                 raise
             raise ConfigurationError(f'{overlay_path}: overlay_of: {error}') from error
         own = {k: v for k, v in data.items() if k != 'overlay_of'}
-        if config['schema_version'] == 2 and own['schema_version'] == 1:
-            own['schema_version'] = 2
+        if config['schema_version'] >= 2 and own['schema_version'] < config['schema_version']:
+            own['schema_version'] = config['schema_version']
         config = _merge(config, own)
         _mark_sources(own, overlay_path, sources)
     return _validate_loaded_config(config, command, root, path, sources)
@@ -1942,6 +1946,14 @@ def validate_sync_config(config, *, project_root):
     return validated
 
 
+def _is_source_limit_key(key):
+    """A dotted path naming `edit.max_source_images`, a backend's `image.max_images_per_call` or a `renderer` limit."""
+    parts = key.split('.')
+    return (parts == ['edit', 'max_source_images']
+            or (len(parts) == 5 and parts[:2] == ['vlm', 'backends'] and parts[3:] == ['image', 'max_images_per_call'])
+            or (len(parts) == 2 and parts[0] == 'renderer' and parts[1] == 'max_source_images'))
+
+
 def _validate_override_policy(config, schema, path):
     allowed = _get(config, 'request_overrides.allowed_keys', path)
     _validate(allowed, _schema_at(schema, 'request_overrides.allowed_keys'), path,
@@ -1949,6 +1961,9 @@ def _validate_override_policy(config, schema, path):
     for key in allowed:
         if key.split('.')[0] == 'request_overrides':
             raise ConfigurationError(f'{path}: request_overrides.allowed_keys: policy is not overridable')
+        if _is_source_limit_key(key):
+            raise ConfigurationError(f'{path}: request_overrides.allowed_keys: {key}: a request cannot raise a source '
+                                     'image limit (decision 179); remove it from the policy')
         try:
             _schema_at(schema, key)
             value = _get(config, key, path)
@@ -1970,7 +1985,7 @@ def validate_candidates_reads(config, path='configuration', sources=None, projec
     """S1's direct-entry and request-startup gate; query-only values never enter K1's offline reads."""
     sources = {} if sources is None else sources
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
-    schema = _schema(root, 'enhancer_config.v0')
+    schema = _reads_schema(root, config)
     for key in CANDIDATE_READS:
         value = _get(config, key, path)
         _sentinel(value, path, key, sources)
@@ -1992,6 +2007,21 @@ def validate_candidates_reads(config, path='configuration', sources=None, projec
 PLANNER_READS = ('planner.second_chance_rounds', 'planner.catalogue_in_context', 'resolution.on_family_match',
                  'resolution.random_seed', 'resolution.trace_choice', 'clarification.mode', 'creativity',
                  'edit.default_preservation', 'edit.source_entity_linking', 'vlm.roles.planner')
+def _reads_schema(root, config):
+    """The schema a stage's read check validates leaves with: the version-3 composition when the file is version 3 (its
+    backend `image` and role objects gained keys), else `enhancer_config.v0` exactly as before."""
+    if config.get('schema_version') == SOURCE_LIMITS_VERSION:
+        return _configuration_schema(root, config)
+    return _schema(root, 'enhancer_config.v0')
+
+
+def _role_core(role):
+    """The role without the version-3 `multi_source` block, which `vlm_role.v0` (byte-identical) does not know."""
+    if isinstance(role, dict) and 'multi_source' in role:
+        return {key: value for key, value in role.items() if key != 'multi_source'}
+    return role
+
+
 PLANNER_REPLY_SCHEMA = 'planner_reply.v0'  # artifact-bound: S2 builds intent_ir.v0 from this reply shape only
 PLANNER_IMAGE_SOURCE = 'edit_source_only'  # protocol-bound: the only image S2 can send is the request's source image
 
@@ -2000,7 +2030,7 @@ def validate_planner_reads(config, path='configuration', sources=None, project_r
     """S2's request-startup and direct-entry gate (T-014); retrieval on or off, the planner always runs."""
     sources = {} if sources is None else sources
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
-    schema = _schema(root, 'enhancer_config.v0')
+    schema = _reads_schema(root, config)
 
     def refuse(key, message):
         raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {message}')
@@ -2011,7 +2041,7 @@ def validate_planner_reads(config, path='configuration', sources=None, project_r
         _validate(value, _schema_at(schema, key), path, key, sources, _EXACT_INTEGERS)
         _require_finite(value, path, key, sources)
     role = config['vlm']['roles']['planner']
-    _validate(role, _schema(root, 'vlm_role.v0'), path, 'vlm.roles.planner', sources)
+    _validate(_role_core(role), _schema(root, 'vlm_role.v0'), path, 'vlm.roles.planner', sources)
     # Decision 144: the cap of every backend a planner call may reach, as an exact integer or none.
     for name in sorted({role['backend'], _get(config, 'vlm.default_backend', path)}):
         key = f'vlm.backends.{name}.image.max_side'
@@ -2037,6 +2067,53 @@ def validate_planner_reads(config, path='configuration', sources=None, project_r
     return config['planner']
 
 
+PLANNER_MULTI_SOURCE_SCHEMA = 'planner_reply.v1'  # artifact-bound: the reply shape S2 builds intent_ir.v1 from (MS-4)
+
+
+def validate_source_limits(config, path='configuration', sources=None, project_root=None, *, prompts=True):
+    """Decision 179: the three required limits and the two multi-source prompt bindings, each refused by key.
+
+    Runs after the planner and writer reads (roles and backends are validated by then). The backend of the planner and
+    of the writer must carry at least `edit.max_source_images` images per call, because a request over any limit is
+    refused and never truncated. Nothing here reads the knowledge base, and no value is defaulted."""
+    from .profile_prompt import ProfileError, load_prompt, placeholders
+
+    sources = {} if sources is None else sources
+    root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    _require_source_limits_version(config, path)
+
+    def refuse(key, message):
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {message}')
+
+    cap = check_limit(_get(config, 'edit.max_source_images', path), path, 'edit.max_source_images', sources)
+    for role_name in ('planner', 'writer'):
+        role = config['vlm']['roles'][role_name]
+        key = f"vlm.backends.{role['backend']}.image.max_images_per_call"
+        limit = check_limit(_get(config, key, path), path, key, sources)
+        if limit < cap:
+            refuse(key, f'{limit} is below edit.max_source_images ({cap}); a call of the {role_name} role could not carry '
+                        'every source image')
+        multi = _get(config, f'vlm.roles.{role_name}.multi_source', path)
+        _sentinel(multi, path, f'vlm.roles.{role_name}.multi_source', sources)
+        key = f'vlm.roles.{role_name}.multi_source.prompt_id'
+        if role_name == 'planner' and multi['schema_id'] != PLANNER_MULTI_SOURCE_SCHEMA:
+            refuse('vlm.roles.planner.multi_source.schema_id', f'expected {PLANNER_MULTI_SOURCE_SCHEMA}')
+        if not prompts:
+            continue  # a per-request re-validation reads no prompt file unless an override names a multi_source key
+        try:
+            template = load_prompt(root, multi['prompt_id'])
+        except ConfigurationError:
+            refuse(key, 'unknown prompt id: no readable prompts/<id>.txt')
+        if role_name == 'writer':
+            try:
+                names = placeholders(template)
+            except ProfileError:
+                names = None
+            if names != ['data'] or template.count(b'{{data}}') != 1:  # placeholders() lists each name once
+                refuse(key, 'the brief template requires exactly one {{data}} variable and no other')
+    return cap
+
+
 WRITER_READS = ('writer', 'creativity', 'rag.enabled', 'vlm.roles.writer', 'vlm.default_backend')
 
 
@@ -2044,7 +2121,7 @@ def validate_writer_reads(config, path='configuration', sources=None, project_ro
     """S4's startup/direct-entry gate; no inferred policy or unresolved role setting."""
     sources = {} if sources is None else sources
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
-    schema = _schema(root, 'enhancer_config.v0')
+    schema = _reads_schema(root, config)
     for key in WRITER_READS:
         value = _get(config, key, path)
         _sentinel(value, path, key, sources)
@@ -2054,7 +2131,7 @@ def validate_writer_reads(config, path='configuration', sources=None, project_ro
         if _get(config, key, path) != expected:
             raise ConfigurationError(f'{path}: {key}: expected {expected}')
     role = config['vlm']['roles']['writer']
-    _validate(role, _schema(root, 'vlm_role.v0'), path, 'vlm.roles.writer', sources)
+    _validate(_role_core(role), _schema(root, 'vlm_role.v0'), path, 'vlm.roles.writer', sources)
     if role['output']['validate_response'] is not True:
         raise ConfigurationError(f'{path}: vlm.roles.writer.output.validate_response: expected true')
     if role['output']['transport'] != 'response_format':
@@ -2106,13 +2183,57 @@ VERIFIER_INLINE = frozenset(('edit', 'identity_facts'))
 VALIDATION_FALLBACKS = frozenset(('minimal_output_valid_for_contract', 'user_prompt_with_status_degraded', 'failed'))
 
 
+def _inline_defs(node, defs):
+    """Replace each `{"$ref": "#/$defs/<name>"}` of a fragment by a copy of that definition (no other reference form)."""
+    if isinstance(node, dict):
+        if set(node) == {'$ref'}:
+            prefix = '#/$defs/'
+            if not isinstance(node['$ref'], str) or not node['$ref'].startswith(prefix) or node['$ref'][len(prefix):] not in defs:
+                raise ConfigurationError('configuration: invalid local configuration schema reference')
+            return _inline_defs(deepcopy(defs[node['$ref'][len(prefix):]]), defs)
+        return {key: _inline_defs(value, defs) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_inline_defs(value, defs) for value in node]
+    return node
+
+
+def _extend_source_limits(root, schema):
+    """Compose `enhancer_config.v2` (version 3) over the expanded version-2 schema: the schema's own `edit` node, the
+    constant `schema_version`, and the three `vlm` fragments, inserted where `enhancer_config.v0` defines the backend
+    `image` object and the role object. No schema text is copied from v0 or v1 (the pattern of `pipeline_runtime.v0`)."""
+    extension = _schema(root, 'enhancer_config.v2')
+    defs = extension['$defs']
+    for key, node in extension['properties'].items():
+        if key in ('schema_version', 'edit'):
+            schema['properties'][key] = _inline_defs(node, defs)
+        elif node != {'$ref': 'enhancer_config.v1#/properties/' + key} or key not in schema['properties']:
+            raise ConfigurationError('configuration: invalid local configuration schema reference')
+    try:
+        vlm = schema['properties']['vlm']['anyOf'][0]['properties']
+        image = vlm['backends']['anyOf'][0]['additionalProperties']['anyOf'][0]['properties']['image']
+        roles = vlm['roles']['anyOf'][0]
+        alternatives = roles['additionalProperties']['anyOf']
+        image['properties']['max_images_per_call'] = _inline_defs(defs['backend_image_limit'], defs)
+        image['required'] = [*image['required'], 'max_images_per_call']
+        roles['properties'] = {}
+        for name, fragment in (('planner', 'planner_multi_source'), ('writer', 'writer_multi_source')):
+            variants = deepcopy(alternatives)
+            role = variants[0]
+            role['properties']['multi_source'] = _inline_defs(defs[fragment], defs)
+            role['required'] = [*role['required'], 'multi_source']
+            roles['properties'][name] = {'anyOf': variants}
+    except (KeyError, IndexError, TypeError) as error:
+        raise ConfigurationError('configuration: invalid local configuration schema reference') from error
+    return schema
+
+
 def _configuration_schema(root, config):
     """Expand the versioned config's local top-level references; `_schema` caching stays untouched."""
     if not isinstance(config, dict):
         raise ConfigurationError('configuration: expected an object')
     version = config.get('schema_version')
-    if type(version) is not int or version not in (1, 2):
-        raise ConfigurationError('configuration: schema_version: expected 1 or 2')
+    if type(version) is not int or version not in CONFIG_VERSIONS:
+        raise ConfigurationError(f'configuration: schema_version: expected one of {list(CONFIG_VERSIONS)}')
     base = _schema(root, 'enhancer_config.v0')
     if version == 1:
         return base
@@ -2126,7 +2247,7 @@ def _configuration_schema(root, config):
     extension = _schema(root, 'pipeline_runtime.v0')
     runtime['properties'].update(deepcopy(extension['properties']))
     runtime['required'].extend(extension['required'])
-    return schema
+    return _extend_source_limits(root, schema) if version == SOURCE_LIMITS_VERSION else schema
 
 
 PIPELINE_READS = ('runtime.request_deadline_s', 'runtime.trace.retention_s', 'runtime.trace.queue_limit',
@@ -2332,9 +2453,205 @@ def validate_evaluation_settings(config, command, path='configuration', sources=
 
 
 def _require_validation_version(config, path):
-    """Refuse legacy requests before any version-dependent field or schema read."""
-    if not isinstance(config, dict) or type(config.get('schema_version')) is not int or config['schema_version'] != 2:
+    """Refuse legacy requests before any version-dependent field or schema read (versions 2 and 3 carry the policy)."""
+    if not isinstance(config, dict) or type(config.get('schema_version')) is not int or config['schema_version'] not in (2, 3):
         raise ConfigurationError(f'{path}: schema_version: migrate S5 configuration to version 2 with verifier calibration policy')
+
+
+def _require_source_limits_version(config, path):
+    """A request command reads the multi-source keys, so a version-2 file is refused with the keys to add (decision 179);
+    no cap is assumed for it. Commands that read none of the keys keep loading version 2."""
+    if not isinstance(config, dict) or config.get('schema_version') != SOURCE_LIMITS_VERSION:
+        raise ConfigurationError(
+            f'{path}: schema_version: migrate the configuration to version {SOURCE_LIMITS_VERSION} (enhancer_config.v2): add '
+            'edit.max_source_images, vlm.backends.<name>.image.max_images_per_call, vlm.roles.planner.multi_source '
+            '(prompt_id, schema_id) and vlm.roles.writer.multi_source (prompt_id)')
+
+
+def check_limit(value, path, key, sources=None):
+    """A source-image limit: a positive native integer (a bool, float, string, null or sentinel is refused, naming `key`)."""
+    sources = {} if sources is None else sources
+    _sentinel(value, path, key, sources)
+    if type(value) is not int or not 1 <= value <= sys.maxsize:
+        raise ConfigurationError(f'{_source(sources, key, path)}: {key}: expected a positive integer')
+    return value
+
+
+IMAGE_SYNTAX_FIELD = '{n}'  # protocol-bound: the one placeholder of a renderer image syntax (decision 179)
+
+
+def syntax_error(value):
+    """None when `value` is a usable image syntax, else the reason: `none`, or a string with exactly one `{n}` and no
+    other brace (so `{N}`, `{ n }`, `{{n}}` and `{n}{n}` are refused). A structural count, never a word list (R-015)."""
+    if not isinstance(value, str):
+        return 'expected none or a string with exactly one {n}'
+    if value == NONE:
+        return None
+    rest = value.replace(IMAGE_SYNTAX_FIELD, '')
+    if value.count(IMAGE_SYNTAX_FIELD) != 1 or '{' in rest or '}' in rest:
+        return 'expected none or a string with exactly one {n} and no other brace'
+    return None
+
+
+def render_syntax(value, count):
+    """The strings an image syntax gives for the image numbers 1..count (none for `none`)."""
+    if value == NONE:
+        return []
+    return [value.replace(IMAGE_SYNTAX_FIELD, str(number)) for number in range(1, count + 1)]
+
+
+DIGITS = '0123456789'  # protocol-bound: str(n) of a positive int has only these characters and no leading zero
+
+
+def _cells(prefix, suffix, digit_count):
+    """The positions of a rendering with `digit_count` digits: ('l', character) literals and ('d', digit index)."""
+    return ([('l', char) for char in prefix] + [('d', index) for index in range(digit_count)]
+            + [('l', char) for char in suffix])
+
+
+def _step(tight, digit, bound, leading):
+    """One digit against the upper bound digit: None when it exceeds the bound, else whether it still equals the bound's
+    prefix. A leading zero is refused (it never occurs in `str(n)`); the lower bound 10**(d-1) is exactly that rule."""
+    if leading and digit == '0':
+        return None
+    if not tight:
+        return False
+    return None if digit > bound else digit == bound
+
+
+def _can_occur(inner, outer, inner_digits, outer_digits, offset):
+    """Whether some n (inner_digits digits, at most the inner count) and m (outer_digits digits, at most the outer count)
+    make `inner` rendered with n occur in `outer` rendered with m, starting at `offset`.
+
+    Each position of the inner rendering is aligned with one position of the outer rendering: two literals must be equal,
+    a literal over a digit fixes that digit (and must be a decimal digit), two digits are tied. Every digit of n is then
+    fixed or equal to a digit of m, so m alone decides; a small walk over m's digits (most significant first) tracks
+    whether m and n stay within their upper bounds. The cost depends on the digit counts and template lengths only."""
+    (inner_prefix, inner_suffix, inner_count), (outer_prefix, outer_suffix, outer_count) = inner, outer
+    x = _cells(inner_prefix, inner_suffix, inner_digits)
+    y = _cells(outer_prefix, outer_suffix, outer_digits)
+    if offset + len(x) > len(y):
+        return False
+    fixed_m, fixed_n, tied = {}, {}, {}  # digit index -> character; n digit index -> m digit index
+    for position, (kind, value) in enumerate(x):
+        other_kind, other = y[offset + position]
+        if kind == 'l' and other_kind == 'l':
+            if value != other:
+                return False
+        elif kind == 'l':
+            if value not in DIGITS or fixed_m.setdefault(other, value) != value:
+                return False
+        elif other_kind == 'l':
+            if other not in DIGITS:
+                return False
+            fixed_n[value] = other
+        else:
+            tied[value] = other
+    bound_n = str(inner_count) if len(str(inner_count)) == inner_digits else DIGITS[-1] * inner_digits
+    bound_m = str(outer_count) if len(str(outer_count)) == outer_digits else DIGITS[-1] * outer_digits
+    first_tied = min(tied, default=inner_digits)
+    tight_n = True
+    for index in sorted(i for i in fixed_n if i < first_tied):  # constants before the digits taken from m
+        tight_n = _step(tight_n, fixed_n[index], bound_n[index], index == 0)
+        if tight_n is None:
+            return False
+    from_m = {digit: index for index, digit in tied.items()}  # m digit index -> n digit index
+    states = {(True, tight_n)}
+    for j in range(outer_digits):
+        following = set()
+        for tight_m, tight_n in states:
+            for digit in ((fixed_m[j],) if j in fixed_m else DIGITS):
+                now_m = _step(tight_m, digit, bound_m[j], j == 0)
+                if now_m is None:
+                    continue
+                now_n = tight_n
+                if j in from_m:
+                    now_n = _step(tight_n, digit, bound_n[from_m[j]], from_m[j] == 0)
+                    if now_n is None:
+                        continue
+                following.add((now_m, now_n))
+        states = following
+    for _, tight_n in states:
+        for index in sorted(i for i in fixed_n if i >= first_tied):  # constants after them
+            tight_n = _step(tight_n, fixed_n[index], bound_n[index], index == 0)
+            if tight_n is None:
+                break
+        else:
+            return True
+    return False
+
+
+def _occurs_within(inner, outer, same_group):
+    """Whether a rendering of `inner` (n in 1..count) equals or lies inside a rendering of `outer`; within one group only
+    another image number counts (a rendering equals itself). Equal digit counts in one group force n = m, so only a
+    shorter number can differ."""
+    for inner_digits in range(1, len(str(inner[2])) + 1):
+        for outer_digits in range(1, len(str(outer[2])) + 1):
+            if same_group and inner_digits >= outer_digits:
+                continue
+            room = (len(outer[0]) + outer_digits + len(outer[1])) - (len(inner[0]) + inner_digits + len(inner[1]))
+            if any(_can_occur(inner, outer, inner_digits, outer_digits, offset) for offset in range(room + 1)):
+                return True
+    return False
+
+
+def overlapping_syntaxes(groups):
+    """The first pair `(container, contained)` of names where a rendering of the contained group equals or lies inside a
+    rendering of the container group, within a group (the name twice) or across groups; None when every pair is
+    substring-free.
+
+    `groups` maps a name to (syntax, count); a group's renderings are its syntax with `{n}` replaced by the decimal n for
+    n in 1..count (`render_syntax`). A syntax is `none` or has exactly one `{n}` (`syntax_error`). The decision is made
+    from the prefix, the suffix and the digit structure, never by rendering, so its cost is bounded by the template
+    lengths and the number of digits of the counts and not by the counts (the property test checks it against the
+    rendering oracle)."""
+    live = {}
+    for name, (syntax, count) in groups.items():
+        if syntax != NONE and count >= 1:
+            prefix, _, suffix = syntax.partition(IMAGE_SYNTAX_FIELD)
+            live[name] = (prefix, suffix, count)
+    for container, outer in live.items():
+        for contained, inner in live.items():
+            if _occurs_within(inner, outer, container == contained):
+                return container, contained
+    return None
+
+
+def validate_renderer(renderer, path, *, reference_count=None):
+    """Manifest v1: the loader's refusals for the renderer block, each naming its key (decisions 177 and 179).
+
+    `reference_count` widens the reference group's range for the overlap check (the paired configuration's
+    `edit.max_kb_reference_images`); the manifest alone checks both groups up to `max_source_images`."""
+    prefix = 'renderer.'
+    cap = renderer['max_source_images']
+    if cap is None:
+        raise ConfigurationError(f'{path}: {prefix}max_source_images: null; the drafter found no statement in the prompt, '
+                                 'so the admin states the number of source images the image model accepts')
+    check_limit(cap, path, prefix + 'max_source_images')
+    for name in ('source_image_syntax', 'reference_image_syntax'):
+        if renderer[name] is None:
+            raise ConfigurationError(f'{path}: {prefix}{name}: null; the drafter found no statement in the prompt, so the '
+                                     'admin states the syntax or none')
+        reason = syntax_error(renderer[name])
+        if reason:
+            raise ConfigurationError(f'{path}: {prefix}{name}: {reason}')
+    source, reference = renderer['source_image_syntax'], renderer['reference_image_syntax']
+    if source == NONE and cap > 1:
+        raise ConfigurationError(f'{path}: {prefix}source_image_syntax: none is allowed only when '
+                                 f'{prefix}max_source_images is 1 (it is {cap}); state the syntax the prompt uses')
+    if reference != NONE and renderer['accepts_reference_images'] is not True:
+        raise ConfigurationError(f'{path}: {prefix}reference_image_syntax: a syntax is set but '
+                                 f'{prefix}accepts_reference_images is false; set it to none or accept reference images')
+    if source != NONE and source == reference:
+        raise ConfigurationError(f'{path}: {prefix}source_image_syntax: equal to {prefix}reference_image_syntax; the two '
+                                 'groups need different syntaxes')
+    references = cap if reference_count is None else max(cap, reference_count)
+    clash = overlapping_syntaxes({prefix + 'source_image_syntax': (source, cap),
+                                  prefix + 'reference_image_syntax': (reference, references)})
+    if clash:
+        raise ConfigurationError(f'{path}: {clash[0]}: a rendering for an image number up to the counted range equals or '
+                                 f'contains a rendering of {clash[1]} (counted: {prefix}max_source_images, and '
+                                 'edit.max_kb_reference_images for references)')
 
 
 def validate_validation_reads(config, path='configuration', sources=None, project_root=None, *,
@@ -2412,7 +2729,7 @@ def validate_assembly_reads(config, path='configuration', sources=None, project_
     """S3's request-startup and direct-entry gate (T-014 P2); S3 runs only with retrieval on."""
     sources = {} if sources is None else sources
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
-    schema = _schema(root, 'enhancer_config.v0')
+    schema = _reads_schema(root, config)
 
     def refuse(key, message):
         raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {message}')
@@ -2478,14 +2795,17 @@ def effective_request_config(config, overrides, *, project_root):
             for part in parts[:-1]:
                 parent = parent[part]
             parent[parts[-1]] = deepcopy(value)
-        return _validate_loaded_config(effective, 'enhance once', root, 'effective configuration', {})
+        # The base was validated at load; a prompt file is read again only for an override of a multi_source key.
+        named = any('.multi_source' in key for key in overrides)
+        return _validate_loaded_config(effective, 'enhance once', root, 'effective configuration', {}, prompts=named)
     except ConfigurationError as error:
         # The request boundary must not expose validator values, permission keys or filesystem paths.
         raise ConfigurationError(f'request configuration validation failed ({type(error).__name__})') from None
 
 
-def _validate_loaded_config(config, command, root, path, sources):
+def _validate_loaded_config(config, command, root, path, sources, *, prompts=True):
     if command in REQUEST_COMMANDS:
+        _require_source_limits_version(config, path)  # first: one migrate message (target 3) for every version below 3
         _require_validation_version(config, path)
         _require_attachment_support(config, path, sources)
     try:
@@ -2541,7 +2861,7 @@ def _validate_loaded_config(config, command, root, path, sources):
                 role_schema = _schema(root, 'vlm_role.v0')
             except ConfigurationError as error:
                 raise ConfigurationError(f'{_source(sources, key, path)}: {key}: {error}') from error
-            _validate(value, role_schema, path, key, sources)
+            _validate(_role_core(value), role_schema, path, key, sources)
             backend_key = 'vlm.backends.' + value['backend']
             _sentinel(_get(config, backend_key, path), path, backend_key, sources)
     if any(key.startswith('vlm.roles.') for key in reads):
@@ -2557,6 +2877,7 @@ def _validate_loaded_config(config, command, root, path, sources):
         _require_float_seconds(config['runtime']['intake_deadline_s'], path, 'runtime.intake_deadline_s', sources)
         validate_planner_reads(config, path, sources, root)
         validate_writer_reads(config, path, sources, root)
+        validate_source_limits(config, path, sources, root, prompts=prompts)
         validate_validation_reads(config, path, sources, root)
         validate_pipeline_reads(config, path, sources, root)
         if command == 'enhance serve':
@@ -2622,6 +2943,11 @@ def _validate_k0_reads(config, root, path, sources):
         _filename(extension, path, 'knowledge.image_extensions')
 
 
+def manifest_schema_id(version):
+    """The schema of a manifest `schema_version`: 1 is profile_manifest.v0 (kept as it was), 2 is profile_manifest.v1."""
+    return 'profile_manifest.v' + str(MANIFEST_VERSIONS.index(version))
+
+
 def load_profile(path, *, project_root=None):
     """Load an admin profile; a relative input path starts at the project root."""
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
@@ -2632,13 +2958,15 @@ def load_profile(path, *, project_root=None):
     except OSError as error:
         raise ConfigurationError(f'{manifest_path}: file: {error}') from error
     manifest = _parse_manifest(raw, manifest_path)
-    if type(manifest.get('schema_version')) is not int or manifest['schema_version'] != 1:
-        raise ConfigurationError(f'{manifest_path}: schema_version: expected 1')
+    if type(manifest.get('schema_version')) is not int or manifest['schema_version'] not in MANIFEST_VERSIONS:
+        raise ConfigurationError(f'{manifest_path}: schema_version: expected one of {list(MANIFEST_VERSIONS)}')
     try:
-        manifest_schema = _schema(root, 'profile_manifest.v0')
+        manifest_schema = _schema(root, manifest_schema_id(manifest['schema_version']))
     except ConfigurationError as error:
         raise ConfigurationError(f'{manifest_path}: schema_version: {error}') from error
     _validate(manifest, manifest_schema, manifest_path)
+    if manifest['schema_version'] == 2:
+        validate_renderer(manifest['renderer'], manifest_path)
     _filename(manifest['profile_id'], manifest_path, 'profile_id')
     try:
         prompt_path = _inside(path / 'system_prompt.txt', root)

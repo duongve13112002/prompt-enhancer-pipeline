@@ -46,7 +46,7 @@ class ModelDouble:
 def environment(model_test_profile, tmp_path, project_root, *, task='generate', constraints=()):
     install_prompts(project_root)
     config = configuration(model_test_profile, tmp_path)
-    config['schema_version'] = 2
+    config['schema_version'] = 3  # the example's own version: a version-2 label over version-3 keys fails the stage reads (MS-2)
     config['resolution']['random_seed'] = 7  # explicit test-only monitoring seed
     verifier = deepcopy(config['vlm']['backends']['main'])
     verifier['model']['id'] = 'synthetic-independent-verifier'

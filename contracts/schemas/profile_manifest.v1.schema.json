@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "profile_manifest.v1",
+  "title": "Profile manifest (several source images)",
+  "$comment": "v1 (MS-2, decision 179), manifest schema_version 2. Differs from profile_manifest.v0 only in the renderer block: image_reference_syntax is gone (unknown key here) and max_source_images, source_image_syntax and reference_image_syntax are added. The drafter may answer null for the three it cannot read from the prompt (as v0 did for image_reference_syntax); the loader refuses null, so the admin states the value before the profile loads. Value rules live in code, not here (R-015, AGENTS.md section 5): max_source_images is a positive exact integer; each syntax is the string none or a string with exactly one {n} and no other brace; the two syntaxes never render a string that equals or contains another for n from 1 to the cap; none needs max_source_images of 1; a non-none reference syntax needs accepts_reference_images true. The schema writes no minimum, pattern or maxItems so it can also be sent as a structured-output schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "profile_id",
+    "status",
+    "system_prompt_hash",
+    "template_format",
+    "supported_tasks",
+    "output_kind",
+    "output_schema_id",
+    "output_language",
+    "edit_output_semantics",
+    "template_variables",
+    "quote_semantics",
+    "renderer",
+    "validator",
+    "conflicts",
+    "golden_tests"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "profile_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": [
+        "draft",
+        "confirmed",
+        "active"
+      ]
+    },
+    "system_prompt_hash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "template_format": {
+      "enum": [
+        "sectioned",
+        "plain"
+      ]
+    },
+    "meta": {
+      "type": "object",
+      "$comment": "Loader metadata of the [META] section (sectioned format only); mapped to a runtime parameter only when the backend supports it.",
+      "additionalProperties": {
+        "type": [
+          "string",
+          "boolean",
+          "number"
+        ]
+      }
+    },
+    "supported_tasks": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "generate",
+          "edit"
+        ]
+      }
+    },
+    "output_kind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "output_schema_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "output_language": {
+      "type": "string",
+      "minLength": 1
+    },
+    "edit_output_semantics": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "template_variables": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "template_values": {
+      "description": "Admin-confirmed fixed values for template variables other than the input variable (decision 81)",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "quote_semantics": {
+      "type": "string",
+      "minLength": 1
+    },
+    "renderer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accepts_reference_images",
+        "max_source_images",
+        "source_image_syntax",
+        "reference_image_syntax"
+      ],
+      "properties": {
+        "accepts_reference_images": {
+          "type": "boolean"
+        },
+        "max_source_images": {
+          "description": "How many source images the image model accepts in one edit; a positive integer (checked by the loader), null only in an unconfirmed draft.",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_image_syntax": {
+          "description": "The string none, or the prompt's syntax for one source image with exactly one {n}; null only in an unconfirmed draft.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reference_image_syntax": {
+          "description": "The same for one knowledge-base reference image; each group counts from 1.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "validator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checks"
+      ],
+      "properties": {
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "description": "Named structural checks the profile declares for its output; an empty list means only the generic checks run."
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "profile_rule",
+          "conflicts_with",
+          "decision",
+          "decided_by_admin"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "profile_rule": {
+            "type": "string"
+          },
+          "conflicts_with": {
+            "type": "string"
+          },
+          "config_keys": {
+            "description": "Dotted configuration keys the rule conflicts with; empty when it conflicts with a fixed pipeline rule. config_wins requires at least one.",
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "decision": {
+            "enum": [
+              "undecided",
+              "profile_wins",
+              "config_wins",
+              "block_activation"
+            ]
+          },
+          "decided_by_admin": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "golden_tests": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

@@ -286,6 +286,12 @@ def test_legacy_commands_load_without_injecting_new_settings(model_test_profile,
     del env.config['validation']['verifier']['require_calibration']
     for key in ('request_deadline_s', 'trace', 'monitoring'):
         del env.config['runtime'][key]
+    # a real version-1 file carries none of the version-3 keys (MS-2: decision 179)
+    del env.config['edit']['max_source_images']
+    for backend in env.config['vlm']['backends'].values():
+        backend['image'].pop('max_images_per_call', None)  # the backends share one image dict in the fixture
+    for role in ('planner', 'writer'):
+        del env.config['vlm']['roles'][role]['multi_source']
     target = tmp_path / 'legacy.yaml'
     target.write_text(yaml.safe_dump(env.config), encoding='utf-8')
     loaded = load_config(target, 'kb status', project_root=project_root)
@@ -311,7 +317,8 @@ def test_each_v2_command_refuses_legacy_before_versioned_reads(model_test_profil
         del env.config['profiles']
     target = tmp_path / 'legacy-request.yaml'
     target.write_text(yaml.safe_dump(env.config), encoding='utf-8')
-    with pytest.raises(ConfigurationError, match='schema_version: migrate S5 configuration to version 2'):
+    # F5 (MS-2 fix round 1): the request-command refusal names the one target, version 3, before any version-2 read
+    with pytest.raises(ConfigurationError, match='schema_version: migrate the configuration to version 3'):
         load_config(target, command, project_root=project_root)
 
 
