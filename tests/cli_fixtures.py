@@ -30,6 +30,7 @@ from test_pipeline_s0_s6 import FullServerDouble
 ROOT = Path(__file__).resolve().parents[1]
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)  # Windows only; 0 elsewhere (PLATFORM_GPU_RULES)
 REQUEST_CAP = 1_000_000  # test-only serving.http.max_request_bytes, not a deployment value
+TRANSPORT_BOUND_S = 120  # test-only: connect/read/write/pool/probe timeout of the loopback double; equals the request deadline
 
 
 def run_cli(args, project_root, *, timeout=120, env=None):
@@ -73,7 +74,13 @@ def pipeline_config(model_test_profile, tmp_path, project_root, port, *, retriev
     config['resolution']['random_seed'] = 7
     config['serving']['http'] = {'max_request_bytes': REQUEST_CAP}
     backend = config['vlm']['backends']['main']
-    backend.update(base_urls=[f'http://127.0.0.1:{port}'], probe={'max_requests': 12, 'timeout_s': 2, 'image_attempts': 1})
+    backend.update(base_urls=[f'http://127.0.0.1:{port}'],
+                   probe={'max_requests': 12, 'timeout_s': TRANSPORT_BOUND_S, 'image_attempts': 1})
+    # test-only: the shared 1 s connect/read timeouts (max_retries 0) expired on a loaded machine (CI 42; seen locally as
+    # ConnectTimeout in the trace): the planner call failed, the unit fell back to `degraded` and the double never
+    # recorded its prompt. No test here measures a transport timeout, so each is a hang bound like the deadline above
+    backend['http'].update(connect_timeout_s=TRANSPORT_BOUND_S, read_timeout_s=TRANSPORT_BOUND_S,
+                           write_timeout_s=TRANSPORT_BOUND_S, pool_timeout_s=TRANSPORT_BOUND_S)
     backend['image']['max_decode_pixels'] = 20_000_000
     if retrieval:
         config['vlm']['backends']['embedder']['base_urls'] = backend['base_urls']

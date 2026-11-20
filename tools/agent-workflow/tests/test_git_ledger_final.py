@@ -295,6 +295,135 @@ def test_f19_a_second_begin_for_the_same_call_keeps_the_first_record(repo: Simpl
     assert [p.read_bytes() for p in _records(repo)] == [first]
 
 
+# CI 42: on Windows a delete or replace of a pending record fails while a poll of the folder holds it open.
+@pytest.mark.skipif(sys.platform != "win32", reason="only Windows refuses to delete a file another handle holds open")
+def test_ci42_finish_waits_for_a_reader_of_its_pending_record_on_windows(repo: SimpleNamespace) -> None:
+    """The real sharing violation: a handle opened as `read_bytes` opens it is held while finish() runs; finish must
+    wait for it to close, write its entry and remove the record, not raise WinError 32."""
+    import threading
+
+    event = _event("pm", "toolu_held", repo.main)
+    gl.begin(repo.main, event, repo.main, 10)
+    [path] = _records(repo)
+    git(repo.main, "commit", "-q", "--allow-empty", "-m", "x")
+    handle = path.open("rb")
+    threading.Timer(0.4, handle.close).start()
+    try:
+        assert gl.finish(repo.main, event, 10) is True
+    finally:
+        handle.close()
+    assert _records(repo) == [] and [e["tool_use_id"] for e in gl.entries(repo.main)] == ["toolu_held"]
+
+
+def _busy_then_free(monkeypatch: pytest.MonkeyPatch, owner: type, name: str, times: int, only: str) -> list[int]:
+    """Make `owner.name` raise PermissionError `times` times for a path named `only` (a labelled stand-in for a reader's
+    handle, so Linux runs the same logic); returns the call counter."""
+    real, calls = getattr(owner, name), [0]
+
+    def busy(self: Path, *args: Any, **kwargs: Any) -> Any:
+        if self.name == only and calls[0] < times:
+            calls[0] += 1
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(owner, name, busy)
+    return calls
+
+
+def test_ci42_finish_retries_the_removal_of_a_busy_pending_record(repo: SimpleNamespace,
+                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gl, "RETRY_SHARING", True)
+    monkeypatch.setattr(gl, "POLL_SECONDS", 0.001)
+    event = _event("pm", "toolu_busy", repo.main)
+    gl.begin(repo.main, event, repo.main, 10)
+    [path] = _records(repo)
+    git(repo.main, "commit", "-q", "--allow-empty", "-m", "x")
+    calls = _busy_then_free(monkeypatch, Path, "unlink", 3, path.name)
+    assert gl.finish(repo.main, event, 10) is True
+    assert calls == [3] and _records(repo) == []
+
+
+def test_ci42_a_busy_record_is_read_again_not_named_unreadable(repo: SimpleNamespace,
+                                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gl, "RETRY_SHARING", True)
+    monkeypatch.setattr(gl, "POLL_SECONDS", 0.001)
+    gl.begin(repo.main, _event("pm", "toolu_poll", repo.main), repo.main, 10)
+    [path] = _records(repo)
+    calls = _busy_then_free(monkeypatch, Path, "read_bytes", 3, path.name)
+    assert gl.pending(repo.main, 0, time.time() + 1) == ["toolu_poll"] and calls == [3]
+    assert gl.incomplete(repo.main, 0, time.time() + 1) == []
+
+
+def test_ci42_finish_reads_its_record_again_when_a_poll_holds_it(repo: SimpleNamespace,
+                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gl, "RETRY_SHARING", True)
+    monkeypatch.setattr(gl, "POLL_SECONDS", 0.001)
+    event = _event("pm", "toolu_read", repo.main)
+    gl.begin(repo.main, event, repo.main, 10)
+    [path] = _records(repo)
+    git(repo.main, "commit", "-q", "--allow-empty", "-m", "x")
+    calls = _busy_then_free(monkeypatch, Path, "read_bytes", 3, path.name)
+    assert gl.finish(repo.main, event, 10) is True and calls == [3] and _records(repo) == []
+
+
+def test_ci42_publishing_a_record_retries_the_replace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The finish() failure mark replaces the record a poll may be reading; begin() links the record and removes the
+    temp name, a second link of that very file (next test)."""
+    monkeypatch.setattr(gl, "RETRY_SHARING", True)
+    monkeypatch.setattr(gl, "POLL_SECONDS", 0.001)
+    target = tmp_path / "record.json"
+    target.write_bytes(b"old")
+    real, replaced = os.replace, [0]
+
+    def busy_replace(src: Any, dst: Any) -> None:
+        if replaced[0] < 3:
+            replaced[0] += 1
+            raise PermissionError(13, "busy")
+        real(src, dst)
+
+    monkeypatch.setattr(os, "replace", busy_replace)
+    assert gl._write_new(target, b"new", False) is True
+    assert replaced == [3] and target.read_bytes() == b"new"
+
+
+def test_ci42_publishing_a_record_retries_the_removal_of_its_temp_name(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gl, "RETRY_SHARING", True)
+    monkeypatch.setattr(gl, "POLL_SECONDS", 0.001)
+    fresh, seen, real_unlink = tmp_path / "fresh.json", [0], Path.unlink
+
+    def busy_unlink(self: Path, *args: Any, **kwargs: Any) -> Any:
+        if self.name.endswith(".tmp") and seen[0] < 2:
+            seen[0] += 1
+            raise PermissionError(13, "busy")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", busy_unlink)
+    assert gl._write_new(fresh, b"x", True) is True and seen == [2]
+    assert fresh.read_bytes() == b"x" and [p.name for p in tmp_path.iterdir() if p.name.endswith(".tmp")] == []
+
+
+def test_ci42_a_persistently_busy_file_is_raised_after_the_bound_and_never_retried_elsewhere(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = [0]
+
+    def busy() -> None:
+        calls[0] += 1
+        raise PermissionError(13, "busy")
+
+    monkeypatch.setattr(gl, "POLL_SECONDS", 0.001)
+    monkeypatch.setattr(gl, "SHARING_ATTEMPTS", 5)
+    monkeypatch.setattr(gl, "RETRY_SHARING", True)
+    with pytest.raises(PermissionError):
+        gl._sharing_retry(busy)
+    assert calls == [5]  # a handle that never closes is a fault: bounded, then loud
+    calls[0] = 0
+    monkeypatch.setattr(gl, "RETRY_SHARING", False)  # POSIX: a PermissionError is a real refusal, raised at once
+    with pytest.raises(PermissionError):
+        gl._sharing_retry(busy)
+    assert calls == [1]
+
+
 # F20: a record past its command's bound ends the wait at once and is named.
 def test_f20_an_orphan_record_past_its_bound_stops_the_wait_and_is_named(repo: SimpleNamespace) -> None:
     gl.begin(repo.main, _event("pm", "toolu_orphan", repo.main), repo.main, 10)

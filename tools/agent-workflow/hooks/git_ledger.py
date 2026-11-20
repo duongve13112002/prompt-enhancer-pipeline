@@ -44,7 +44,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import guard_config as gc
@@ -66,6 +66,13 @@ ROOT_REF_NAME = re.compile(r"[A-Z][A-Z0-9_-]*")
 COMMAND_TIMEOUT_MAX_MS = 600_000
 CHUNK = 1 << 16  # safety-bound: read size between two deadline checks
 POLL_SECONDS = 0.05  # safety-bound: poll interval of the settle wait and of the append lock
+# platform-bound: Windows refuses to delete or replace a file another handle holds open (a reader of a pending record
+# holds it for the length of one small read; Python opens without FILE_SHARE_DELETE), so those calls wait and retry
+RETRY_SHARING = os.name == "nt"
+SHARING_ATTEMPTS = 40  # safety-bound: the same bound as cli_worker.REPLACE_ATTEMPTS (40 x POLL_SECONDS = 2 s)
+
+
+T = TypeVar("T")
 
 
 class SnapshotProblem(Exception):
@@ -385,6 +392,20 @@ def _pending_record(raw: bytes) -> dict[str, Any] | str:
     return record
 
 
+def _sharing_retry(action: Callable[[], T]) -> T:
+    """Run `action`; where `RETRY_SHARING` holds, a PermissionError (a reader's handle on the file, gone within one
+    small read) is waited out and the call repeated, so a delete or replace never loses the race against a poll of
+    the pending folder. The last failure is raised: a handle held for seconds is a real fault, not a race."""
+    for attempt in range(SHARING_ATTEMPTS if RETRY_SHARING else 1):
+        try:
+            return action()
+        except PermissionError:
+            if attempt == SHARING_ATTEMPTS - 1 or not RETRY_SHARING:
+                raise
+            time.sleep(POLL_SECONDS)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 def _write_new(path: Path, data: bytes, exclusive: bool) -> bool:
     """Write through a temporary file in the same folder, then publish it: exclusively with a hard link (False when
     `path` exists already) or by replacing; readers never see a partial record (F18)."""
@@ -395,7 +416,7 @@ def _write_new(path: Path, data: bytes, exclusive: bool) -> bool:
             out.flush()
             os.fsync(out.fileno())
         if not exclusive:
-            os.replace(temp, path)
+            _sharing_retry(lambda: os.replace(temp, path))
             return True
         try:
             os.link(temp, path)
@@ -403,7 +424,8 @@ def _write_new(path: Path, data: bytes, exclusive: bool) -> bool:
             return False
         return True
     finally:
-        temp.unlink(missing_ok=True)
+        # the temp name is a second link of the published record once linked, so a reader of `path` holds it too
+        _sharing_retry(lambda: temp.unlink(missing_ok=True))
 
 
 def begin(root: Path, event: dict[str, Any], cwd: Path, timeout: int) -> None:
@@ -492,7 +514,7 @@ def finish(root: Path, event: dict[str, Any], timeout: int) -> bool:
     folder = ledger_dir(root)
     path = folder / PENDING_NAME / f"{_record_key(session, call)}.json"
     try:
-        raw = path.read_bytes()
+        raw = _sharing_retry(path.read_bytes)
     except FileNotFoundError:
         return False
     record = _pending_record(raw)
@@ -511,7 +533,7 @@ def finish(root: Path, event: dict[str, Any], timeout: int) -> bool:
     if changed:
         line = json.dumps({**record, "end": time.time(), "transitions": changed}) + "\n"
         _append(folder, line.encode("utf-8"), timeout)
-    path.unlink(missing_ok=True)
+    _sharing_retry(lambda: path.unlink(missing_ok=True))  # a settle poll may be reading the record this instant
     return bool(changed)
 
 
@@ -554,7 +576,7 @@ def _scan_pending(root: Path) -> list[tuple[float, str, str | None]]:
     now = time.time()
     for path in sorted(folder.glob("*.json")):
         try:
-            raw, mtime = path.read_bytes(), path.stat().st_mtime
+            raw, mtime = _sharing_retry(path.read_bytes), path.stat().st_mtime
         except FileNotFoundError:
             continue  # finished meanwhile
         except OSError as exc:
