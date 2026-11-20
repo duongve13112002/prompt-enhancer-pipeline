@@ -218,7 +218,7 @@ def test_load_refuses_probe_attempts_without_an_integer_seed(production_env, see
         load(env, attempts=2, seed=seed)
 
 
-def cloud_planner_profile(env, *, main_attempts, cloud_attempts, **cloud_changes):
+def cloud_planner_profile(env, *, main_attempts, cloud_attempts, seed=BASE_SEED, **cloud_changes):
     """The planner (an image role, plain text output so the loader accepts a cloud backend) sits on a whole anthropic
     backend that does not take images (`allow_images: false`), so its image call and plain `image` probe run on the
     default local backend `main`, which maps `sampling.seed`."""
@@ -232,7 +232,7 @@ def cloud_planner_profile(env, *, main_attempts, cloud_attempts, **cloud_changes
     planner['backend'] = 'cloud'
     planner['output'] = {**planner['output'], 'format': 'none', 'schema_id': 'none', 'strict': False,
                          'validate_response': False}
-    return load(env, attempts=main_attempts)
+    return load(env, attempts=main_attempts, seed=seed)
 
 
 def test_a_role_on_a_backend_that_does_not_image_probe_retries_on_the_backend_that_does(production_env):
@@ -260,11 +260,94 @@ def test_a_backend_that_never_image_probes_is_not_asked_for_a_seed(production_en
     assert len(server.image_bodies) == challenge_count(env) and proof.errors['image'] == 'PROBE_MALFORMED'
 
 
-def test_a_backend_that_image_probes_is_asked_for_a_seed(production_env):
-    """The same profile with `allow_images: true`: the anthropic backend probes images itself and cannot map a seed."""
+@pytest.mark.parametrize('seed', [BASE_SEED, 'none'])
+def test_a_stopping_backend_without_a_seed_field_that_image_probes_needs_no_seed(production_env, seed):
+    """Decision 205: with `allow_images: true` the anthropic backend probes images itself. With `stop` no backend that
+    maps a seed is reachable, so `image_attempts: 2` loads with or without `sampling.seed`."""
     env = production_env
-    with pytest.raises(ConfigurationError, match=r"vlm\.backends\.cloud\.probe\.image_attempts.*'anthropic' does not map"):
-        cloud_planner_profile(env, main_attempts=1, cloud_attempts=2, allow_images=True)
+    config = cloud_planner_profile(env, main_attempts=1, cloud_attempts=2, seed=seed, allow_images=True,
+                                   on_budget_exhausted='stop')
+    assert config['vlm']['backends']['cloud']['probe']['image_attempts'] == 2
+    assert config['vlm']['roles']['planner']['sampling']['seed'] == seed
+
+
+@pytest.mark.parametrize('seed, refused', [('none', True), (BASE_SEED, False)])
+def test_a_fallback_to_a_seed_mapping_backend_still_asks_for_a_seed(production_env, seed, refused):
+    """With `fallback_to_default_backend` the local `main` (it maps a seed) is reachable, so the role needs a base seed
+    for the retry that may run there."""
+    env = production_env
+    build = lambda: cloud_planner_profile(env, main_attempts=1, cloud_attempts=2, seed=seed, allow_images=True,  # noqa: E731
+                                          on_budget_exhausted='fallback_to_default_backend')
+    if not refused:
+        assert build()['vlm']['roles']['planner']['sampling']['seed'] == seed
+        return
+    with pytest.raises(ConfigurationError, match=r'sampling\.seed'):
+        build()
+
+
+class AnthropicFencedImages:
+    """Labelled Anthropic-shaped HTTP double: the first reply of every plain image challenge is code-fenced, which the
+    strict probe parser refuses (PROBE_MALFORMED). A challenge is told apart by its whole body: with no seed, a
+    retry sends the same bytes again."""
+
+    def __init__(self):
+        from test_model_production_probes import CloudProbeDouble
+        self.double = CloudProbeDouble()
+        self.image_bodies, self.seen = [], {}
+
+    def handler(self, request):
+        body = json.loads(request.content)
+        answer = self.double.answer(request.url.path, body)
+        content = body['messages'][-1]['content']
+        if isinstance(content, list) and any(part['type'] == 'image' for part in content) \
+                and 'format' not in body.get('output_config', {}):
+            self.image_bodies.append(body)
+            key = json.dumps(body, sort_keys=True)
+            self.seen[key] = self.seen.get(key, 0) + 1
+            if self.seen[key] == 1:
+                answer['content'][0]['text'] = '```json\n' + answer['content'][0]['text'] + '\n```'
+        return httpx.Response(200, json=answer)
+
+
+@pytest.mark.parametrize('seed', [BASE_SEED, 'none'])
+def test_an_anthropic_image_probe_retry_is_a_fresh_unseeded_sample(production_env, monkeypatch, seed):
+    """CLOUD-1 (C), fix round 1: the plain `image` probe of a backend with no seed field retries a PROBE_MALFORMED
+    reply once per configured attempt, sends no seed, and records `seed: None` plus `seed_field: none_in_protocol`,
+    also when the role states an integer base seed (the protocol cannot send it)."""
+    from prompt_enhancer import model_client
+    from test_model_production_probes import bind_cloud_double, cloud_profile
+    env = production_env
+    monkeypatch.setattr(model_client, 'cloud_headers', lambda *args: {})  # labelled credential loader double
+    config = cloud_profile(env, budget=100, policy='stop')
+    cloud = config['vlm']['backends']['cloud_claude']
+    cloud['probe'].update(image_attempts=2, max_requests=40)
+    role = config['vlm']['roles']['observer']
+    role['sampling'] = {**role['sampling'], 'seed': seed}
+    path = env.root / 'anthropic-image-retry.yaml'
+    path.write_text(yaml.safe_dump(config), encoding='utf-8')
+    loaded = load_config(path, 'kb status', project_root=env.root)
+    server = AnthropicFencedImages()
+
+    async def execute():
+        run = ModelClientRun(loaded, env.root)
+        bind_cloud_double(run, server.double, handler=server.handler)
+        try:
+            await run.for_role('observer')
+            return [event for event in run.client.probe_events if event['capability'] == 'image'], \
+                run.probes['cloud_claude']
+        finally:
+            await run.close()
+
+    (event,), proof = asyncio.run(execute())
+    count = challenge_count(env)
+    assert event['status'] == 'complete' and proof.capabilities['image'] is True
+    assert len(server.image_bodies) == 2 * count and set(server.seen.values()) == {2}   # the configured attempts, no more
+    assert all('seed' not in body for body in server.image_bodies)
+    entries = [item for challenge in event['challenges'] for item in challenge['attempts']]
+    assert len(entries) == 2 * count
+    assert [(item['attempt'], item['seed'], item['code'], item['seed_field']) for item in entries[:2]] == [
+        (0, None, 'PROBE_MALFORMED', 'none_in_protocol'), (1, None, None, 'none_in_protocol')]
+    assert all(item['seed'] is None and item['seed_field'] == 'none_in_protocol' for item in entries)
 
 
 def test_an_unreadable_probe_bundle_is_refused_never_skipped(production_env):
