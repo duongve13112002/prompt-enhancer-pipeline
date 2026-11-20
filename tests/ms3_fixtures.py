@@ -7,9 +7,8 @@ from copy import deepcopy
 from http.server import ThreadingHTTPServer
 from io import BytesIO
 import json
-from threading import Thread
-
 from pathlib import Path
+from threading import Thread
 
 from PIL import Image
 
@@ -18,7 +17,7 @@ from prompt_enhancer.pipeline import Pipeline
 from prompt_enhancer.profiles import check_profile, confirm_profile, register_profile, resolve_profile
 from prompt_enhancer.storage import open_data_store
 from profile_fixtures import (
-    SECTIONED, DrafterDouble, RunnerDouble, bundle, install_prompts, set_manifest, write_golden,
+    ROOT, SECTIONED, DrafterDouble, RunnerDouble, bundle, install_prompts, set_manifest, write_golden,
 )
 from test_ms2_manifest_v1 import state_renderer, v1_draft
 from test_pipeline_config import runtime
@@ -69,6 +68,34 @@ def activate_manifest_v2(config, project_root, manifest_cap):
         write_golden(folder, 'g0', [])
     asyncio.run(check_profile(config, 'p1', RunnerDouble(), project_root=project_root))
     return folder
+
+
+def copy_committed(source, target):
+    """Test-only: copy a tree of text files with the committed LF line ends. A Windows checkout with `core.autocrlf`
+    holds them with CRLF, and prompt and schema bytes are hashed and sent as they are, so a byte baseline taken from the
+    checkout would depend on the OS (CI 45: the Windows-captured baseline failed on Ubuntu)."""
+    for path in sorted(Path(source).rglob('*')):
+        if path.is_file():
+            destination = Path(target) / path.relative_to(source)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            data = path.read_bytes()
+            # a file with a NUL byte is binary (every PNG has one in its IHDR length) and is copied unchanged
+            destination.write_bytes(data if b'\x00' in data else data.replace(b'\r\n', b'\n'))
+
+
+def install_committed_prompts(project_root):
+    """Test-only `install_prompts` with the committed prompt bytes (see `copy_committed`)."""
+    copy_committed(ROOT / 'prompts', Path(project_root) / 'prompts')
+
+
+def committed_root(target):
+    """Test-only: `target` (the test's `tmp_path`, which holds its configured paths) made a project root with the
+    committed contracts and prompts. The caller also replaces `intake_fixtures.install_prompts` by
+    `install_committed_prompts`, because `activate` reinstalls the prompts."""
+    for name in ('contracts/schemas', 'contracts/probes'):
+        copy_committed(ROOT / name, Path(target) / name)
+    install_committed_prompts(target)
+    return target
 
 
 def run_pipeline(model_test_profile, tmp_path, project_root, request, *, cap=1, manifest_cap=None, mutate=None):
@@ -129,8 +156,16 @@ def differences(left, right, path='$'):
 MASKED_KEYS = frozenset(('latency_s', 'context_hash', 'record_json'))
 
 
+# A capability probe re-encodes its bundle images with Pillow, whose bundled zlib differs between the Windows and the
+# Linux wheels, so the prepared image bytes and the bodies that carry them are platform outputs (CI 45). They are masked
+# only in probe evidence that holds images; the request's own source image is compared in full.
+IMAGE_PROBE_KEYS = frozenset(('body_hashes', 'prepared_image_hashes'))
+
+
 def masked(value):
     if isinstance(value, dict):
+        if value.get('image_hashes') and 'capability' in value:
+            value = {key: '<platform>' if key in IMAGE_PROBE_KEYS else item for key, item in value.items()}
         return {key: '<masked>' if key in MASKED_KEYS else masked(item) for key, item in value.items()}
     if isinstance(value, list):
         return [masked(item) for item in value]

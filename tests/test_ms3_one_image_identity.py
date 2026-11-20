@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
+import intake_fixtures
 from intake_fixtures import activate, configuration
-from ms3_fixtures import differences, images, normalized, run_pipeline
+from ms3_fixtures import committed_root, differences, images, install_committed_prompts, normalized, run_pipeline
 from prompt_enhancer.cli_input import Refusal, parse_request
 from prompt_enhancer.intake import intake
 
@@ -28,9 +29,11 @@ def request_v1():
 
 
 @pytest.mark.parametrize('shape', ['v0', 'v1'])
-def test_pipeline_bytes_equal_the_baseline(model_test_profile, tmp_path, project_root, shape):
+def test_pipeline_bytes_equal_the_baseline(model_test_profile, tmp_path, project_root, shape, monkeypatch):
     request = request_v0() if shape == 'v0' else request_v1()
-    actual = normalized(run_pipeline(model_test_profile, tmp_path, project_root, request))
+    monkeypatch.setattr(intake_fixtures, 'install_prompts', install_committed_prompts)
+    root = committed_root(tmp_path)  # prompt and schema bytes independent of the checkout's line ends
+    actual = normalized(run_pipeline(model_test_profile, tmp_path, root, request))
     baseline = json.loads(PIPELINE.read_text(encoding='utf-8'))
     assert actual == baseline, differences(actual, baseline)
     # the baseline holds the planner call with its image, the brief and the writer call
