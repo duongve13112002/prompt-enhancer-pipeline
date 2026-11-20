@@ -225,9 +225,7 @@ def test_selected_backend_and_local_fallback_refused_before_k0(k2_env, monkeypat
                 sync_config(changed, project_root=k2_env.root)
 
 
-@pytest.mark.parametrize('provider', ['gemini', 'anthropic'])
-def test_unverified_cloud_sync_refused_before_k0(k2_env, monkeypatch, provider):
-    import prompt_enhancer.kb_sync as coordinator
+def _cloud_sync_config(k2_env, provider):
     cfg = deepcopy(k2_env.config)
     backend = deepcopy(cfg['vlm']['backends']['main'])
     backend.update(provider=provider, engine={'name': provider}, base_urls=['https://example.invalid'],
@@ -240,6 +238,28 @@ def test_unverified_cloud_sync_refused_before_k0(k2_env, monkeypatch, provider):
     backend.pop('addendum_layout', None)  # T017-FIX: a cloud backend refuses the openai_compatible addendum keys
     cfg['vlm']['backends']['selected_cloud'] = backend
     cfg['vlm']['roles']['alias_generator']['backend'] = 'selected_cloud'
+    return cfg
+
+
+def test_unverified_gemini_sync_refused_before_k0(k2_env, monkeypatch):
+    import prompt_enhancer.kb_sync as coordinator
+    cfg = _cloud_sync_config(k2_env, 'gemini')
     monkeypatch.setattr(coordinator, 'open_knowledge_store', lambda *a, **k: pytest.fail('store before refusal'))
     with pytest.raises(ConfigurationError, match='cloud structured output mapping is not verified'):
+        sync_config(cfg, project_root=k2_env.root)
+
+
+def test_anthropic_structured_sync_passes_the_load_gate_and_reaches_k0(k2_env, monkeypatch):
+    """CLOUD-1: Anthropic structured output is sendable, so the alias role is no longer refused before K0."""
+    import prompt_enhancer.kb_sync as coordinator
+    cfg = _cloud_sync_config(k2_env, 'anthropic')
+
+    class Reached(Exception):
+        pass
+
+    def stop(*args, **kwargs):
+        raise Reached
+
+    monkeypatch.setattr(coordinator, 'open_knowledge_store', stop)
+    with pytest.raises(Reached):
         sync_config(cfg, project_root=k2_env.root)

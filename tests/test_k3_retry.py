@@ -258,11 +258,24 @@ def test_an_invalid_attempts_key_is_refused(k2_env, value):
         validate_card_reads(k2_env.config, project_root=k2_env.root)
 
 
-def test_a_provider_that_cannot_take_a_seed_is_refused_for_retries(k2_env):
-    configure(k2_env, 2)
+def _bind_anthropic(env, policy):
     from test_model_production_probes import synthetic_provider_backend  # a whole, schema-valid anthropic backend
-    k2_env.config['vlm']['backends']['main'] = synthetic_provider_backend(k2_env, 'anthropic')
-    with pytest.raises(ConfigurationError, match="cards.reply_attempts.*'anthropic' does not map sampling.seed"):
+    env.config['vlm']['backends']['cloud_claude'] = synthetic_provider_backend(env, 'anthropic', policy=policy)
+    env.config['vlm']['roles']['card_builder']['backend'] = 'cloud_claude'
+
+
+def test_a_provider_without_a_seed_field_takes_retries_without_a_seed(k2_env):
+    """CLOUD-1: Anthropic has no seed parameter, so its retry needs no seed base and is not refused."""
+    configure(k2_env, 2, seed='none')
+    _bind_anthropic(k2_env, 'stop')
+    validate_card_reads(k2_env.config, project_root=k2_env.root)
+
+
+def test_a_seeded_fallback_still_needs_an_integer_seed(k2_env):
+    """The fallback backend (local) maps a seed, so a budget fallback keeps the T017-FIX2 requirement."""
+    configure(k2_env, 2, seed='none')
+    _bind_anthropic(k2_env, 'fallback_to_default_backend')
+    with pytest.raises(ConfigurationError, match=r'cards\.reply_attempts.*card_builder\.sampling\.seed'):
         validate_card_reads(k2_env.config, project_root=k2_env.root)
 
 

@@ -106,7 +106,7 @@ class DrafterDouble:
 
 def envelope(status):
     return {'status': status, 'output': 'text', 'attachments': [], 'source_binding': None,
-            'retrieval': {'state': 'disabled', 'snapshot_id': None}, 'warnings': [], 'trace_id': 't1'}
+            'retrieval': {'state': 'disabled', 'snapshot_id': None, 'error': None}, 'warnings': [], 'trace_id': 't1'}
 
 
 class RunnerDouble:
@@ -127,12 +127,15 @@ class RunnerDouble:
         return envelope(self.statuses.get(request['prompt'], self.default))
 
 
-def write_golden(folder, case_id, covers, *, prompt=None, task='generate', expect=('success',), source='none'):
+def write_golden(folder, case_id, covers, *, prompt=None, task='generate', expect=('success',), source='none',
+                 retrieval='disabled', grounding='not_required'):
+    """A golden_case.v1 file (T017-FIX3). The defaults match `envelope()`: retrieval off, no grounding required."""
     path = folder / 'golden' / f'{case_id}.yaml'
     path.parent.mkdir(exist_ok=True)
-    case = {'schema_version': 1, 'id': case_id, 'covers': list(covers),
-            'request': {'task': task, 'prompt': prompt or f'prompt for {case_id}', 'source_image': source},
-            'expect': {'status': list(expect)}}
+    case = {'schema_version': 2, 'id': case_id, 'covers': list(covers),
+            'request': {'task': task, 'prompt': prompt or f'prompt for {case_id}', 'source_image': source,
+                        'retrieval': retrieval},
+            'expect': {'status': list(expect), 'grounding': grounding}}
     path.write_text(yaml.safe_dump(case, sort_keys=False, allow_unicode=True), encoding='utf-8')
 
 

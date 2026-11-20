@@ -9,10 +9,17 @@ validation is retried; transport, budget, configuration and cancellation failure
 (`writer.attempt_seed_of`), each with its own loop (T017-FIX2). The planner refuses a retry the backend would send
 without its seed only when the retry is due (its attempt 0 is not a configured attempt count). The writer repair is
 never refused for that: its brief carries the draft and the failures, so it never repeats the earlier request.
+
+The seed rule is keyed on a protocol fact, `model_mapping.SAMPLING`: whether the provider's request has a seed field.
+A backend whose protocol has one and that dropped it is refused (`CONFIGURATION_INVALID`), because the retry would
+repeat the request. A backend whose protocol has none (Anthropic) is never refused for that: its retry is a fresh
+sample, sent without a seed, and its attempt entries state `seed: null` and `seed_field: none_in_protocol`. The attempt
+count stays the configured one either way (CLOUD-1, decision 195 round). `planner.refuses_retry` is the same predicate.
 """
 
 from .k2_naming import _digest, failure_code
 from .model_client import ModelCallError
+from .model_mapping import provider_maps_seed, seed_field_note
 from .planner import SEED_BITS
 from .storage import StorageError
 
@@ -53,14 +60,22 @@ async def call_until_valid(call, parse, *, attempts, base_seed, log, persist=Non
     """
     if type(attempts) is not int or attempts < 1:
         raise ValueError('attempts must be a positive integer')
+    provider = None  # learned from the first record; None until then, which keeps the seeded behaviour
     for attempt in range(attempts):
-        seed = attempt_seed(base_seed, attempt) if attempt else None
+        # A protocol with no seed field (Anthropic) retries as a fresh sample: seed None, recorded with `seed_field`.
+        seed = attempt_seed(base_seed, attempt) if attempt and provider_maps_seed(provider) else None
         value, record = await call(seed)
+        provider = record.get('provider', provider)
+        note = seed_field_note(provider)
         entry = {'attempt': attempt, 'seed': seed if attempt else (base_seed if type(base_seed) is int else None),
                  'code': None, 'reply_digest': None}
+        if note:
+            entry['seed'] = None
+            entry.update(note)
         log.entries.append(entry)
         log.records.append(record)
-        if attempts > 1 and any(tuple(item) == SEED_WARNING for item in record.get('warnings', ())):
+        if attempts > 1 and provider_maps_seed(provider) and any(
+                tuple(item) == SEED_WARNING for item in record.get('warnings', ())):
             entry['code'] = 'CONFIGURATION_INVALID'
             raise ModelCallError('CONFIGURATION_INVALID: the backend dropped sampling.seed, so a retry would repeat the request')
         last = attempt + 1 == attempts

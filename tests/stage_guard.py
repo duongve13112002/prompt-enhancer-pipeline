@@ -20,6 +20,9 @@ MODEL_CALL = [
     ('model_client', '_usage'),  # the token counts stored with a call record
     ('model_mapping', 'map_generation_fields'), ('model_mapping', 'openai_request'),
     ('model_mapping', 'map_cloud_reasoning'), ('model_cloud', 'cloud_request'),  # request bodies
+    ('model_cloud', 'anthropic_output_schema'), ('model_cloud', '_strip_schema'),  # CLOUD-1: the schema sent to Anthropic
+    ('model_cloud', 'ANTHROPIC_UNSUPPORTED_KEYWORDS'), ('model_cloud', '_SCHEMA_MAPS'),
+    ('model_cloud', '_SCHEMA_LISTS'), ('model_cloud', '_REFUSED_APPLICATORS'),
     ('model_mapping', 'system_messages'),  # T017-FIX: the system messages and the addendum layout of a request body
     ('model_mapping', 'system_texts'), ('model_mapping', 'effective_system_hash'),  # the system hash in a call record
     ('model_mapping', 'SAMPLING'), ('model_mapping', 'LOCAL_REASONING_EFFORT'),  # their fixed request values
@@ -42,7 +45,8 @@ K1_SHARED = [
 NAMING_SHARED = [('k2_naming', '_validate_reply')]  # reply validation every model stage uses
 RETRY_SHARED = [  # decisions 183 and 188: which refusals are retried, with which seed, and what an attempt records
     ('reply_retry', 'REFUSED'), ('reply_retry', 'SEED_WARNING'), ('reply_retry', 'attempt_seed'),
-    ('reply_retry', 'Attempts.__init__'), ('reply_retry', 'reply_digest'), ('reply_retry', 'call_until_valid')]
+    ('reply_retry', 'Attempts.__init__'), ('reply_retry', 'reply_digest'), ('reply_retry', 'call_until_valid'),
+    ('model_mapping', 'provider_maps_seed'), ('model_mapping', 'seed_field_note')]  # CLOUD-1: no seed field, no seed
 STAGES = {
     'k0': ('k0_checkpoint', 'K0_SCAN_REVISION', [
         ('k0', 'trim_info_token'), ('k0', 'parse_info'), ('k0', 'rows_from_scan'),
@@ -191,7 +195,12 @@ LEFT_OUT = [
                                  'BoundModelClient.close', 'run_concurrency', 'compose_model_client',
                                  'RoleClient.__init__', 'RoleClient._headers', 'RoleClient.start_backend',
                                  'RoleClient._start_backend', 'RoleClient.call']),
+    ('model_client', 'binds a profile bundle\'s writer output schema to one request (T017-FIX3); no K-stage role has a '
+     'profile, so it never reaches a K artifact', ['ModelClientRun.use_output_schema',
+                                                   'BoundModelClient.use_output_schema']),
     ('model_cloud', LIFECYCLE, ['cloud_headers']),
+    ('model_cloud', CHECK, ['_refuse_recursion']),
+    ('model_mapping', CHECK, ['ANTHROPIC_MODEL_REQUEST_RULES', 'anthropic_reasoning_refusal']),
     ('model_image', 'safety limits and cancellation of a decode', ['_BACKSTOP_LOCK', 'configure_decode_backstop']),
     ('model_image', ERRORS, ['ImageRejected.__init__', 'UndecodableImage', 'DecodeStopped']),
     ('model_image', CHECK, ['check_vision_settings', '_check_settings']),
@@ -199,6 +208,8 @@ LEFT_OUT = [
                                'SnapshotCache.clear', '_read_directory', 'SchemaRegistry.__init__',
                                'SchemaRegistry.from_snapshot', 'SchemaRegistry._build', 'SchemaRegistry.get',
                                'REGISTRY_CACHE_CAPACITY', '_REGISTRIES', 'cached_registry']),
+    ('model_schemas', 'adds a profile bundle\'s writer output schema to a request-scoped registry (T017-FIX3); K stages '
+     'never call it', ['SchemaRegistry.with_schema', 'with_output_schema']),
     ('profile_prompt', WRITER, ['SECTION_NAMES', '_HEADERS', '_BOM', '_PROMPT_ID_CHARS', 'ProfileError.__init__',
                                 'sha256_tag', 'PromptStructure.body', '_lines', 'parse_structure', 'parse_meta',
                                 'placeholders', 'system_message', 'user_template']),

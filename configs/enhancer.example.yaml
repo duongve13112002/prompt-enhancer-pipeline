@@ -249,9 +249,14 @@ vlm:                                     # R-018: rules name no model; models ar
       http: *model_http
       probe: *model_probe
       image: *model_image
-      call_budget: ask_user              # the number of requests the user allows; asked before the first call
-      on_budget_exhausted: fallback_to_default_backend   # decision 29: continue on the local backend with warning BUDGET_EXHAUSTED; alternative: stop
+      call_budget: ask_user              # the number of requests the user allows; asked before the first call. Counted per client run in one process (every HTTP attempt and probe request costs one), never across runs
+      on_budget_exhausted: fallback_to_default_backend   # decision 29: continue on the local backend with warning BUDGET_EXHAUSTED; alternative: stop (decision 195 round: a test run on Claude uses stop, so one result set never mixes models)
       allow_images: true                 # decision 29: images may be sent when a role is bound here; false keeps every request with an image on the local backend
+      # A role bound to this backend (Claude Haiku 5.5), CLOUD-1; the other keys of a role stay as in the roles below:
+      #   sampling: {temperature: 1.0, top_p: 1.0, top_k: 0, min_p: 0, frequency_penalty: 0, presence_penalty: 0, repetition_penalty: 1.0, seed: none, stop: none}   # the Anthropic request has none of these fields (no seed either), and Haiku 5.5 refuses non-default temperature, top_p and top_k (400), so they are never sent: each number is recorded as PARAM_UNSUPPORTED (the role schema takes `none` only for seed and stop; `seed: none` records no warning and lets a retry be a plain fresh sample)
+      #   reasoning: {mode: auto, effort: medium, budget_tokens: none, template_kwargs_key: enable_thinking}   # adaptive thinking; a budget is refused at load (400); mode off sends thinking disabled and needs effort high or lower
+      #   output: {format: json_schema, schema_id: <a schema whose objects all say additionalProperties false>, strict: true, transport: response_format, validate_response: true}   # sent as output_config.format; refused at load for a schema the API cannot take
+      # With reply_attempts above 1 the retry is a fresh sample: no seed is sent and the attempt entry says seed null, seed_field none_in_protocol.
     cloud_gemini:                        # decision 28
       provider: gemini
       engine: {name: gemini}

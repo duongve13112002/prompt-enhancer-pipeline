@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 from jsonschema import Draft202012Validator, exceptions, validators
 import yaml
 
-from .model_mapping import SAMPLING
+from .model_mapping import SAMPLING, anthropic_reasoning_refusal, provider_maps_seed
 from .model_schemas import SnapshotCache
 
 
@@ -928,17 +928,17 @@ def image_probe_backend(vlm, role):
 def attempt_seed_refusal(vlm, role_name, role=None, backend_name=None):
     """Why a role cannot take retry seeds (decisions 183, 188), or None; the caller names the attempts key.
 
-    Attempt k sends sampling.seed + k, so the role needs an integer base seed, and every backend the call can reach
-    (`backend_name`, default the role's own, and the default one when a budget fallback may serve it) must map `seed`
-    (`model_mapping.SAMPLING`). The probe passes the backend its image probe really runs on.
+    Attempt k sends sampling.seed + k on a backend whose protocol has a seed field (`model_mapping.SAMPLING`), so the
+    role needs an integer base seed when any backend the call can reach (`backend_name`, default the role's own, and
+    the default one when a budget fallback may serve it) maps `seed`. A role whose every reachable backend has no seed
+    field (Anthropic) needs none: its retry is a fresh sample, recorded as such (CLOUD-1). The probe passes the
+    backend its image probe really runs on.
     """
     from .planner import SEED_BITS  # lazy: planner imports this module
 
     role = vlm['roles'][role_name] if role is None else role
     seed = role['sampling']['seed']
     key = f'vlm.roles.{role_name}.sampling.seed'
-    if type(seed) is not int or not 0 <= seed < 2 ** SEED_BITS:
-        return f'{key}: an integer in [0, 2^{SEED_BITS}) is required, got {seed!r}'
     backends = vlm['backends']
     start = role['backend'] if backend_name is None else backend_name
     names = [start]
@@ -946,11 +946,16 @@ def attempt_seed_refusal(vlm, role_name, role=None, backend_name=None):
     if (isinstance(first, dict) and first.get('on_budget_exhausted') == 'fallback_to_default_backend'
             and vlm.get('default_backend') not in names):
         names.append(vlm['default_backend'])
+    providers = []
     for name in names:
         backend = backends.get(name) if isinstance(backends, dict) else None
         provider = backend.get('provider') if isinstance(backend, dict) else None
-        if isinstance(provider, str) and provider not in SENTINELS and 'seed' not in SAMPLING.get(provider, {}):
-            return f'vlm.backends.{name}.provider: {provider!r} does not map sampling.seed, so a retry would repeat the request'
+        if isinstance(provider, str) and provider not in SENTINELS:
+            providers.append(provider)
+    if providers and not any(provider_maps_seed(provider) for provider in providers):
+        return None
+    if type(seed) is not int or not 0 <= seed < 2 ** SEED_BITS:
+        return f'{key}: an integer in [0, 2^{SEED_BITS}) is required, got {seed!r}'
     return None
 
 
@@ -1092,6 +1097,13 @@ def _validate_model_bindings(config, path, project_root=None):
         provider = backend['provider']
         reasoning = role['reasoning']
         maximum = role['max_tokens']
+        model = backend.get('model')
+        model_id = model.get('id') if isinstance(model, dict) else None
+        if (isinstance(reasoning, dict) and provider == 'anthropic' and model_id not in SENTINELS
+                and not any(reasoning[field] in SENTINELS for field in ('mode', 'effort', 'budget_tokens'))):
+            problem = anthropic_reasoning_refusal(model_id, reasoning)  # documented API errors of the bound model
+            if problem:
+                raise ConfigurationError(f'{path}: {key}.reasoning: {problem}')
         if isinstance(reasoning, dict) and provider == 'anthropic' and reasoning['mode'] == 'on':
             budget = reasoning['budget_tokens']
             if budget not in SENTINELS and maximum not in SENTINELS:
@@ -1104,7 +1116,9 @@ def _validate_model_bindings(config, path, project_root=None):
             fmt = output['format']
             manifest_bound = (name == 'writer' and fmt == 'from_profile_manifest'
                               and output['schema_id'] == 'from_profile_manifest')
-            if fmt not in SENTINELS and fmt != 'none' and not manifest_bound:
+            if provider == 'anthropic' and fmt == 'json_schema':
+                _validate_anthropic_schemas(name, output['schema_id'], path, key, project_root)
+            elif fmt not in SENTINELS and fmt != 'none' and not manifest_bound:
                 raise ConfigurationError(f'{path}: {key}.output.format: cloud structured output mapping is not verified')
         image = role['image']
         if isinstance(image, dict):
@@ -1119,6 +1133,32 @@ def _validate_model_bindings(config, path, project_root=None):
             if fmt not in SENTINELS and image_media_type(fmt) is None:  # the request header names it (R4F1)
                 raise ConfigurationError(f'{path}: {key}.image.format: {NO_MEDIA_TYPE.format(fmt)}')
     _validate_probe_attempts(vlm, path, project_root)
+
+
+def _validate_anthropic_schemas(role_name, schema_id, path, key, project_root):
+    """A role that sends `json_schema` to Anthropic: every schema it can bind must be sendable as it is (CLOUD-1).
+
+    The registered schema, and for the planner the generate variant S2 chooses at run time, go through
+    `anthropic_output_schema`; a schema it refuses is a start-up refusal, never a repaired one.
+    """
+    from .model_cloud import anthropic_output_schema
+    from .model_schemas import cached_registry
+    from .planner import GENERATE_REPLY_SCHEMA
+
+    if schema_id in SENTINELS:
+        return
+    root = Path(__file__).resolve().parents[2] if project_root is None else Path(project_root)
+    registry = cached_registry(root / 'contracts' / 'schemas')
+    for candidate in (schema_id, GENERATE_REPLY_SCHEMA) if role_name == 'planner' else (schema_id,):
+        try:
+            schema, _ = registry.get(candidate)
+        except KeyError:
+            raise ConfigurationError(f'{path}: {key}.output.schema_id: unknown schema {candidate!r}') from None
+        try:
+            anthropic_output_schema(schema)
+        except ValueError as error:
+            raise ConfigurationError(f'{path}: {key}.output.schema_id: {candidate} cannot be sent to Anthropic '
+                                     f'structured output: {error}') from error
 
 
 def installed_encoder(name):
@@ -2608,8 +2648,13 @@ def load_profile(path, *, project_root=None):
     return manifest, prompt
 
 
-def resolve_writer_format(role, manifest, *, project_root=None, role_source='config.yaml', manifest_source='manifest.yaml'):
-    """Resolve writer references, attributing refusals to the caller's source files."""
+def resolve_writer_format(role, manifest, *, project_root=None, role_source='config.yaml', manifest_source='manifest.yaml',
+                          profile_schema_id=None):
+    """Resolve writer references, attributing refusals to the caller's source files.
+
+    `profile_schema_id` is the `$id` of the admin bundle's `output_schema.json` that the profile loader checked
+    (T017-FIX3, `profiles.output_schema`); the manifest may name it instead of a schema under `contracts/schemas`.
+    The caller that passes it also supplies that schema to whoever sends and validates the reply."""
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
     result = deepcopy(role)
     output = result.get('output', {})
@@ -2618,7 +2663,7 @@ def resolve_writer_format(role, manifest, *, project_root=None, role_source='con
     schema_id = manifest.get('output_schema_id')
     if not isinstance(schema_id, str) or not schema_id:
         raise ConfigurationError(f'{manifest_source}: output_schema_id: missing or invalid')
-    if schema_id != 'none':
+    if schema_id != 'none' and schema_id != profile_schema_id:
         try:
             _schema(root, schema_id)
         except ConfigurationError as error:

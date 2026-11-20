@@ -382,7 +382,7 @@ def test_cloud_requires_ledger_and_uses_synthetic_key(tmp_path):
             await client.call('planner', b'system', 'data')
         double.ledger = object()
         result, record = await client.call('planner', b'system', 'data')
-        assert result == 'ok' and double.headers['Authorization'] == 'Bearer synthetic-key'
+        assert result == 'ok' and double.headers['x-api-key'] == 'synthetic-key' and 'Authorization' not in double.headers
         assert double.headers['anthropic-version'] == '2025-01-01'
         assert record['engine'] == {'name': 'anthropic', 'version': '2025-01-01'}
         assert 'synthetic-key' not in str(record)

@@ -230,7 +230,8 @@ def test_example_profile_registers_with_known_conflicts(tmp_path, project_root):
     # Explicit test-only, admin-confirmed subset for the existing template/addendum assertions below.
     set_manifest(folder, validator={'checks': ['single_line_minified_json']})
     raw = {'status': 'success', 'output': '{"text":"fixture"}', 'attachments': [], 'source_binding': None,
-           'retrieval': {'state': 'disabled', 'snapshot_id': None}, 'warnings': [], 'trace_id': 'test'}
+           'retrieval': {'state': 'disabled', 'snapshot_id': None, 'error': None}, 'warnings': [],
+           'trace_id': 'test'}
     run(check_profile(check, '_example', RunnerDouble(raw=raw), project_root=project_root))
     view = resolve_profile(check, '_example', project_root=project_root)
     assert view.input_variable == 'original_prompt' and view.template_values == {'aspect_ratio': 'auto'}
@@ -412,7 +413,8 @@ def test_golden_source_image_reaches_runner(tmp_path, project_root):
     runner = RunnerDouble(default='failed')
     run(check_profile(config, 'p1', runner, project_root=project_root))
     view, request = runner.calls[0]
-    assert request == {'task': 'edit', 'prompt': 'prompt for g1', 'source_image': b'image-bytes'}
+    assert request == {'task': 'edit', 'prompt': 'prompt for g1', 'source_image': b'image-bytes',
+                       'retrieval': 'disabled'}
     assert view.profile_id == 'p1' and view.activation is None
 
 
@@ -788,7 +790,7 @@ def _own_project(tmp_path):
     return tmp_path
 
 
-@pytest.mark.parametrize('schema', ['response_envelope.v0', 'golden_case.v0', 'profile_manifest.v0'])
+@pytest.mark.parametrize('schema', ['response_envelope.v1', 'golden_case.v1', 'profile_manifest.v0'])
 def test_check_schema_drift_needs_new_check(tmp_path, schema):
     """RT4 class: every schema that decides the verdict is bound; changing one needs a new check."""
     root = _own_project(tmp_path)
@@ -822,7 +824,7 @@ def test_input_changed_during_check_is_refused(tmp_path, target):
             if target == 'golden':
                 write_golden(folder, 'g1', ['c1'], expect=('success', 'failed'))
             else:
-                path = root / 'contracts/schemas/response_envelope.v0.schema.json'
+                path = root / 'contracts/schemas/response_envelope.v1.schema.json'
                 path.write_bytes(path.read_bytes() + b'\n')
             return await super().run(view, request)
     with pytest.raises(ProfileError, match='PROFILE_CHANGED'):
@@ -1182,3 +1184,46 @@ def test_the_example_profile_and_the_example_configuration_are_a_valid_pair():
     profiles._require_attachable_renderer(manifest, config)
     assert manifest['renderer']['accepts_reference_images'] is False
     assert config['edit']['attach_kb_reference_images'] is False
+
+
+BUNDLE_SCHEMA = {'$schema': 'https://json-schema.org/draft/2020-12/schema', '$id': 'admin_caption.v1',
+                 'type': 'object', 'required': ['caption'], 'properties': {'caption': {'type': 'string'}}}
+
+
+@pytest.mark.parametrize('change', ['edit', 'delete', 'none'])
+def test_bundle_output_schema_is_bound_by_the_check(tmp_path, project_root, change):
+    """T017-FIX3 (decision 194): the check binds the bundle schema's bytes; any later change needs a new check."""
+    raw = json.dumps(BUNDLE_SCHEMA).encode('utf-8')
+    (bundle(tmp_path, 'p1', SECTIONED) / profiles.OUTPUT_SCHEMA_FILE).write_bytes(raw)  # the admin's bundle file
+    folder, _, _ = register(tmp_path, project_root, value=draft(output_schema_id='admin_caption.v1'))
+    config = load(tmp_path, project_root, config_data(tmp_path), 'profile check')
+    confirm_profile(config, 'p1', {'c1': 'profile_wins'}, project_root=project_root)
+    write_golden(folder, 'g1', ['c1'])
+    set_manifest(folder, golden_tests=['g1'])
+    runner = RunnerDouble()
+    run(check_profile(config, 'p1', runner, project_root=project_root))
+    assert runner.calls[0][0].output_schema == ('admin_caption.v1', BUNDLE_SCHEMA, sha256_tag(raw)[7:])
+    activation = json.loads((folder / 'activation.json').read_bytes())
+    assert activation['output_schema_sha256'] == sha256_tag(raw)
+    view = resolve_profile(config, 'p1', project_root=project_root)
+    assert view.output_schema_id == 'admin_caption.v1' and view.output_schema[1] == BUNDLE_SCHEMA
+    path = folder / profiles.OUTPUT_SCHEMA_FILE
+    if change == 'edit':  # still valid, same id, other bytes
+        path.write_bytes(json.dumps({**BUNDLE_SCHEMA, 'additionalProperties': False}).encode('utf-8'))
+        assert _state(config, project_root) == 'PROFILE_NOT_CHECKED'
+    elif change == 'delete':  # the id names no project contract, so the load itself refuses
+        path.unlink()
+        assert _state(config, project_root) == 'PROFILE_OUTPUT_SCHEMA_INVALID'
+    else:  # a tampered activation that claims no bundle schema
+        activation['output_schema_sha256'] = None
+        (folder / 'activation.json').write_text(json.dumps(activation), encoding='utf-8')
+        assert _state(config, project_root) == 'PROFILE_NOT_CHECKED'
+
+
+def test_profile_without_bundle_schema_binds_none(tmp_path, project_root):
+    folder, config = _checkable(tmp_path, project_root)
+    run(check_profile(config, 'p1', RunnerDouble(), project_root=project_root))
+    assert json.loads((folder / 'activation.json').read_bytes())['output_schema_sha256'] is None
+    assert resolve_profile(config, 'p1', project_root=project_root).output_schema is None
+    (folder / profiles.OUTPUT_SCHEMA_FILE).write_bytes(json.dumps(BUNDLE_SCHEMA).encode('utf-8'))
+    assert _state(config, project_root) == 'PROFILE_OUTPUT_SCHEMA_INVALID'  # a file `none` would silently ignore

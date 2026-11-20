@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "plan_result.v2",
+  "title": "S2 plan result",
+  "$comment": "Draft v2 (MS-1, designed, not yet implemented). plan_result.v1 (T017-FIX, which added error.cause) with intent_ir.v1, for an edit with two or more source images. It is v2 because plan_result.v1 already exists; the design note called it v1 by mistake. A request with one source image keeps plan_result.v1. The S2 stage result around intent_ir.v0 (docs/stages/S2-planner.md). state: ready (a plan), degraded (no usable plan after the bounded retry, or an ambiguous request answered with its most plausible reading under clarification.mode best_effort), needs_clarification (clarification.mode ask only), failed (the planner call failed). selections records every family pick by code with its seed (decisions 15, 69) when resolution.trace_choice is true; variant_ratings carries the planner's context ratings of card variants for S3 (decision 16). calls holds the model client's per-call records, which never contain prompt or image content.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "state",
+    "intent_ir",
+    "selections",
+    "variant_ratings",
+    "warnings",
+    "calls",
+    "error"
+  ],
+  "properties": {
+    "state": {
+      "enum": [
+        "ready",
+        "degraded",
+        "needs_clarification",
+        "failed"
+      ]
+    },
+    "intent_ir": {
+      "anyOf": [
+        {
+          "$ref": "intent_ir.v1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "selections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "link_index",
+          "candidates",
+          "chosen_id",
+          "seed"
+        ],
+        "properties": {
+          "link_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "candidates": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "context_fit"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "context_fit": {
+                  "enum": [
+                    "fits",
+                    "neutral",
+                    "conflicts"
+                  ]
+                }
+              }
+            }
+          },
+          "chosen_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "variant_ratings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "link_index",
+          "concept_id",
+          "variant_group",
+          "named_variant_id",
+          "ratings"
+        ],
+        "properties": {
+          "link_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "concept_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "variant_group": {
+            "type": "string",
+            "minLength": 1
+          },
+          "named_variant_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ratings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "context_fit"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "context_fit": {
+                  "enum": [
+                    "fits",
+                    "neutral",
+                    "conflicts"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "SCHEMA_INVALID",
+          "CLARIFICATION_ASSUMED",
+          "RETRIEVAL_FAILED",
+          "SECOND_CHANCE_FAILED"
+        ]
+      }
+    },
+    "calls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "role",
+          "status",
+          "request_hash"
+        ],
+        "properties": {
+          "role": {
+            "const": "planner"
+          },
+          "status": {
+            "type": "string",
+            "minLength": 1
+          },
+          "request_hash": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "error": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "enum": [
+                "PLANNER_REPLY_INVALID",
+                "PLANNER_CALL_FAILED"
+              ]
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            },
+            "cause": {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

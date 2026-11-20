@@ -22,9 +22,9 @@ def once(project_root, tmp_path, config, request, *, name='request.json', extra=
 
 
 def validate_envelope(project_root, envelope):
-    """stdout is a schema-valid response envelope (contracts/schemas/response_envelope.v0)."""
+    """stdout is a schema-valid response envelope (contracts/schemas/response_envelope.v1)."""
     from jsonschema import Draft202012Validator
-    schema = json.loads((project_root / 'contracts/schemas/response_envelope.v0.schema.json').read_bytes())
+    schema = json.loads((project_root / 'contracts/schemas/response_envelope.v1.schema.json').read_bytes())
     Draft202012Validator(schema).validate(envelope)
 
 
@@ -46,7 +46,8 @@ def test_once_retrieval_off_with_the_knowledge_base_absent(model_test_profile, t
         envelope = json.loads(out)
         validate_envelope(project_root, envelope)
         assert out.count('\n') == 1 and envelope['status'] == 'degraded' and envelope['output'] == 'original intent'
-        assert envelope['retrieval'] == {'state': 'disabled', 'snapshot_id': None} and envelope['attachments'] == []
+        assert envelope['retrieval'] == {'state': 'disabled', 'snapshot_id': None, 'error': None}
+        assert envelope['attachments'] == []
         assert handler.seen
     assert not (tmp_path / 'kb').exists()  # retrieval off: no knowledge-base access at all (R-009)
     rows = open_data_store(config, 'enhance once', project_root=project_root).read_rows('request_traces')

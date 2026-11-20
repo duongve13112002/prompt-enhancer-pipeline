@@ -154,3 +154,34 @@ Decisions, deviations, assumptions, tradeoffs, rejected alternatives and risks, 
   - repairing a reply by dropping out-of-range knowledge needs, which would break "planner replies are never repaired";
   - a prompt line about empty shortlists, which is weak on dev models and changes a runtime prompt.
 - **Not verified:** whether llama.cpp's grammar honours `maximum` inside `anyOf` and `maxItems: 0` (client-side validation enforces both); live behaviour until the next golden run. Task file: [T017-FIX2](../tasks/active/T017-FIX2-retry-seed-schema-bound.md).
+
+## 2026-11-20 admin output schema, golden retrieval switch, envelope v1 (T017-FIX3, decisions 194 and 197 to 200)
+
+- **Built:**
+  - An admin bundle may ship `output_schema.json`; its `$id` must equal the manifest's `output_schema_id`. It is checked at every profile load, may not shadow a project contract, and its SHA-256 enters `activation.json`.
+  - Every writer attempt and S5 repair sends it as `json_schema` and validates the reply against it. `none` sends no schema. The system prompt bytes and the message order are unchanged (R-004).
+  - `golden_case.v1` states `request.retrieval`. A `disabled` case runs on a retrieval-off pipeline: no store, no S1, S3 or embedder call (R-009). An `enabled` case under a retrieval-off configuration is refused before any case runs. v0 cases are refused with a message naming v1.
+  - `response_envelope.v1` and `intake_result.v1` carry a required `retrieval.error` (null or a closed code) and the `not_reached` state. `degraded` never passes a grounding case.
+- **Revision:** `model-call-6`, shared with CLOUD-1 under one bump at integration, so K2, K3 and K4 recompute once at the next `kb sync`.
+- **Reviews:** Gemini Flash PASS; Claude Sonnet PASS (3 own mutants; one equivalent). No fix round.
+- **Open, P3:** a bundle schema's unresolvable `$ref` passes the load check and raises at validation time (`_WrappedReferencingError` is not caught as `SCHEMA_INVALID`); `profile check` still fails the profile through its golden case. Three refusal branches of `load_output_schema` have no test. Task file: [T017-FIX3](../tasks/active/T017-FIX3-output-schema-golden-envelope.md).
+
+## 2026-11-20 Anthropic backend ready for Claude Haiku 5.5 (CLOUD-1, decisions 195 and 202 to 205)
+
+- **Built:**
+  - `cloud_claude` roles send `output_config = {effort, format: json_schema}`. The sent schema is the full one with only unsupported keywords removed, which can only widen it; a schema that cannot be sent (`not`, `oneOf`, non-`false` `additionalProperties`, external `$ref`, recursion) is refused at start. Replies are still validated against the full schema client-side. `sent_schema_hash` covers the posted schema, `client_schema_hash` the full one.
+  - Haiku 5.5 settings the API answers with 400 (`thinking.budget_tokens`; `thinking: disabled` above effort `high`) are refused at load and again at request build, from a protocol-bound model-id table that cites its source.
+  - On a protocol with no seed field, a retry goes out as a fresh sample (`seed: null`, `seed_field: none_in_protocol`); a seeded backend that drops the seed is still refused (decision 205).
+  - `on_budget_exhausted: stop` ends the run with `BUDGET_EXHAUSTED` and never falls back to the local backend. `call_budget` is counted per run object and per HTTP attempt, in memory; the PM tracks the 3000-request total (decision 203).
+  - The key is sent as `x-api-key`, no longer `Authorization: Bearer` (Bearer is for OAuth tokens).
+- **Revisions:** `model-call-6` (shared with T017-FIX3), `k2-observe-4`, `k3-card-4`.
+- **PM decision pending user review:** numeric `temperature`, `top_p` and `top_k` in a Haiku role stay warned and unsent, because `vlm_role.v0` accepts `none` only for `seed` and `stop`; the docs say to omit them.
+- **Primary docs re-read by the PM (2026-11-20, platform.claude.com structured-outputs, extended-thinking, effort, Haiku 5.5 overview):** `budget_tokens` returns 400 on Haiku 5.5; `disabled` only at effort `high` or below; default effort `medium`; internal `$ref`/`$defs` supported; `anyOf` beside `type` or `properties` in one object is rejected (only `enhancer_config.v0` has that shape, and it is never sent).
+- **Reviews:** Gemini Flash PASS; Claude Sonnet PASS (3 own mutants killed). No fix round. **Not verified until the live probe (decision 207):** whether the API accepts `pattern`, `$id`, `$schema` and `$comment` in a sent schema. Task file: [CLOUD-1](../tasks/active/CLOUD-1-anthropic-backend.md).
+
+## 2026-11-20 multi-source contracts and prompt drafts (MS-1, decisions 176 to 182 and 196)
+
+- **Built:** schemas `request.v1`, `intake_result.v2`, `planner_reply.v1`, `intent_ir.v1` and `plan_result.v2`, with valid, invalid and code-refused fixtures; prompt drafts `planner_v2`, `brief_v1` and `manifest_drafter_v1`, marked "draft, not selected" and named by nothing under `src/` or `configs/`; "designed, not yet implemented" paragraphs in S0, S2, S4 and S6. No runtime code; the single-image path is unchanged.
+- **Versions:** T017-FIX3 owns v1 of the intake result, envelope and golden case, so multi-source uses `intake_result.v2`, `response_envelope.v2` (MS-5) and `golden_case.v2` (MS-6).
+- **Left to code (MS-3, MS-4):** an index above n, ascending order and the n of 2 or more rule. **Left to MS-2:** `manifest_drafter_v1` writes `null` for a renderer value the system prompt does not state; `profile_manifest.v1` pins that.
+- **Reviews:** Gemini Flash PASS; Claude Sonnet PASS. The 15 `intake_result.v2` cases that waited for `response_envelope.v1` ran at integration (97 passed). Task file: [MS-1](../tasks/active/MS-1-contracts-docs.md).

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from prompt_enhancer.config import ConfigurationError
 from prompt_enhancer.intake import intake
 from prompt_enhancer.pipeline import GoldenAdapter, Pipeline
 from prompt_enhancer.profiles import resolve_profile
@@ -293,12 +294,19 @@ def test_golden_adapter_passes_view_and_acknowledges_delivery():
         async def after_delivery(self):
             events.append('delivered')
     class PipelineDouble:
+        config = {'rag': {'enabled': False}}  # a retrieval-off deployment: `disabled` cases run on this pipeline
+
         async def _enhance(self, request, view):
-            assert view is profile and request['source_image'] == 'aW1hZ2U='
+            assert view is profile and request['source_image'] == 'aW1hZ2U=' and 'retrieval' not in request
             return ResponseDouble()
-    assert asyncio.run(GoldenAdapter(PipelineDouble()).run(profile, {'source_image': b'image'})) == {'status': 'success'}
-    assert asyncio.run(GoldenAdapter(PipelineDouble()).run_case(profile, {'source_image': b'image'})) == (
+    request = {'source_image': b'image', 'retrieval': 'disabled'}
+    assert asyncio.run(GoldenAdapter(PipelineDouble()).run(profile, request)) == {'status': 'success'}
+    assert asyncio.run(GoldenAdapter(PipelineDouble()).run_case(profile, request)) == (
         {'status': 'success'}, {'planner': None})
+    assert events == ['delivered', 'delivered']
+    for retrieval in (None, 'auto', 'enabled'):  # no default switch; `enabled` needs a retrieval-on deployment
+        with pytest.raises((ValueError, ConfigurationError)):
+            asyncio.run(GoldenAdapter(PipelineDouble()).run(profile, {**request, 'retrieval': retrieval}))
     assert events == ['delivered', 'delivered']
 
 

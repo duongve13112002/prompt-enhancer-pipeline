@@ -184,7 +184,7 @@ def synthetic_run(tmp_path, project_root, model_test_profile, records, *, mode='
                   concurrency=2, fill=True, output=lambda scenario_id, variant: f'{variant} output of {scenario_id}'):
     """A run built without any model: with `fill`, finished, its result rows written through the production row builder
     and data store; without, ready to execute. Labelled synthetic: the envelopes are hand-made (valid against
-    `response_envelope.v0`), so what a judge pack shows under which label can be checked against known outputs."""
+    `response_envelope.v1`), so what a judge pack shows under which label can be checked against known outputs."""
     from cli_fixtures import pipeline_config
     from prompt_enhancer.config import validate_evaluation_settings
     from prompt_enhancer.eval_run import Run, canonical
@@ -241,7 +241,8 @@ def result_row(run, rec, variant, output, trace_id):
     """One `eval_results` row of a synthetic run, built by the production metrics builder."""
     from prompt_enhancer.eval_run import Unit, build_metrics
     envelope = {'status': 'success', 'output': output, 'attachments': [], 'source_binding': None,
-                'retrieval': {'state': 'retrieved' if variant == 'on' else 'disabled', 'snapshot_id': None},
+                'retrieval': {'state': 'retrieved' if variant == 'on' else 'disabled', 'snapshot_id': None,
+                              'error': None},
                 'warnings': [], 'trace_id': trace_id}
     return {'run_id': run.run_id(variant), 'scenario_id': rec.scenario['scenario_id'],
             'metrics': build_metrics(run, Unit(rec, variant, {}), envelope), 'status': 'success',

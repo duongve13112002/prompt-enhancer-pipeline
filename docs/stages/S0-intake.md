@@ -23,7 +23,7 @@ Live intake latency and whole-pipeline behavior are unmeasured; P1 makes no mode
 
 **Experiments.** E12 (dev smoke with image input), E13 (latency of the whole path).
 
-**Library contract (T-013 P1).** `request.v0` and `intake_result.v0` define the input and result payload.
+**Library contract (T-013 P1).** `request.v0` and `intake_result.v1` (T017-FIX3: its refusal envelope is `response_envelope.v1`) define the input and result payload.
 Call `prompt_enhancer.intake.intake(request, config, project_root=...)` as a context manager; use its
 `payload` for JSON, `profile` for the checked admin view and `snapshot` for downstream pinned reads.
 Images are supplied as base64 bytes, never a request-specified URL or path. Configuration profiles explicitly
@@ -41,5 +41,7 @@ The caller owns the returned result's snapshot lease until it closes the result 
 S0 calls `pin()` once, which reads the pointer internally; it never calls `current()` first. Retrieval off
 constructs no knowledge gateway/store and skips filesystem resolution of knowledge-only paths during loading.
 `none` preserves native image scale; explicit encoding, EXIF orientation and alpha policy can still change bytes.
+
+**Several source images (designed, not yet implemented; MS-2 to MS-7, decisions 176 and 179).** Today S0 takes one optional `source_image` (`request.v0`). The design adds `request.v1` with `source_images`, a list in caller order, and S0 builds one internal list, `intake_result.v2.source_images` (`[{index, image_id, role, data}]`, 1-based, request order); a `request.v0` becomes a list of one and keeps the envelope of today's path. Structural refusals each name the field and never a value: `edit` with no image, `generate` with any, an empty list, both fields sent, more images than the smaller of `edit.max_source_images` and the manifest's `renderer.max_source_images` (`SOURCE_IMAGES_TOO_MANY`, never truncated; both keys are added by MS-2), two images with the same bytes (`SOURCE_IMAGE_DUPLICATE`, a proposal) and bad base64 at index i. Each image is decoded under the existing `vision.max_decode_pixels` and resized per `vision.max_image_side`, the deadline is checked after each image, and `serving.http.max_request_bytes` then bounds all images together. Versions, and what a schema checks against what code checks: [contracts, multi-source section](../../contracts/README.md#multi-source-contracts-designed-not-yet-implemented).
 
 **References.** N102.

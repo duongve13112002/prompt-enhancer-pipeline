@@ -46,7 +46,7 @@ def test_serve_delivers_generate_and_edit_envelopes_unchanged_and_stops_cleanly(
                 envelopes[task] = json.loads(body)
                 validate_envelope(project_root, envelopes[task])
                 assert envelopes[task]['output'] == prompt  # the degraded fallback is the prompt, byte for byte (R-001)
-                assert envelopes[task]['retrieval'] == {'state': 'disabled', 'snapshot_id': None}
+                assert envelopes[task]['retrieval'] == {'state': 'disabled', 'snapshot_id': None, 'error': None}
             assert process.stop() == 0
         assert process.stdout == b'' and process.lines[0].startswith('listening on 127.0.0.1:')
         assert not any(line.startswith(('failed', 'operational')) for line in process.lines)

@@ -47,16 +47,22 @@ PINS = {
                    ('model-call-4', '3289be06c097f147e875604a7417bc884984ced2e0b9a312872566d479064a9b'),
                    # T017-FIX2: the per-request (shortlist-bounded) sent schema, its hash and client validation
                    # (re-pinned in place in fix round 1, N1, before the row reached main)
-                   ('model-call-5', 'cd041a98fbd884f0d996ca7f0657abf063d701da3168e7ce35684639fb29c176')],
+                   ('model-call-5', 'cd041a98fbd884f0d996ca7f0657abf063d701da3168e7ce35684639fb29c176'),
+                   # T017-FIX3 (the writer branch passes the bundle output schema id; no K-role request changes)
+                   # and CLOUD-1 (the Anthropic structured-output schema, x-api-key, thinking disabled, sent
+                   # hash), integrated under one bump
+                   ('model-call-6', '5a8e0706acd2e112374d9abfda7d8f400bc2531ffb75e5bd63ea085cbb439236')],
     'k2_naming': [('k2-naming-1', 'f7c8bc6ccac88fd3bde0d29807ee60669e67b67f6e7b054ded05998ca6e11fa5'),
                   ('k2-naming-2', '9028bbc88242340042e849112324d30d03e9568f25384d5863bf5dac1976eba6')],
     'k2_draw': [('k2-draw-v1', '085e0f67f4a98374df27d6c6103d10119f223e71975675382c3e1763dc71117b')],
     'k2_observe': [('k2-observe-1', 'e8b5d4c403b8f058114556fff14bd100bff47083b25d78b101e2307a8db27fba'),
                    ('k2-observe-2', '9ede0abca2bd891708b305b83c9c5de621fe174d60016ff5a8278c86dbbe4002'),
-                   ('k2-observe-3', 'cd7bdde0196b89533b228a58858bd67f2893b09c62058a9944d65764e17e7bf9')],  # K3-RETRY
+                   ('k2-observe-3', 'cd7bdde0196b89533b228a58858bd67f2893b09c62058a9944d65764e17e7bf9'),  # K3-RETRY
+                   ('k2-observe-4', 'ed31a60ddafc5e76acd306037271b94535beb4bf587a90ac8439f2a5f8283681')],  # CLOUD-1
     'k3': [('k3-card-1', '1247c6586399c4d98fdf64513accee9feb29db2cbb5c743daf02946c4a82611b'),
            ('k3-card-2', 'c80d7fc38f7d3d8e2f2ae348ccbb0305c02ae3bc885b4ca2b874aa5d65677a30'),
-           ('k3-card-3', 'baac7f04d4106c4be7b789775409a5804db3f23b92728f67bb4921e4d6e8ddd1')],  # K3-RETRY
+           ('k3-card-3', 'baac7f04d4106c4be7b789775409a5804db3f23b92728f67bb4921e4d6e8ddd1'),  # K3-RETRY
+           ('k3-card-4', '2cbf013f5b80b10cc03dce62337e47597ea355d100af64af0e97b52989b5e93a')],  # CLOUD-1
     'k4': [('k4-alias-1', 'e0b9748cea1ad96d2d904ec855ce9b00f5dda8e080d9a1588a9b121b80bd48e6'),
            ('k4-alias-2', 'b4404f20f5f572e969fbe228ebb00e6ac3a898fdbcb13f5b81a756f1e3054f44')],
     'k5': [('k5-index-1', 'e1609a9b78845d6465985457b276da2cd022c001a8999dedb7747bba7ee8bf4f'),

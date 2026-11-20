@@ -92,7 +92,7 @@ Offline order: K0; K1 image embeddings; K2 (its first step judges every info fil
 
 ## Statuses and retrieval states
 
-Every response has one status (`success`, `repaired`, `degraded`, `needs_clarification`, `failed`) and one retrieval state (`disabled`, `skipped_no_knowledge_needed`, `retrieved`, `no_match`, `failed`). The enums and the envelope are defined in [contracts](../contracts/README.md); how they are set is in [S6](stages/S6-envelope.md).
+Every response has one status (`success`, `repaired`, `degraded`, `needs_clarification`, `failed`) and one retrieval state (`disabled`, `skipped_no_knowledge_needed`, `retrieved`, `no_match`, `failed`, `not_reached`), with a closed error code when `failed`. The enums and the envelope are defined in [contracts](../contracts/README.md); how they are set is in [S6](stages/S6-envelope.md).
 
 ## Out of scope
 

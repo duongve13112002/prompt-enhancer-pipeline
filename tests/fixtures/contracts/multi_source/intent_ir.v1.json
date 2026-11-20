@@ -1,0 +1,56 @@
+{
+  "schema": "intent_ir.v1",
+  "note": "Contract examples for the multi-source design (draft, designed, not yet implemented). The base is worked example 2 of the design as code would build it from planner_reply.v1. A case is the base with 'set' (path, value) and 'delete' (path) edits applied; 'n' is the number of source images the request held.",
+  "n": 3,
+  "base": {
+    "task": "edit",
+    "edit_kind": "local_edit",
+    "base_source_index": 1,
+    "entities": [
+      {"id": "e_girl", "kind": "person", "count": 1, "mention": "cô gái", "attributes": [{"facet": "apparel.garment", "value": "áo dài Huế", "source": "user", "source_indexes": null}], "action": null, "relations": [{"predicate": "holds", "object_entity_id": "e_cup"}], "source": "source_image", "source_indexes": [2]},
+      {"id": "e_cafe", "kind": "place", "count": 1, "mention": "quán cà phê", "attributes": [], "action": null, "relations": [], "source": "source_image", "source_indexes": [1]},
+      {"id": "e_cup", "kind": "object", "count": 1, "mention": "ly", "attributes": [], "action": null, "relations": [], "source": "source_image", "source_indexes": [3]}
+    ],
+    "scene": {"location": "quán cà phê", "medium": null, "attributes": []},
+    "concept_links": [
+      {"mention": "áo dài Huế", "entity_id": "e_girl", "status": "resolved", "role": "worn_garment", "concept_id": "concept-ao-dai-hue", "candidates": [], "needs_lookup": false}
+    ],
+    "rejected_candidates": [],
+    "knowledge_needs": [{"concept_id": "concept-ao-dai-hue", "facets": ["apparel.garment"]}],
+    "constraint_ledger": {"constraints": [
+      {"id": "c1", "type": "edit_scope", "text": "keep the lighting of image 1", "span": "giữ ánh sáng ảnh 1", "bound_entity": null}
+    ]},
+    "literal_texts": [],
+    "passthrough_tokens": [],
+    "edit_targets": [{"id": "t1", "entity_id": "e_cafe", "locator": "the café scene", "source_indexes": [1]}],
+    "delta": [{"id": "d1", "target_id": "t1", "operation": "insert_subject", "description": "place the girl from image 2, holding the cup from image 3"}],
+    "preserve": [{"locator": "lighting", "source": "user", "source_indexes": [1]}],
+    "dependent_effects": [],
+    "unresolved": [],
+    "needs_clarification": false,
+    "clarification_candidates": []
+  },
+  "valid": [
+    {"name": "worked example 2: three sources, base 1"},
+    {"name": "one target that spans every image", "set": [[["edit_kind"], "global_transform"], [["edit_targets", 0, "source_indexes"], [1, 2, 3]]]},
+    {"name": "subject_recompose with no base image", "set": [[["edit_kind"], "subject_recompose"], [["base_source_index"], null]]}
+  ],
+  "invalid": [
+    {"name": "local_edit with a null base", "why": "the schema ties the null base to subject_recompose", "set": [[["base_source_index"], null]]},
+    {"name": "0-based base index", "set": [[["base_source_index"], 0]]},
+    {"name": "0-based target index", "set": [[["edit_targets", 0, "source_indexes"], [0]]]},
+    {"name": "empty preserve indexes", "set": [[["preserve", 0, "source_indexes"], []]]},
+    {"name": "repeated index", "set": [[["edit_targets", 0, "source_indexes"], [2, 2]]]},
+    {"name": "source_image entity with null source_indexes", "set": [[["entities", 0, "source_indexes"], null]]},
+    {"name": "user entity with indexes", "set": [[["entities", 0, "source"], "user"]]},
+    {"name": "user attribute with indexes", "set": [[["entities", 0, "attributes", 0, "source_indexes"], [1]]]},
+    {"name": "generate task", "set": [[["task"], "generate"]]},
+    {"name": "the v0 shape (no base_source_index)", "delete": [["base_source_index"]]},
+    {"name": "target without source_indexes", "delete": [["edit_targets", 0, "source_indexes"]]}
+  ],
+  "code_refused": [
+    {"name": "target index above n", "why": "n is 3 here; the range check is code, before the IR is built (MS-4)", "set": [[["edit_targets", 0, "source_indexes"], [4]]]},
+    {"name": "descending list", "why": "ascending order is a code check", "set": [[["edit_targets", 0, "source_indexes"], [3, 1]]]},
+    {"name": "base index above n", "why": "same", "set": [[["base_source_index"], 4]]}
+  ]
+}

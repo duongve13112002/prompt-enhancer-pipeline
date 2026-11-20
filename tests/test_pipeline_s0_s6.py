@@ -123,7 +123,9 @@ def test_production_s0_s6_retrieval_off_without_kb(model_test_profile, tmp_path,
         async with Pipeline(config, project_root=project_root) as pipeline:
             if golden:
                 view = replace(resolve_profile(config, project_root=project_root), activation=None)
-                return await GoldenAdapter(pipeline).run(view, request)
+                # golden_case.v1 (T017-FIX3): each case states its retrieval switch; this one matches the deployment.
+                case = {**request, 'retrieval': 'enabled' if retrieval else 'disabled'}
+                return await GoldenAdapter(pipeline).run(view, case)
             response = await pipeline.enhance(request)
             await response.after_delivery()
         return response.envelope

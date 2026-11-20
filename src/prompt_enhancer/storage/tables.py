@@ -69,7 +69,7 @@ def _c(name, type_, nullable=False, enum=None, subschema=None):
 OBS = 'image_observation.v0'
 OBS_ITEM = '/properties/observations/items/properties'
 ALIAS_ITEM = '/properties/aliases/items/properties'
-ENV = 'response_envelope.v0'
+ENV = 'response_envelope.v1'  # T017-FIX3: its enums are supersets of v0, so rows written under v0 stay valid
 SCEN = 'eval_scenario.v0'
 
 SPECS = {spec.name: spec for spec in (

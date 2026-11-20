@@ -1,0 +1,25 @@
+{
+  "schema": "plan_result.v2",
+  "note": "Contract examples for the multi-source design (draft, designed, not yet implemented). The intent_ir of the base is the base of intent_ir.v1.json (the test loads it); a case is the base with 'set' (path, value) and 'delete' (path) edits applied.",
+  "intent_ir_from": "intent_ir.v1.json",
+  "base": {
+    "state": "ready",
+    "intent_ir": null,
+    "selections": [],
+    "variant_ratings": [],
+    "warnings": [],
+    "calls": [{"role": "planner", "status": "OK", "request_hash": "sha256:aa"}],
+    "error": null
+  },
+  "valid": [
+    {"name": "ready plan around intent_ir.v1"},
+    {"name": "failed call keeps its cause (T017-FIX), no IR", "set": [[["state"], "failed"], [["intent_ir"], null], [["error"], {"code": "PLANNER_CALL_FAILED", "message": "the planner call failed", "cause": "HTTP_ERROR"}]]}
+  ],
+  "invalid": [
+    {"name": "the IR is v0-shaped (no base_source_index)", "delete": [["intent_ir", "base_source_index"]]},
+    {"name": "IR with a 0-based index", "set": [[["intent_ir", "edit_targets", 0, "source_indexes"], [0]]]},
+    {"name": "unknown state", "set": [[["state"], "partial"]]},
+    {"name": "unknown error code", "set": [[["error"], {"code": "SOURCE_IMAGES_TOO_MANY", "message": "x"}]]}
+  ],
+  "code_refused": []
+}

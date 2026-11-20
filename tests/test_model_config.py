@@ -370,10 +370,12 @@ def test_unsafe_url_refused_at_profile_load(tmp_path, project_root, base, route)
     ([], ('vlm.default_backend', 'main'), ('vlm.default_backend', 'unknown'), 'default_backend'),
     ([], ('vlm.default_backend', 'main'), ('vlm.default_backend', 'cloud_claude'), 'default_backend'),
     ([], ('vlm.roles.manifest_drafter.backend', 'main'), ('vlm.roles.manifest_drafter.backend', 'unknown'), 'backend'),
-    ([('vlm.roles.manifest_drafter.backend', 'cloud_claude'), ('vlm.roles.manifest_drafter.reasoning.mode', 'on')],
+    ([('vlm.roles.manifest_drafter.backend', 'cloud_claude'), ('vlm.roles.manifest_drafter.reasoning.mode', 'on'),
+      ('vlm.backends.cloud_claude.model.id', 'claude-test-model')],  # not Haiku 5.5: the generic budget bounds apply
      ('vlm.roles.manifest_drafter.reasoning.budget_tokens', 1024),
      ('vlm.roles.manifest_drafter.reasoning.budget_tokens', 1023), 'budget_tokens'),
-    ([('vlm.roles.manifest_drafter.backend', 'cloud_claude'), ('vlm.roles.manifest_drafter.reasoning.mode', 'on')],
+    ([('vlm.roles.manifest_drafter.backend', 'cloud_claude'), ('vlm.roles.manifest_drafter.reasoning.mode', 'on'),
+      ('vlm.backends.cloud_claude.model.id', 'claude-test-model')],  # not Haiku 5.5: the generic budget bounds apply
      ('vlm.roles.manifest_drafter.reasoning.budget_tokens', 1024),
      ('vlm.roles.manifest_drafter.reasoning.budget_tokens', 2048), 'budget_tokens'),
     ([('vlm.roles.manifest_drafter.backend', 'cloud_claude'), ('vlm.roles.manifest_drafter.output.validate_response', True)],

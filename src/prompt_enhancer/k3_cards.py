@@ -26,7 +26,7 @@ STORED_SCHEMA = 'concept_card.v0'
 LAYOUT = 1
 # declared revision of the code that shapes a K3 grouping bundle or card (KBS-S3-1); keys the artifacts in place of a
 # hash of module source. Bump it with any edit to a function its guard pins (tests/test_stage_revisions.py).
-K3_CARD_REVISION = 'k3-card-3'
+K3_CARD_REVISION = 'k3-card-4'
 VISIBLE = frozenset(('clear', 'partial'))
 
 

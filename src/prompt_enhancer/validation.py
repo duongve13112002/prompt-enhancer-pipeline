@@ -9,7 +9,7 @@ from jsonschema import ValidationError
 from .config import ConfigurationError, validate_validation_reads, validate_writer_reads
 from .model_client import ModelCallError, safe_model_code
 from .model_json import check_json_depth, strict_json
-from .model_schemas import cached_registry
+from .model_schemas import cached_registry, with_output_schema
 from .profile_prompt import ProfileError, load_prompt, sha256_tag
 from .profile_validators import check_output, decode_output, output_format, validate_artifact
 from .verifier_policy import bind_verifier, provenance_matches, require_calibrated_verifier
@@ -203,7 +203,8 @@ async def validate(intake_result, plan_result, assembly_result, writer_result, w
         writer_result['calls'] and writer_result['calls'][-1]['status'] == 'SCHEMA_INVALID')
     if (writer_client is not None or may_repair) and getattr(writer_client, 'role_name', None) != 'writer':
         raise ValueError('S5 requires a writer-bound repair client')
-    registry = cached_registry(root / 'contracts/schemas')
+    # T017-FIX3: the S5 contract check of every draft and repair uses the admin bundle schema the writer sent.
+    registry = with_output_schema(cached_registry(root / 'contracts/schemas'), getattr(profile, 'output_schema', None))
     registry.validate('plan_result.v1', plan_result)
     try:
         check_json_depth(writer_result['output'])

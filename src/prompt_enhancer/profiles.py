@@ -23,6 +23,7 @@ import asyncio
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import hashlib
 from importlib import metadata
 import json
 from pathlib import Path
@@ -56,9 +57,18 @@ ACTIVATION_FILE = 'activation.json'
 # OS lock file of the bundle (name kept from fix round 1, where only check held it); never deleted, because
 # deleting a lock file races.
 CHECK_LOCK_FILE = 'check.lock'
+# Artifact-bound (T017-FIX3, decision 194): the admin's JSON Schema for the writer reply, beside `system_prompt.txt`;
+# its `$id` is the manifest's `output_schema_id`.
+OUTPUT_SCHEMA_FILE = 'output_schema.json'
 MANIFEST_SCHEMA = 'profile_manifest.v0'  # protocol-bound: the drafter's output contract
-GOLDEN_SCHEMA = 'golden_case.v0'
-ENVELOPE_SCHEMA = 'response_envelope.v0'
+GOLDEN_SCHEMA = 'golden_case.v1'  # T017-FIX3 (decisions 197, 199); a golden_case.v0 file is refused
+GOLDEN_RETIRED_VERSION = 1  # artifact-bound: golden_case.v0's schema_version
+ENVELOPE_SCHEMA = 'response_envelope.v1'
+# Protocol-bound golden judging codes (decision 199), recorded per case in golden_results.json `codes`.
+GOLDEN_STATUS_UNEXPECTED = 'GOLDEN_STATUS_UNEXPECTED'
+GOLDEN_GROUNDING_DEGRADED = 'GOLDEN_GROUNDING_DEGRADED'
+GOLDEN_NOT_GROUNDED = 'GOLDEN_NOT_GROUNDED'
+GOLDEN_RETRIEVAL_NOT_DISABLED = 'GOLDEN_RETRIEVAL_NOT_DISABLED'
 CHECK_SCHEMAS = (MANIFEST_SCHEMA, GOLDEN_SCHEMA, ENVELOPE_SCHEMA, VALIDATOR_SCHEMA)
 # Protocol-bound: the distributions whose behaviour the verdict depends on (YAML reading, schema validation).
 CHECK_LIBRARIES = ('PyYAML', 'jsonschema')
@@ -422,6 +432,14 @@ class ProfileView:
     has_known_conflict: bool
     activation: dict | None
     writer_brief: tuple[str, bytes] | None = None
+    # The bundle's checked output schema `(schema_id, schema, sha256 hex of the file bytes)`, or None when the manifest
+    # says `none` or names a project contract (T017-FIX3).
+    output_schema: tuple | None = None
+
+    @property
+    def output_schema_id(self):
+        """The `$id` of the bundle schema, for `resolve_writer_format(profile_schema_id=...)`; None without one."""
+        return None if self.output_schema is None else self.output_schema[0]
 
     def require_task(self, task):
         """Refuse a task the profile does not support; never reformat it (decision 5)."""
@@ -520,8 +538,9 @@ def _view(profile_id, manifest, manifest_raw, prompt, config, root, activation):
     if findings:
         raise ProfileError('PROFILE_TEMPLATE_INVALID', findings[0][1], findings=findings)
     addendum = render_addendum(manifest['conflicts'], config, load_prompt(root, ADDENDUM_ID))
-    artifacts, hashes = load_validators(_bundle(config, profile_id, root), manifest['validator']['checks'],
-                                      project_root=root)
+    bundle = _bundle(config, profile_id, root)
+    artifacts, hashes = load_validators(bundle, manifest['validator']['checks'], project_root=root)
+    output_schema = load_output_schema(manifest, bundle, root)
     return ProfileView(
         profile_id=profile_id, manifest=deepcopy(manifest), system_prompt_sha256=sha256_tag(prompt),
         manifest_sha256=sha256_tag(manifest_raw), system_message=system_message(prompt, fmt, structure),
@@ -530,10 +549,68 @@ def _view(profile_id, manifest, manifest_raw, prompt, config, root, activation):
         addendum=addendum, validator_checks=tuple(manifest['validator']['checks']),
         validator_artifacts=artifacts, validator_hashes=hashes,
         supported_tasks=tuple(manifest['supported_tasks']), has_known_conflict=bool(manifest['conflicts']),
-        activation=activation)
+        activation=activation, output_schema=output_schema)
 
 
-def _golden_cases(manifest, bundle, root, schema):
+def load_output_schema(manifest, bundle, root):
+    """The admin bundle's writer output schema (T017-FIX3, decision 194), checked at every profile load.
+
+    Returns `(schema_id, schema, sha256 hex)` when `<bundle>/output_schema.json` exists, else None. Refused
+    (`PROFILE_OUTPUT_SCHEMA_INVALID`): the file present while `output_schema_id` is `none` (an ignored file); a file
+    that is not strict JSON, not a JSON object or not a valid draft 2020-12 schema; a `$id` other than
+    `output_schema_id`; an id that is also a project contract under `contracts/schemas` (a bundle never shadows one);
+    and, without the file, an `output_schema_id` that names no project contract. `none` sends no schema."""
+    code = 'PROFILE_OUTPUT_SCHEMA_INVALID'
+    schema_id = manifest['output_schema_id']
+    try:
+        path = _inside(bundle / OUTPUT_SCHEMA_FILE, root)
+    except ConfigurationError as error:
+        raise ProfileError(code, f'{OUTPUT_SCHEMA_FILE}: {error}') from error
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        raw = None
+    except OSError as error:
+        raise ProfileError(code, f'cannot read {OUTPUT_SCHEMA_FILE}: {error.strerror or error}') from error
+    if raw is None:
+        if schema_id != 'none':
+            try:
+                _schema(root, schema_id)
+            except ConfigurationError as error:
+                raise ProfileError(code, f'output_schema_id {schema_id!r}: no {OUTPUT_SCHEMA_FILE} in the bundle and '
+                                   f'no project contract: {error}') from error
+        return None
+    if schema_id == 'none':
+        raise ProfileError(code, f'{OUTPUT_SCHEMA_FILE} is present but output_schema_id is none; name its $id or '
+                           'remove the file')
+    try:
+        schema = strict_json(raw)
+        if not isinstance(schema, dict):
+            raise ValueError('expected a JSON object')
+        Draft202012Validator.check_schema(schema)
+    except (ValueError, RecursionError, schema_exceptions.SchemaError) as error:
+        raise ProfileError(code, f'{OUTPUT_SCHEMA_FILE}: not a valid JSON Schema ({type(error).__name__})') from error
+    if schema.get('$id') != schema_id:
+        raise ProfileError(code, f'{OUTPUT_SCHEMA_FILE}: $id must equal output_schema_id {schema_id!r}')
+    try:
+        clash = _schema_path(root, schema_id).exists()
+    except ConfigurationError as error:
+        raise ProfileError(code, f'output_schema_id {schema_id!r}: {error}') from error
+    if clash:
+        raise ProfileError(code, f'output_schema_id {schema_id!r} is also a project contract; give the bundle schema '
+                           'its own id')
+    return schema_id, schema, hashlib.sha256(raw).hexdigest()
+
+
+def _output_schema_tag(view):
+    """The activation binding of the bundle schema: `sha256:<hex>` of its bytes, or None without one."""
+    return None if view.output_schema is None else 'sha256:' + view.output_schema[2]
+
+
+def _golden_cases(manifest, bundle, root, schema, rag_enabled):
+    """Every golden case, checked before any case runs. A golden_case.v0 file is refused by name (its cases carry no
+    retrieval switch, so its meaning would be guessed), and so is a case that needs retrieval under a configuration with
+    retrieval off (the run could only prove something else, R-009)."""
     ids = manifest['golden_tests']
     if not ids:
         raise ProfileError('PROFILE_GOLDEN_MISSING', 'a profile needs at least one golden test before activation')
@@ -543,11 +620,18 @@ def _golden_cases(manifest, bundle, root, schema):
     cases, covered = [], set()
     inputs = _golden_inputs(ids, bundle, root, 'PROFILE_GOLDEN_INVALID')
     for case_id, _, case, image in inputs:
+        if isinstance(case, dict) and case.get('schema_version') == GOLDEN_RETIRED_VERSION:
+            raise ProfileError('PROFILE_GOLDEN_INVALID', f'{case_id}: schema_version 1 (golden_case.v0) is retired; '
+                               f'restate the case as {GOLDEN_SCHEMA} (schema_version 2) with request.retrieval and '
+                               'expect.grounding')
         errors = _errors(schema, case)
         if errors:
             raise ProfileError('PROFILE_GOLDEN_INVALID', f'{case_id}: {errors[0]}', errors=errors)
         if case['id'] != case_id:
             raise ProfileError('PROFILE_GOLDEN_INVALID', f'{case_id}: file holds id {case["id"]!r}')
+        if case['request']['retrieval'] == 'enabled' and not rag_enabled:
+            raise ProfileError('PROFILE_GOLDEN_INVALID', f'{case_id}: request.retrieval is enabled but rag.enabled is '
+                               'false in the configuration')
         unknown = sorted(set(case['covers']) - conflict_ids)
         if unknown:
             raise ProfileError('PROFILE_GOLDEN_INVALID', f'{case_id}: covers unknown conflicts {unknown}')
@@ -599,6 +683,25 @@ def _golden_fingerprint(inputs):
     entries = [[case_id, sha256_tag(raw), None if image is None else sha256_tag(image)]
                for case_id, raw, _, image in sorted(inputs, key=lambda item: item[0])]
     return sha256_tag(json.dumps(entries, separators=(',', ':')).encode('utf-8'))
+
+
+def golden_codes(case, envelope):
+    """The judging codes of one schema-valid envelope against its golden_case.v1 case; empty means it passes.
+
+    Decision 199: a grounding case passes only with `retrieval.state` `retrieved` and a status the case lists (the case
+    schema allows only `success` and `repaired` there), so a degraded run never passes it, whatever made it degraded.
+    A retrieval-off case must report `disabled` (R-009)."""
+    codes = []
+    if envelope['status'] not in case['expect']['status']:
+        codes.append(GOLDEN_STATUS_UNEXPECTED)
+    if case['expect']['grounding'] == 'required':
+        if envelope['status'] == 'degraded':
+            codes.append(GOLDEN_GROUNDING_DEGRADED)
+        if envelope['retrieval']['state'] != 'retrieved':
+            codes.append(GOLDEN_NOT_GROUNDED)
+    if case['request']['retrieval'] == 'disabled' and envelope['retrieval']['state'] != 'disabled':
+        codes.append(GOLDEN_RETRIEVAL_NOT_DISABLED)
+    return codes
 
 
 def _writer_brief(config, root, code):
@@ -666,10 +769,13 @@ async def _check_locked(config, profile_id, runner, bundle, root):
     brief = _writer_brief(config, root, 'PROFILE_GOLDEN_INVALID')
     writer_binding = _writer_binding(brief)
     view = replace(_view(profile_id, manifest, manifest_raw, prompt, config, root, None), writer_brief=brief)
-    cases, golden_inputs_sha256 = _golden_cases(manifest, bundle, root, schemas[GOLDEN_SCHEMA][1])
+    cases, golden_inputs_sha256 = _golden_cases(manifest, bundle, root, schemas[GOLDEN_SCHEMA][1],
+                                                config['rag']['enabled'] is True)
     results = []
     for case, image in cases:
-        request = {'task': case['request']['task'], 'prompt': case['request']['prompt'], 'source_image': image}
+        # `retrieval` selects the runner's pipeline for this case only (GoldenAdapter); it is not a request field.
+        request = {'task': case['request']['task'], 'prompt': case['request']['prompt'], 'source_image': image,
+                   'retrieval': case['request']['retrieval']}
         entry = {'id': case['id'], 'status': None, 'passed': False, 'envelope_sha256': None, 'diagnostics': None}
         # T017-FIX (F3): the production runner also returns the case's stage codes (GoldenAdapter.run_case); a
         # runner without run_case (a test double) records null diagnostics.
@@ -695,11 +801,12 @@ async def _check_locked(config, profile_id, runner, bundle, root):
             entry['error'] = 'ENVELOPE_INVALID'
         else:
             entry['status'] = envelope['status']
-            entry['warnings'] = list(envelope['warnings'])  # schema enum codes (response_envelope.v0)
+            entry['warnings'] = list(envelope['warnings'])  # schema enum codes (response_envelope.v1)
             structural_failures = [] if envelope['output'] is None else check_output(
                 envelope['output'], view.validator_artifacts, project_root=root,
                 output_format=output_format(view.manifest, view.validator_artifacts))
-            entry['passed'] = envelope['status'] in case['expect']['status'] and not structural_failures
+            entry['codes'] = golden_codes(case, envelope)
+            entry['passed'] = not entry['codes'] and not structural_failures
             if structural_failures:
                 entry['validator_failures'] = structural_failures
             entry['envelope_sha256'] = sha256_tag(json.dumps(envelope, sort_keys=True, ensure_ascii=False,
@@ -715,6 +822,7 @@ async def _check_locked(config, profile_id, runner, bundle, root):
     activation = {'profile_id': profile_id, 'system_prompt_sha256': view.system_prompt_sha256,
                   'manifest_sha256': view.manifest_sha256, 'addendum': addendum,
                    'validator_hashes': dict(view.validator_hashes),
+                  'output_schema_sha256': _output_schema_tag(view),  # T017-FIX3: the bundle schema the writer sent
                   'config_keys_sha256': _config_fingerprint(manifest, config),
                   'golden_inputs_sha256': golden_inputs_sha256,  # the bytes the runner was given
                   'golden_results_sha256': sha256_tag(report_bytes),
@@ -729,8 +837,10 @@ async def _check_locked(config, profile_id, runner, bundle, root):
     current_inputs = _golden_inputs(manifest['golden_tests'], bundle, root, 'PROFILE_CHANGED')
     current_addendum = render_addendum(manifest['conflicts'], config, load_prompt(root, ADDENDUM_ID))
     _, current_validator_hashes = load_validators(bundle, manifest['validator']['checks'], project_root=root)
+    current_output_schema = load_output_schema(manifest, bundle, root)
     if current_raw != manifest_raw or current_prompt != prompt \
             or current_validator_hashes != view.validator_hashes \
+            or current_output_schema != view.output_schema \
             or _golden_fingerprint(current_inputs) != golden_inputs_sha256 \
             or _schema_hashes(root) != activation['schemas_sha256'] \
             or _writer_binding(_writer_brief(config, root, 'PROFILE_CHANGED')) != writer_binding \
@@ -789,6 +899,8 @@ def resolve_profile(config, profile_id=None, *, project_root):
     view = replace(_view(profile_id, manifest, manifest_raw, prompt, config, root, activation), writer_brief=brief)
     if activation.get('validator_hashes') != view.validator_hashes:
         raise ProfileError('PROFILE_NOT_CHECKED', 'a validator artifact differs from the checked one; run profile check')
+    if activation.get('output_schema_sha256') != _output_schema_tag(view):
+        raise ProfileError('PROFILE_NOT_CHECKED', f'{OUTPUT_SCHEMA_FILE} differs from the checked one; run profile check')
     expected = None if view.addendum is None else {'id': view.addendum['id'], 'sha256': view.addendum['sha256']}
     if activation.get('addendum') != expected:
         raise ProfileError('PROFILE_NOT_CHECKED', 'the runtime addendum differs from the checked one; run profile check')

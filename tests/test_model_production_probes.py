@@ -796,7 +796,7 @@ def test_cloud_headers_loaded_once_per_backend_per_run(production_env, monkeypat
 
     def headers(provider, backend, root):
         loads.append(provider)  # Labelled loader double; no filesystem or credential logging.
-        return {'Authorization': 'Bearer synthetic-test-only'}
+        return {'x-api-key': 'synthetic-test-only'}
 
     monkeypatch.setattr(model_client, 'cloud_headers', headers)
 
@@ -811,7 +811,7 @@ def test_cloud_headers_loaded_once_per_backend_per_run(production_env, monkeypat
                 for _ in range(2):
                     _, record = await first.call(b'system', '{"request":"generation"}')
                     assert record['status'] == 'OK'
-                    assert 'Authorization' not in json.dumps(record)
+                    assert 'x-api-key' not in json.dumps(record) and 'synthetic-test-only' not in json.dumps(record)
                 observer = await run.for_role('observer')
                 _, images = probes.load_probe_bundle(env.root)
                 _, record = await observer.call(b'system', '{"request":"generation"}',

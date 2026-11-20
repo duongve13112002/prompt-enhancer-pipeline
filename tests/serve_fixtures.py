@@ -288,7 +288,8 @@ class StubResponse:
 
 def stub_envelope(output='ok', status='success', trace_id='r-stub'):
     return {'status': status, 'output': output, 'attachments': [], 'source_binding': None,
-            'retrieval': {'state': 'disabled', 'snapshot_id': None}, 'warnings': [], 'trace_id': trace_id}
+            'retrieval': {'state': 'disabled', 'snapshot_id': None, 'error': None}, 'warnings': [],
+            'trace_id': trace_id}
 
 
 class StubPipeline:

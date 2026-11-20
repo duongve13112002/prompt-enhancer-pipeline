@@ -65,7 +65,8 @@ def bind_verifier(config, profile, *, project_root, require_calibration):
         cached_registry(root / 'contracts/schemas').validate('verifier_calibration.v0', value)
         roles = config['vlm']['roles']
         writer_config = deepcopy(config)
-        writer_config['vlm']['roles']['writer'] = resolve_writer_format(roles['writer'], profile.manifest, project_root=root)
+        writer_config['vlm']['roles']['writer'] = resolve_writer_format(roles['writer'], profile.manifest, project_root=root,
+                                                                     profile_schema_id=getattr(profile, 'output_schema_id', None))
         brief = getattr(profile, 'writer_brief', None)
         writer_prompt = brief[1] if brief else load_prompt(root, roles['writer']['prompt_id'])
         expected = {

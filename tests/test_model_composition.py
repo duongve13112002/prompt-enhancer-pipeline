@@ -341,7 +341,7 @@ def test_cloud_budget_is_shared_by_roles_from_same_run(tmp_path, project_root, p
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
-            seen.append((self.headers.get('Authorization'), self.headers.get('anthropic-version')))
+            seen.append((self.headers.get('x-api-key'), self.headers.get('anthropic-version')))
             requests.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
             payload = ({'stop_reason': 'end_turn', 'content': [{'type': 'text', 'text': 'ok'}]}
                        if self.path == '/cloud' else
@@ -412,23 +412,23 @@ def test_cloud_budget_is_shared_by_roles_from_same_run(tmp_path, project_root, p
                     assert result == 'ok'
                     if policy == 'image_local':
                         assert record['backend'] == 'main'
-                        assert seen == [('Bearer synthetic', '2025-01-01'), (None, None), (None, None)]
+                        assert seen == [('synthetic', '2025-01-01'), (None, None), (None, None)]
                     else:
                         assert record['backend'] == 'cloud_claude'
                         assert requests[-1]['messages'][0]['content'][1]['type'] == 'image'
-                        assert seen == [('Bearer synthetic', '2025-01-01')] * 2
+                        assert seen == [('synthetic', '2025-01-01')] * 2
                     return
                 assert (await first.call(b'system', 'one'))[0] == 'ok'
                 assert (await second.call(b'system', 'two'))[0] == 'ok'
                 if policy == 'stop':
                     with pytest.raises(ModelCallError, match='BUDGET_EXHAUSTED'):
                         await second.call(b'system', 'three')
-                    assert seen == [('Bearer synthetic', '2025-01-01')] * 3
+                    assert seen == [('synthetic', '2025-01-01')] * 3
                 else:
                     result, record = await second.call(b'system', 'three')
                     assert result == 'ok' and record['backend'] == 'main'
                     assert ('BUDGET_EXHAUSTED', 'cloud_claude') in record['warnings']
-                    assert seen == [('Bearer synthetic', '2025-01-01')] * 3 + [(None, None), (None, None)]
+                    assert seen == [('synthetic', '2025-01-01')] * 3 + [(None, None), (None, None)]
             finally:
                 await first.close()
 

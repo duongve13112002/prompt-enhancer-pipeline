@@ -32,7 +32,7 @@ STORED_SCHEMA = 'image_observation.v0'
 REPLY_SCHEMA = 'observer_reply.v1'
 # declared revision of the code that shapes a K2 observation (KBS-S3-1); keys the artifacts in place of a hash of
 # module source. Bump it with any edit to a function its guard pins (tests/test_stage_revisions.py).
-K2_OBSERVE_REVISION = 'k2-observe-3'
+K2_OBSERVE_REVISION = 'k2-observe-4'
 
 
 def group_images(images, vectors, distance, *, revision, dim):

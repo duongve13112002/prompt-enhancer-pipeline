@@ -12,7 +12,7 @@ from .assembly import CHANNEL, attached_note
 from .config import ConfigurationError, resolve_writer_format, validate_writer_reads
 from .model_client import ModelCallError, safe_model_code
 from .model_json import check_json_depth
-from .model_schemas import SchemaRegistry
+from .model_schemas import SchemaRegistry, with_output_schema
 from .planner import drops_seed
 from .profile_prompt import ProfileError, load_prompt, placeholders, sha256_tag
 from .profile_validators import validate_artifact
@@ -121,7 +121,8 @@ def prepare_write(intake_result, plan_result, assembly_result, *, project_root, 
         raise ValueError('S4 requires a matching task without pending clarification')
     if not config['rag']['enabled'] and assembly_result is not None:
         raise ValueError('S4: retrieval off has no assembly result')
-    registry = SchemaRegistry(root / 'contracts' / 'schemas')
+    # T017-FIX3: the admin bundle's output schema (if any) beside the contracts; the client binds the same one.
+    registry = with_output_schema(SchemaRegistry(root / 'contracts' / 'schemas'), getattr(profile, 'output_schema', None))
     registry.validate('plan_result.v1', plan_result)
     if config['rag']['enabled']:
         if assembly_result is None:
@@ -140,7 +141,8 @@ def prepare_write(intake_result, plan_result, assembly_result, *, project_root, 
         if not config['writer']['runtime_addendum']:
             raise ConfigurationError('writer.runtime_addendum: a required addendum cannot be disabled')
     addendum = None if profile.addendum is None else profile.addendum['text']
-    resolved_role = resolve_writer_format(config['vlm']['roles'][ROLE], profile.manifest, project_root=root)
+    resolved_role = resolve_writer_format(config['vlm']['roles'][ROLE], profile.manifest, project_root=root,
+                                          profile_schema_id=getattr(profile, 'output_schema_id', None))
     selected_backend = config['vlm']['backends'][resolved_role['backend']]
     if selected_backend['provider'] != 'openai_compatible' and resolved_role['output']['format'] != 'none':
         raise ConfigurationError('vlm.roles.writer.output: cloud structured output mapping is not verified')

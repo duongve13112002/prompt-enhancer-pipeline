@@ -15,7 +15,7 @@ def test_cloud_headers_use_synthetic_credentials(tmp_path):
     (root / 'fake.key').write_text('fake-token', encoding='utf-8')
     backend = {'api_key_file': '.secrets/fake.key', 'anthropic_version': '2025-01-01', 'anthropic_workspace_id': 'none'}
     assert cloud_headers('anthropic', backend, tmp_path) == {
-        'Authorization': 'Bearer fake-token', 'anthropic-version': '2025-01-01'}
+        'x-api-key': 'fake-token', 'anthropic-version': '2025-01-01'}
     assert cloud_headers('gemini', backend, tmp_path) == {'x-goog-api-key': 'fake-token'}
     backend['anthropic_version'] = 'deploy_required'
     with pytest.raises(ValueError):
@@ -42,7 +42,7 @@ def test_exact_cloud_request_headers_redacted(provider, workspace, tmp_path):
         def handler(request):
             names = ('authorization', 'x-api-key', 'x-goog-api-key', 'anthropic-version', 'anthropic-workspace-id', 'content-type')
             selected = {name: request.headers[name] for name in names if name in request.headers}
-            expected = ({'authorization': 'Bearer synthetic-key', 'anthropic-version': '2025-01-01',
+            expected = ({'x-api-key': 'synthetic-key', 'anthropic-version': '2025-01-01',
                          'content-type': 'application/json'} if provider == 'anthropic' else
                         {'x-goog-api-key': 'synthetic-key', 'content-type': 'application/json'})
             if provider == 'anthropic' and workspace != 'none':

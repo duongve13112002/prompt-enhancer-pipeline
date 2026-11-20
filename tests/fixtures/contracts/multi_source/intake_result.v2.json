@@ -1,0 +1,43 @@
+{
+  "schema": "intake_result.v2",
+  "note": "Contract examples for the multi-source design (draft, designed, not yet implemented). A case is the base with 'set' (path, value) and 'delete' (path) edits applied.",
+  "base": {
+    "outcome": "ready",
+    "request_id": "req-0001",
+    "prompt": "Đặt cô gái ở ảnh 2 vào quán cà phê ở ảnh 1",
+    "task": "edit",
+    "profile_id": "_example",
+    "effective_config": {},
+    "config_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "request_version": "request.v1",
+    "source_images": [
+      {"index": 1, "image_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "role": "source_image", "data": "aGVsbG8="},
+      {"index": 2, "image_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222", "role": "source_image", "data": "d29ybGQ="}
+    ],
+    "retrieval": {"state": "disabled", "snapshot_id": null},
+    "warnings": [],
+    "error": null,
+    "envelope": null
+  },
+  "valid": [
+    {"name": "two sources in request order"},
+    {"name": "worked example 1, a request.v0 with one image migrated to a list of one", "set": [[["request_version"], "request.v0"], [["source_images"], [{"index": 1, "image_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "role": "source_image", "data": "aGVsbG8="}]]]},
+    {"name": "generate holds an empty list", "set": [[["task"], "generate"], [["source_images"], []]]}
+  ],
+  "invalid": [
+    {"name": "0-based index", "set": [[["source_images", 0, "index"], 0]]},
+    {"name": "edit with an empty list", "set": [[["source_images"], []]]},
+    {"name": "generate with an image", "set": [[["task"], "generate"]]},
+    {"name": "request_version missing", "delete": [["request_version"]]},
+    {"name": "unknown request_version", "set": [[["request_version"], "request.v2"]]},
+    {"name": "role other than source_image", "set": [[["source_images", 1, "role"], "user_reference"]]},
+    {"name": "the v0 field is still present", "set": [[["source_image"], null]]},
+    {"name": "non-integer index", "set": [[["source_images", 1, "index"], "2"]]}
+  ],
+  "code_refused": [
+    {"name": "a gap in the indexes (1, 3)", "why": "S0 builds indexes 1..n in request order; a schema cannot see n", "set": [[["source_images", 1, "index"], 3]]},
+    {"name": "indexes out of order (2, 1)", "why": "same", "set": [[["source_images", 0, "index"], 2], [["source_images", 1, "index"], 1]]},
+    {"name": "the same index twice", "why": "same", "set": [[["source_images", 1, "index"], 1]]},
+    {"name": "two entries with one image_id", "why": "SOURCE_IMAGE_DUPLICATE is refused before intake builds a result, MS-3", "set": [[["source_images", 1, "image_id"], "sha256:1111111111111111111111111111111111111111111111111111111111111111"]]}
+  ]
+}

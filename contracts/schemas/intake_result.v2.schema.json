@@ -1,0 +1,342 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "intake_result.v2",
+  "title": "S0 intake result payload, source images as a list (live profile and lease stay outside JSON)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "outcome",
+    "request_id",
+    "prompt",
+    "task",
+    "profile_id",
+    "effective_config",
+    "config_hash",
+    "request_version",
+    "source_images",
+    "retrieval",
+    "warnings",
+    "error",
+    "envelope"
+  ],
+  "properties": {
+    "outcome": {
+      "enum": [
+        "ready",
+        "degraded",
+        "refused"
+      ]
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "task": {
+      "enum": [
+        "generate",
+        "edit",
+        null
+      ]
+    },
+    "profile_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "effective_config": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "config_hash": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "request_version": {
+      "enum": [
+        "request.v0",
+        "request.v1"
+      ]
+    },
+    "source_images": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "index",
+          "image_id",
+          "role",
+          "data"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "image_id": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "role": {
+            "const": "source_image"
+          },
+          "data": {
+            "type": "string",
+            "contentEncoding": "base64"
+          }
+        }
+      }
+    },
+    "retrieval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "snapshot_id"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "disabled",
+            "pinned",
+            "failed"
+          ]
+        },
+        "snapshot_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "pinned"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "snapshot_id": {
+                "type": "string"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "snapshot_id": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "warnings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "const": "SNAPSHOT_MISSING"
+      }
+    },
+    "error": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "envelope": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "response_envelope.v1"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "const": "refused"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "error": {
+            "type": "object"
+          },
+          "envelope": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "failed"
+              },
+              "output": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "prompt": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "effective_config": {
+            "type": "object"
+          },
+          "config_hash": {
+            "type": "string"
+          },
+          "error": {
+            "type": "null"
+          },
+          "envelope": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "const": "degraded"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "warnings": {
+            "contains": {
+              "const": "SNAPSHOT_MISSING"
+            }
+          },
+          "retrieval": {
+            "properties": {
+              "state": {
+                "const": "failed"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "const": "ready"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "warnings": {
+            "maxItems": 0
+          },
+          "retrieval": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "disabled",
+                  "pinned"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "task": {
+            "const": "edit"
+          },
+          "outcome": {
+            "enum": [
+              "ready",
+              "degraded"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source_images": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "task": {
+            "const": "generate"
+          }
+        },
+        "required": [
+          "task"
+        ]
+      },
+      "then": {
+        "properties": {
+          "source_images": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "$comment": "Draft v2 (MS-1, designed, not yet implemented). Built by S0 for every request once MS-3 lands, with the source images as a list. It is intake_result.v1 (T017-FIX3: intake_result.v0 with the refusal envelope under response_envelope.v1) plus request_version and source_images in place of source_image: a request.v0 with one source_image becomes a list of one, and request_version records which shape arrived. index is 1-based and follows the request order; code checks the indexes run 1..n without gaps, that no two images share an image_id (SOURCE_IMAGE_DUPLICATE) and the limits. envelope references response_envelope.v1, which T017-FIX3 writes before the multi-source tasks start; this tree may not hold it yet, and then the instances of this schema cannot be resolved. response_envelope.v2, the multi-source envelope, is MS-5 and is not referenced here."
+}

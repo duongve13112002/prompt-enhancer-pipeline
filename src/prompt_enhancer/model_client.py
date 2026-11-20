@@ -14,7 +14,7 @@ from .config import (ConfigurationError, NO_MEDIA_TYPE, _sentinel, attempt_seed_
                      resolve_backend_engine, resolve_writer_format)
 from .model_cloud import cloud_headers, cloud_request
 from .model_json import strict_json
-from .model_mapping import effective_system_hash, openai_request
+from .model_mapping import effective_system_hash, openai_request, provider_maps_seed, seed_field_note
 from .model_image import configure_decode_backstop, prepare_image
 from .model_probe import (ProbeResult, probe_backend, probe_local_image_pair, probe_local_thinking_pair,
                          probe_local_multiple_images_pair, multiple_images_plan, multiple_images_probe_cases,
@@ -22,7 +22,7 @@ from .model_probe import (ProbeResult, probe_backend, probe_local_image_pair, pr
                          load_probe_bundle, production_probe_cases, prepare_probe_image, BUNDLE_ID,
                          ProbeLimitExhausted, PROBE_CODES, PROBE_SCHEMA, probe_image_hashes, summarize_probe_group)
 from .model_resources import BackendConcurrency, BudgetExhausted, SingleRunBudgetLedger
-from .model_schemas import cached_registry
+from .model_schemas import cached_registry, with_output_schema
 from .model_transport import ModelTransport
 from pathlib import Path
 
@@ -30,7 +30,7 @@ from pathlib import Path
 # artifact-bound: declared revision of the shared model-call path (request mapping, image preparation, reply parsing)
 # that every K2, K3 and K4 artifact passes through (KBS-S3-1). It keys those artifacts in place of a hash of module
 # source; bump it in the same change that edits a function its guard pins (tests/test_stage_revisions.py).
-MODEL_CALL_REVISION = 'model-call-5'
+MODEL_CALL_REVISION = 'model-call-6'  # T017-FIX3 bundle schema id in `_call`; CLOUD-1 Anthropic structured output
 
 # Protocol-bound public failure codes; never expose arbitrary exception/model text.
 MODEL_CODES = frozenset(('MODEL_CALL_FAILED', 'MODEL_CALL_INVALID', 'CAPABILITY_UNAVAILABLE',
@@ -48,7 +48,8 @@ def _safe_attempts(attempts):
     return [{'attempt': entry['attempt'], 'seed': entry['seed'],
              'code': entry['code'] if entry['code'] in PROBE_CODES else None,
              'reply_digest': entry['reply_digest'] if type(entry['reply_digest']) is str
-             and len(entry['reply_digest']) == 64 else None}
+             and len(entry['reply_digest']) == 64 else None,
+             **({'seed_field': 'none_in_protocol'} if entry.get('seed_field') == 'none_in_protocol' else {})}
             for entry in attempts if isinstance(entry, dict) and type(entry.get('attempt')) is int
             and entry['attempt'] >= 0 and type(entry.get('seed')) in (int, type(None))
             and ('code' in entry and 'reply_digest' in entry)]
@@ -190,9 +191,21 @@ class ModelClientRun:
         self.transports = {}
         self.probes = {}
         self.schemas = cached_registry(self.project_root / 'contracts' / 'schemas')  # checked once per unchanged set
+        self._contract_schemas = self.schemas
         self.client = RoleClient(self.config, self.transports, self.probes, self.schemas,
                                  project_root=self.project_root, probe_cases=probe_cases,
                                  local_probe_plans=local_probe_plans)
+
+    def use_output_schema(self, output_schema):
+        """Bind the request's admin bundle schema `(schema_id, schema, sha256 hex)` (T017-FIX3, decision 194), or none.
+
+        The client is composed per request, so this request-scoped registry (the project contracts plus that schema)
+        is the one every writer attempt sends and validates against, S5 repairs included: the reply is checked against
+        the same parsed schema that went into the body. Always derived from the contract registry, so binding again
+        replaces the previous schema instead of stacking it."""
+        self.schemas = with_output_schema(self._contract_schemas, output_schema)
+        self.client.schemas = self.schemas
+        self.client.output_schema_id = None if output_schema is None else output_schema[0]
 
     async def for_role(self, role_name, *, require=()):
         validate_require(require)
@@ -272,6 +285,10 @@ class BoundModelClient:
         validate_require(require)
         return await self.run.for_role(role_name, require=require)
 
+    def use_output_schema(self, output_schema):
+        """The run's request-scoped admin output schema (`ModelClientRun.use_output_schema`); shared by every role."""
+        self.run.use_output_schema(output_schema)
+
     async def close(self):
         await self.run.close()
 
@@ -318,6 +335,7 @@ class RoleClient:
         self.transports = transports
         self.probes = probes
         self.schemas = schemas
+        self.output_schema_id = None  # the admin bundle's writer schema id, set by ModelClient.use_output_schema
         self.project_root = project_root
         self._production = probe_cases is None and local_probe_plans is None and not probes
         self._bundle = None
@@ -432,22 +450,25 @@ class RoleClient:
         if problem:
             raise ModelCallError(f'CONFIGURATION_INVALID: probe.image_attempts {attempts}: {problem}')
         base = role['sampling']['seed']
+        # CLOUD-1: a protocol with no seed field (Anthropic) retries as a fresh sample; its entries say so.
+        sends_seed = provider_maps_seed(backend['provider'])
+        note = seed_field_note(backend['provider'])
 
         def code_of(error):
             return error if error in PROBE_CODES else ('PROBE_FAILED' if error else None)
 
         capabilities, errors, digests = dict(result.capabilities), dict(result.errors), dict(result.digests)
-        log = {name: [{'attempt': 0, 'seed': base, 'code': code_of(errors.get(name)),
-                       'reply_digest': digests.get(name)}] for name in cases}
+        log = {name: [{'attempt': 0, 'seed': base if sends_seed else None, 'code': code_of(errors.get(name)),
+                       'reply_digest': digests.get(name), **note}] for name in cases}
         for attempt in range(1, attempts):
             pending = [name for name in cases if errors.get(name) == 'PROBE_MALFORMED']
             if not pending:
                 break
-            seed = attempt_seed(base, attempt)
+            seed = attempt_seed(base, attempt) if sends_seed else None
             dropped = []
             built = production_probe_cases(bundle, self._bundle_images(), backend, role, self.config['vision'],
                                            'image', side, warnings=dropped, seed=seed)
-            if any(tuple(item) == ('PARAM_UNSUPPORTED', 'sampling.seed') for item in dropped):
+            if sends_seed and any(tuple(item) == ('PARAM_UNSUPPORTED', 'sampling.seed') for item in dropped):
                 raise ModelCallError('CONFIGURATION_INVALID: the backend dropped sampling.seed, so a retry would repeat the request')
             subset = {name: built[name] for name in pending}
             count = self._take_probe_requests(backend_name, len(subset))
@@ -467,7 +488,7 @@ class RoleClient:
                     errors[name] = sub.errors.get(name, 'PROBE_INCOMPLETE')
                 if name in sub.capabilities or name in sub.errors:
                     log[name].append({'attempt': attempt, 'seed': seed, 'code': code_of(sub.errors.get(name)),
-                                      'reply_digest': sub.digests.get(name)})
+                                      'reply_digest': sub.digests.get(name), **note})
         return ProbeResult('complete', capabilities, errors, digests=digests), log
 
     async def _production_probe(self, backend_name, role_name, *, require=(), role=None):
@@ -765,7 +786,8 @@ class RoleClient:
         if role_name == 'writer':
             if manifest is None:
                 raise ModelCallError('writer requires a profile manifest')
-            role = resolve_writer_format(role, manifest, project_root=self.project_root)
+            role = resolve_writer_format(role, manifest, project_root=self.project_root,
+                                         profile_schema_id=self.output_schema_id)
         backend_name = role['backend']
         if images and isinstance(role['image'], dict):
             permitted = IMAGE_SOURCE_ROLES.get(role['image']['source'], ())
@@ -883,11 +905,13 @@ class RoleClient:
                 schema, schema_hash = self.schemas.get(schema_id)
             # A derived schema's digest (canonical JSON, `_digest`, like the body) is named after where it went:
             # `sent_schema_hash` when it is placed in the body, `client_schema_hash` when only the client checks it.
+            # Anthropic (CLOUD-1): the body carries the stripped copy of the full schema, so `sent_schema_hash` is taken
+            # from the built body below, and the derived full schema is `client_schema_hash`.
             schema_hashes = {}
             if sent_schema is not None:
                 if output['format'] == 'json_schema' and provider == 'anthropic':
                     cloud_schema = sent_schema
-                    schema_hashes['sent_schema_hash'] = _digest(sent_schema)
+                    schema_hashes['client_schema_hash'] = _digest(sent_schema)
                 elif output['format'] == 'json_schema' and provider == 'openai_compatible':
                     schema = sent_schema
                     schema_hashes['sent_schema_hash'] = _digest(sent_schema)
@@ -909,6 +933,8 @@ class RoleClient:
                 body, cloud_warnings = cloud_request(provider, backend, sent_role, system_prompt.decode('utf-8'), user_text,
                                                      schema=cloud_schema, images=cloud_images, addendum=addendum_text)
                 warnings.extend(cloud_warnings)
+                if provider == 'anthropic' and output['format'] == 'json_schema':
+                    schema_hashes['sent_schema_hash'] = _digest(body['output_config']['format']['schema'])
             body_hash = _digest(body)
             system_hash = effective_system_hash(provider, body)  # T017-FIX: over the system texts of the posted body
             image_config = role['image']

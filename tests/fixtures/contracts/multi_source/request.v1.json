@@ -1,0 +1,24 @@
+{
+  "schema": "request.v1",
+  "note": "Contract examples for the multi-source design (draft, designed, not yet implemented). A case is the base with 'set' (path, value) and 'delete' (path) edits applied. Base64 strings are tiny test-only placeholders.",
+  "base": {"prompt": "Đặt cô gái ở ảnh 2 vào quán cà phê ở ảnh 1", "task": "edit", "source_images": ["aGVsbG8=", "d29ybGQ="]},
+  "valid": [
+    {"name": "two sources, request order is the index order"},
+    {"name": "worked example 1, as v1: one source", "set": [[["source_images"], ["aGVsbG8="]]]},
+    {"name": "generate without images", "set": [[["task"], "generate"]], "delete": [["source_images"]]}
+  ],
+  "invalid": [
+    {"name": "both source_image and source_images", "why": "source_image is not a v1 property", "set": [[["source_image"], "aGVsbG8="]]},
+    {"name": "empty list", "set": [[["source_images"], []]]},
+    {"name": "edit without images", "delete": [["source_images"]]},
+    {"name": "generate with images", "set": [[["task"], "generate"]]},
+    {"name": "an image that is not a string", "set": [[["source_images", 1], 7]]},
+    {"name": "images as one string, not a list", "set": [[["source_images"], "aGVsbG8="]]},
+    {"name": "unknown task", "set": [[["task"], "inpaint"]]}
+  ],
+  "code_refused": [
+    {"name": "more images than the configured limit", "why": "the caps are configuration values (edit.max_source_images, renderer.max_source_images); SOURCE_IMAGES_TOO_MANY, MS-3", "set": [[["source_images"], ["YQ==", "Yg==", "Yw==", "ZA==", "ZQ=="]]]},
+    {"name": "two images with the same bytes", "why": "SOURCE_IMAGE_DUPLICATE, MS-3", "set": [[["source_images"], ["aGVsbG8=", "aGVsbG8="]]]},
+    {"name": "text that is not base64 at index 2", "why": "contentEncoding is an annotation; S0 decodes and names the index, MS-3", "set": [[["source_images", 1], "not base64 !!"]]}
+  ]
+}

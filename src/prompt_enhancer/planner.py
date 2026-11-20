@@ -157,6 +157,16 @@ def drops_seed(record):
     return any(isinstance(item, (tuple, list)) and tuple(item) == SEED_WARNING for item in record.get('warnings', ()))
 
 
+def refuses_retry(record):
+    """A retry must be refused: the record says the backend dropped `sampling.seed` AND its protocol has a seed field,
+    so a seeded retry would repeat the request. A protocol with no seed field (Anthropic) never refuses: its retry is
+    a fresh sample (CLOUD-1, decision 195 round). Keyed on `model_mapping.SAMPLING`, never on a model or provider name
+    here."""
+    from .model_mapping import provider_maps_seed
+
+    return drops_seed(record) and provider_maps_seed(record.get('provider'))
+
+
 def check_reply(reply, prompt, task, entries, variants, facet_groups):
     """Invariants of a schema-valid reply; any failure makes the whole reply invalid (never repaired)."""
     def unique(values, what):
@@ -382,6 +392,7 @@ async def plan(intake_result, shortlist, client, *, project_root, embedder=None)
     seeded = type(base_seed) is int  # an unseeded role stays unseeded: its retry is a plain resend, a fresh draw
 
     async def ask(shortlist_entries):
+        from .model_mapping import provider_maps_seed, seed_field_note
         from .reply_retry import attempt_seed, reply_digest  # lazy: reply_retry imports SEED_BITS from this module
 
         text = _data(payload, config, manifest, shortlist_entries, variants)
@@ -392,9 +403,10 @@ async def plan(intake_result, shortlist, client, *, project_root, embedder=None)
         for attempt in range(2):
             seed = None
             if attempt and seeded:
-                if drops_seed(calls[-1]):  # the retry would repeat attempt 0 byte for byte: refused, not sent
+                if refuses_retry(calls[-1]):  # the retry would repeat attempt 0 byte for byte: refused, not sent
                     return None, ('PLANNER_CALL_FAILED', SEED_DROPPED)
-                seed = attempt_seed(base_seed, attempt)
+                if provider_maps_seed(calls[-1].get('provider')):  # else no seed field: a fresh sample, seed stays None
+                    seed = attempt_seed(base_seed, attempt)
             try:
                 value, record = await client.call(system, text, images=images, schema=bounded, **options,
                                                   **({} if seed is None else {'seed': seed}))
@@ -403,8 +415,12 @@ async def plan(intake_result, shortlist, client, *, project_root, embedder=None)
             calls.append(_plain(record))
             entry = {'attempt': attempt, 'seed': seed if attempt else (base_seed if seeded else None),
                      'code': None, 'reply_digest': None}  # the _safe_attempts shape: counters, codes, digests only
+            note = seed_field_note(record.get('provider'))
+            if note:  # the protocol has no seed field: nothing was sent, whatever the profile states
+                entry['seed'] = None
+                entry.update(note)
             calls[-1]['attempt'] = entry
-            if seed is not None and drops_seed(record):  # e.g. a budget fallback onto a backend without seed
+            if seed is not None and refuses_retry(record):  # e.g. a budget fallback onto a backend without seed
                 entry['code'] = SEED_DROPPED
                 return None, ('PLANNER_CALL_FAILED', SEED_DROPPED)
             if value is None:

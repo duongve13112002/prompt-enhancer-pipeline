@@ -17,6 +17,44 @@ SAMPLING = {
                'seed': 'seed', 'stop': 'stopSequences'},
 }
 
+def provider_maps_seed(provider):
+    """Whether the provider's request protocol has a seed field (`SAMPLING`). An unknown or missing provider counts as
+    seeded, so a retry on it is still refused when it drops the seed (T017-FIX2 stays the default)."""
+    return 'seed' in SAMPLING.get(provider, {'seed': None})
+
+
+def seed_field_note(provider):
+    """Extra keys of an attempt entry: `seed_field: none_in_protocol` when the provider has no seed field, so a
+    `seed: null` retry is read as "the protocol has no seed" and not as "an unseeded profile". Empty otherwise, so
+    records of seeded backends keep their shape."""
+    return {} if provider_maps_seed(provider) else {'seed_field': 'none_in_protocol'}
+
+
+# Protocol-bound request rules of an Anthropic model, keyed by model id. Source: the Claude API skill docs, cache
+# dated 2026-11-03 (Claude Haiku 5.5): `thinking.budget_tokens` returns 400; `thinking: {type: disabled}` is
+# allowed only at effort `high` or below (an unset effort is the documented default `medium`). A new model id needs a
+# new row; a model not listed here is not checked (the API answers).
+ANTHROPIC_MODEL_REQUEST_RULES = {
+    'claude-haiku-5-5': {'thinking_budget_refused': True,
+                         # "high or below" in the role schema's effort order (vlm_role.v0 `effort` enum)
+                         'disabled_thinking_efforts': frozenset(('minimal', 'low', 'medium', 'high'))},
+}
+
+
+def anthropic_reasoning_refusal(model_id, reasoning):
+    """Why the model's documented rules make this reasoning setting an API error (400), or None."""
+    rules = ANTHROPIC_MODEL_REQUEST_RULES.get(model_id)
+    if rules is None:
+        return None
+    mode, effort, budget = reasoning['mode'], reasoning['effort'], reasoning['budget_tokens']
+    if rules['thinking_budget_refused'] and mode == 'on' and budget not in ('none', None):
+        return f'{model_id} refuses thinking.budget_tokens (the API answers 400); use mode auto'
+    if mode == 'off' and effort not in ('none', 'backend_default', None) and effort not in rules['disabled_thinking_efforts']:
+        return (f'{model_id} allows thinking disabled only at effort {sorted(rules["disabled_thinking_efforts"])}, '
+                f'got {effort!r}')
+    return None
+
+
 # Protocol-bound engine/version enums, from vLLM ChatCompletionRequest at v0.11.0 (N057).
 LOCAL_REASONING_EFFORT = {('vllm', '0.11.0'): frozenset(('low', 'medium', 'high'))}
 
@@ -153,6 +191,8 @@ def map_cloud_reasoning(provider, reasoning):
     if provider == 'anthropic':  # A: thinking.enabled, thinking.budget_tokens, output_config.effort
         if mode == 'on' and budget not in ('none', None):
             fields['thinking'] = {'type': 'enabled', 'budget_tokens': budget}
+        elif mode == 'off':
+            fields['thinking'] = {'type': 'disabled'}  # A: thinking.disabled (CLOUD-1, decision 195 round)
         elif mode != 'auto':
             warnings.append(('PARAM_UNSUPPORTED', 'reasoning.mode'))
         if effort not in ('none', 'backend_default', None):

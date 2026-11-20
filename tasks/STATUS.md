@@ -4,21 +4,21 @@ Current state only (character budget: [doc_budgets.json](../tools/agent-workflow
 
 ## Current state
 
-- **2026-11-20 status for the returning user: nothing is running; every next step waits for the user.**
-  - main = `7bb9f74`, pushed; CI 39 green; the repository is private again. No workers and no worktrees run; the GPU is free (0 MiB).
-  - **S42 tooling fix integrated (`7bb9f74`):** `ci_window` views a run again when `gh run view` answers HTTP 404 right after dispatch, only before the run is first seen and within `dispatch_lookup_timeout_seconds`. Gemini Flash diff-only review PASS. Noticed, not fixed: `gh run cancel` and `gh run list` could meet the same transient 404.
-  - **User answers (decisions 194 to 201):** G1 by an admin output schema; quality is tested on Claude Haiku 5.5 through the API, while the local 4B model only tests the local path; MS-1 starts; golden retrieval switch, the S1 code in the envelope, `degraded` never passes a grounding case, a "not reached" retrieval state; the pending PM decisions in the rows below are accepted.
-  - **More answers (decisions 202 to 207):** Haiku 5.5 for any VLM role whose local output is unreliable; 3000 requests; `on_budget_exhausted: stop`; no seed refusal on a backend without a seed parameter; the PM writes the pilot output schema; the workspace is checked with one live request.
-  - **Running:** T017-FIX3 (Claude Opus 5.5 high: the writer sends the admin output schema; the golden retrieval switch; the S1 code, `not_reached` and `degraded` rules), CLOUD-1 (Claude Sonnet 5.5 high: Anthropic structured output, Haiku 5.5 request rules, seedless retries, budget stop), MS-1 (Claude Sonnet 5.5 high: multi-source v1 contracts and prompt drafts). Each is at Step 0.
-  - **Noticed by the PM:** `model_cloud.py:21` sends the Anthropic key as `Authorization: Bearer`; the Claude API skill documents `x-api-key` for API keys and Bearer for OAuth tokens. CLOUD-1 checks it before the one-call live probe.
-  - Cleanup pending: `.tmp/worktrees/T-026-retest3` could not be removed ("link or left partially"); not forced.
+- **2026-11-20: T017-FIX3, CLOUD-1 and MS-1 integrated on main (decisions 194 to 207).** Notes: [implementation-notes](../docs/implementation-notes.md).
+  - **T017-FIX3:** the writer and every S5 repair send the admin bundle's `output_schema.json` and validate against it (G1, decision 194); `golden_case.v1` with the retrieval switch; `response_envelope.v1` and `intake_result.v1` with `retrieval.error` and `not_reached`; `degraded` never passes a grounding case.
+  - **CLOUD-1:** Anthropic structured output with a stripped sent schema, Haiku 5.5 400-rules refused at load, seedless retries, budget `stop`, `x-api-key` instead of Bearer. **PM decision pending user review:** numeric temperature, top_p and top_k in a Haiku role stay warned and unsent (`vlm_role.v0` accepts `none` only for seed and stop).
+  - **MS-1:** multi-source contracts (`request.v1`, `intake_result.v2`, `planner_reply.v1`, `intent_ir.v1`, `plan_result.v2`) and prompt drafts; no runtime change.
+  - **Server impact:** `model-call-6`, `k2-observe-4` and `k3-card-4` make K2, K3 and K4 recompute once at the next `kb sync`; v0 golden cases are refused, so profile golden cases move to `golden_case.v1`; envelopes are v1.
+  - Reviews: each task Gemini Flash PASS and Claude Sonnet PASS, no fix round.
+  - **Next (PM, decisions 202 to 208):** one-call Haiku probe; pilot `output_schema.json`; migrate the pilot golden cases; bind the pilot VLM roles to Haiku 5.5 with `call_budget` and `stop`; record the approval gate; golden J4 on Haiku; then the decision 189 chain.
+  - Noticed, not fixed: `gh run cancel` and `gh run list` could meet the transient 404 that `ci_window` handles for `gh run view`; `.tmp/worktrees/T-026-retest3` could not be removed ("link or left partially"), not forced.
 
-- **2026-11-20 02:5x: T-017 is blocked on the user.**
+- **2026-11-20 02:5x: T-017 was blocked on the user; answered by decisions 194 to 196.**
   - **J4a5 (after T017-FIX2):** the live fix works. llama.cpp accepts the bounded schema; the planner retry differs only in its seed, and `ragoff-02`'s planner passed on the retry.
   - **Planner sampling experiment (decision 186):** two variants, 0.7/0.8/20 and 1.0/0.95/40, against the 0.2/0.9/40 baseline. Neither makes `nomatch-01` or `edit-local-04` pass. The 4B dev planner keeps breaking cross-field invariants: a knowledge need for an unlinked candidate, a relation or edit target naming an undeclared entity, and with hotter sampling also non-verbatim mentions (R-001 refuses them, as designed). This is a 3-case smoke, not a fit (R-020).
   - **G1:** `ragoff-02`'s writer reply still lacks its final `}`; the draft and the reseeded repair are byte-identical.
   - **Consequence:** J4 cannot be green, so the decision 189 chain (full `kb sync`, full pilot) stops here.
-  - **Open for the user:** the G1 route (an admin output schema, or JSON mode); a larger dev planner and writer model, or accepting these golden failures as a dev-model limit; whether MULTI-SOURCE MS-1 may start while T-017 waits.
+  - **Answered:** G1 by an admin output schema (194); quality on Claude Haiku 5.5, the local 4B model tests the local path only (195); MS-1 starts (196).
   - **Noticed:** the trace keeps only `INVARIANT_INVALID` for a refused planner reply, not which rule refused it.
 
 - **2026-11-20 02:xx: T017-FIX2 integrated on main.**

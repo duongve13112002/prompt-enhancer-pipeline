@@ -138,8 +138,8 @@ def profile_check(args, root):
     config = _config(args, root, 'enhance once')
 
     async def run():
-        async with Pipeline(config, project_root=root) as pipeline:
-            return await check_profile(config, args.profile_id, GoldenAdapter(pipeline), project_root=root)
+        async with Pipeline(config, project_root=root) as pipeline, GoldenAdapter(pipeline) as runner:
+            return await check_profile(config, args.profile_id, runner, project_root=root)
 
     result = asyncio.run(run())
     emit_json({'command': 'profile check', 'profile_id': args.profile_id, 'activated': True,

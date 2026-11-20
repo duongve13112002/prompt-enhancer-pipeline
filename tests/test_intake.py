@@ -36,11 +36,16 @@ def request(**changes):
 
 def result_validator(project_root):
     schemas = {}
-    for name in ('request.v0', 'intake_result.v0', 'response_envelope.v0'):
+    for name in ('request.v0', 'intake_result.v1', 'response_envelope.v1'):
         schemas[name] = json.loads((project_root / 'contracts/schemas' / f'{name}.schema.json').read_bytes())
         Draft202012Validator.check_schema(schemas[name])
     registry = Registry().with_resources((name, Resource.from_contents(value)) for name, value in schemas.items())
-    return Draft202012Validator(schemas['intake_result.v0'], registry=registry)
+    return Draft202012Validator(schemas['intake_result.v1'], registry=registry)
+
+
+# T017-FIX3 (decision 200): the refusal envelope of an intake that stopped before retrieval started.
+NOT_REACHED = {'state': 'not_reached', 'snapshot_id': None, 'error': None}
+DISABLED = {'state': 'disabled', 'snapshot_id': None, 'error': None}
 
 
 @pytest.fixture
@@ -164,7 +169,8 @@ def test_early_refusal_uses_base_retrieval(env, project_root, enabled, invalid):
     payload = checked(intake(req, config, project_root=project_root), project_root)
     expected = {'state': 'failed' if enabled else 'disabled', 'snapshot_id': None}
     assert payload['outcome'] == 'refused'
-    assert payload['retrieval'] == payload['envelope']['retrieval'] == expected
+    assert payload['retrieval'] == expected
+    assert payload['envelope']['retrieval'] == (NOT_REACHED if enabled else DISABLED)
     assert payload['effective_config'] is payload['config_hash'] is payload['profile_id'] is None
     assert payload['source_image'] is None and payload['warnings'] == []
 
@@ -180,7 +186,8 @@ def test_late_refusal_uses_effective_retrieval(env, project_root, enabled):
     assert payload['error']['code'] == 'PROFILE_NOT_ACTIVE'
     assert payload['effective_config']['rag']['enabled'] is enabled
     expected = {'state': 'failed' if enabled else 'disabled', 'snapshot_id': None}
-    assert payload['retrieval'] == payload['envelope']['retrieval'] == expected
+    assert payload['retrieval'] == expected
+    assert payload['envelope']['retrieval'] == (NOT_REACHED if enabled else DISABLED)
 
 
 @pytest.mark.parametrize('changes', [
@@ -207,7 +214,8 @@ def test_request_validator_diagnostics_are_structural(project_root):
 def test_invalid_base_config_still_returns_refusal(project_root, config):
     payload = checked(intake(request(), config, project_root=project_root), project_root)
     assert payload['error'] == {'code': 'CONFIGURATION_INVALID', 'message': 'intake refused (ConfigurationError)'}
-    assert payload['retrieval'] == payload['envelope']['retrieval'] == {'state': 'failed', 'snapshot_id': None}
+    assert payload['retrieval'] == {'state': 'failed', 'snapshot_id': None}
+    assert payload['envelope']['retrieval'] == NOT_REACHED
 
 
 @pytest.mark.parametrize('error,code', [
@@ -233,6 +241,29 @@ def test_refusal_exception_classes_only(env, project_root, monkeypatch, error, c
     label = code if isinstance(error, module._Refusal) else type(error).__name__
     assert payload['error'] == {'code': code, 'message': f'intake refused ({label})'}
     assert payload['envelope']['status'] == 'failed'
+    # Decision 200: only a refusal at the knowledge boundary is a retrieval failure, with its closed code.
+    knowledge = {'state': 'failed', 'snapshot_id': None, 'error': 'KNOWLEDGE_FAILED'}
+    expected = DISABLED if not config['rag']['enabled'] else knowledge if code == 'KNOWLEDGE_FAILED' else NOT_REACHED
+    assert payload['envelope']['retrieval'] == expected
+
+
+@pytest.mark.parametrize('error, code', [
+    (StorageError('private/value'), 'KNOWLEDGE_FAILED'),
+    (module.ProfileError('PROFILE_NOT_ACTIVE', 'private/value'), 'PROFILE_NOT_ACTIVE'),
+])
+def test_refusal_envelope_with_retrieval_on_is_failed_only_at_the_knowledge_boundary(env, project_root, monkeypatch,
+                                                                                       error, code):
+    """Decision 200 with retrieval on: a profile refusal never reached retrieval; a store failure is a real one."""
+    config, _ = env
+    config['rag']['enabled'] = True
+
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(module, 'resolve_profile', fail)  # labelled failing profile-boundary double
+    payload = checked(intake(request(), config, project_root=project_root), project_root)
+    knowledge = {'state': 'failed', 'snapshot_id': None, 'error': 'KNOWLEDGE_FAILED'}
+    assert payload['envelope']['retrieval'] == (knowledge if code == 'KNOWLEDGE_FAILED' else NOT_REACHED)
 
 
 @pytest.mark.parametrize('error_type', [OSError, RuntimeError])
@@ -261,7 +292,8 @@ def test_unexpected_failure_releases_pin(env, project_root, monkeypatch, error_t
     if cleanup_error:
         expected += f'; lease cleanup failed ({cleanup_error.__name__})'
     assert payload['error'] == {'code': 'INTAKE_FAILED', 'message': expected}
-    assert payload['retrieval'] == payload['envelope']['retrieval'] == {'state': 'failed', 'snapshot_id': None}
+    assert payload['retrieval'] == {'state': 'failed', 'snapshot_id': None}
+    assert payload['envelope']['retrieval'] == NOT_REACHED
     assert result.knowledge is None and result.snapshot is None
     assert not list((store.root / 'leases').glob('*/*.lease'))
 
@@ -319,7 +351,7 @@ def test_refusal_envelope_identity(env, project_root, monkeypatch, with_source):
     assert payload['envelope'] == {
         'status': 'failed', 'output': None, 'attachments': [],
         'source_binding': {'source_image_id': image_id} if with_source else None,
-        'retrieval': {'state': 'failed', 'snapshot_id': None},
+        'retrieval': {'state': 'failed', 'snapshot_id': None, 'error': 'SNAPSHOT_MISSING'},
         'warnings': ['SNAPSHOT_MISSING'], 'trace_id': 'generated-request-id',
     }
     assert payload['warnings'] == ['SNAPSHOT_MISSING']

@@ -11,6 +11,7 @@ import uuid
 from PIL import Image
 
 from .config import ConfigurationError, _schema, _validate, effective_request_config
+from .envelope import intake_retrieval
 from .model_image import (
     ImageRejected, UndecodableImage, configure_decode_backstop, prepare_vision_image_with_info,
 )
@@ -155,7 +156,7 @@ def _refuse(payload, code, error):
     payload['envelope'] = {
         'status': 'failed', 'output': None, 'attachments': [],
         'source_binding': None if source is None else {'source_image_id': source['image_id']},
-        'retrieval': dict(payload['retrieval']), 'warnings': list(payload['warnings']),
+        'retrieval': intake_retrieval(payload), 'warnings': list(payload['warnings']),
         'trace_id': payload['request_id'],
     }
     return IntakeResult(payload)

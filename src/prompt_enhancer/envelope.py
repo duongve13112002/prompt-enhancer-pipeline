@@ -6,8 +6,57 @@ from pathlib import Path
 from .model_schemas import cached_registry
 
 ROOT = Path(__file__).resolve().parents[2]
+SCHEMA = 'response_envelope.v1'  # artifact-bound stage contract (T017-FIX3)
 WARNINGS = frozenset(('PARAM_UNSUPPORTED', 'SCHEMA_INVALID', 'TRUNCATED', 'SNAPSHOT_MISSING',
                       'PROFILE_CONFLICT', 'BUDGET_EXHAUSTED', 'VERIFIER_UNCALIBRATED'))
+# Protocol-bound: the intake refusal code of a failure at the knowledge boundary (intake.py StorageError branch and
+# refuse_attachments); any other refusal stops the request before retrieval starts.
+INTAKE_KNOWLEDGE_CODE = 'KNOWLEDGE_FAILED'
+SNAPSHOT_MISSING = 'SNAPSHOT_MISSING'  # protocol-bound: intake's degraded warning, also an S1 code
+# Protocol-bound: the planner warning for a lost grounding read (planner.py), which carries no stage code of its own.
+PLANNER_RETRIEVAL_CODE = 'RETRIEVAL_FAILED'
+
+
+def intake_retrieval(payload):
+    """The envelope retrieval of a refused intake (decision 200): `disabled` when retrieval is off, `failed` with
+    `KNOWLEDGE_FAILED` for a refusal at the knowledge boundary, otherwise `not_reached`. Only closed codes (R-026)."""
+    if payload['retrieval']['state'] == 'disabled':
+        return {'state': 'disabled', 'snapshot_id': None, 'error': None}
+    if SNAPSHOT_MISSING in payload['warnings']:  # intake already found no published snapshot to pin
+        return {'state': 'failed', 'snapshot_id': None, 'error': SNAPSHOT_MISSING}
+    error = payload.get('error')
+    if isinstance(error, dict) and error.get('code') == INTAKE_KNOWLEDGE_CODE:
+        return {'state': 'failed', 'snapshot_id': None, 'error': INTAKE_KNOWLEDGE_CODE}
+    return {'state': 'not_reached', 'snapshot_id': None, 'error': None}
+
+
+def _retrieval(payload, shortlist, planned, assembled):
+    """One honest retrieval state with its stage code (decisions 198 and 200).
+
+    `failed` names the earliest failing stage: S1's own code, `RETRIEVAL_FAILED` when S1 started but returned nothing
+    (the pipeline runs S1 first after an accepted intake with retrieval on) or the planner lost its grounding read, else
+    S3's code. Without a failure and without an S3 result the state is `not_reached`; `disabled` is retrieval off."""
+    config = payload['effective_config']
+    if payload['outcome'] == 'refused' or not config:
+        return intake_retrieval(payload)
+    if not config['rag']['enabled']:
+        return {'state': 'disabled', 'snapshot_id': None, 'error': None}
+    code = None
+    if SNAPSHOT_MISSING in payload['warnings']:  # the degraded intake: S1 can only fail on it (and says so)
+        code = SNAPSHOT_MISSING
+    elif shortlist is None:
+        code = PLANNER_RETRIEVAL_CODE
+    elif shortlist['state'] != 'ready':
+        code = shortlist['error']['code']
+    elif PLANNER_RETRIEVAL_CODE in _warning_codes(planned):
+        code = PLANNER_RETRIEVAL_CODE
+    elif assembled and assembled['retrieval_state'] == 'failed':
+        code = assembled['error']['code']
+    snapshot_id = payload['retrieval']['snapshot_id']
+    if code is not None:
+        return {'state': 'failed', 'snapshot_id': snapshot_id, 'error': code}
+    state = assembled['retrieval_state'] if assembled else 'not_reached'
+    return {'state': state, 'snapshot_id': snapshot_id, 'error': None}
 
 
 def _warning_codes(*stages):
@@ -22,13 +71,7 @@ def build_envelope(intake_result, planned=None, assembled=None, checked=None, *,
     payload = intake_result.payload
     config = payload['effective_config']
     warnings = dict.fromkeys(_warning_codes(payload, shortlist, planned, assembled, checked))
-    retrieval = deepcopy(payload['retrieval'])
-    if not config or not config['rag']['enabled']:
-        retrieval = {'state': 'disabled' if retrieval['state'] == 'disabled' else 'failed', 'snapshot_id': None}
-    else:
-        retrieval['state'] = assembled['retrieval_state'] if assembled else 'failed'
-        if shortlist and shortlist['state'] == 'failed' or planned and 'RETRIEVAL_FAILED' in planned.get('warnings', []):
-            retrieval['state'] = 'failed'
+    retrieval = _retrieval(payload, shortlist, planned, assembled)
     status, output = 'failed', None
     if not fatal and payload['outcome'] != 'refused':
         asks = config['clarification']['mode'] == 'ask' or config.get('resolution', {}).get('on_family_match') == 'ask'
@@ -52,7 +95,7 @@ def build_envelope(intake_result, planned=None, assembled=None, checked=None, *,
               'source_binding': None if source is None else {'source_image_id': source['image_id']},
               'retrieval': retrieval, 'warnings': [item for item in warnings if item in WARNINGS],
               'trace_id': payload['request_id']}
-    cached_registry(Path(project_root or ROOT) / 'contracts/schemas').validate('response_envelope.v0', result)
+    cached_registry(Path(project_root or ROOT) / 'contracts/schemas').validate(SCHEMA, result)
     return result
 
 

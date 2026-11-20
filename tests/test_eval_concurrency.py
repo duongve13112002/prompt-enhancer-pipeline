@@ -70,7 +70,8 @@ def fake_pipeline(state):
                 state.abandoned += 1
             envelope = {'status': 'success', 'output': f'{self.variant}: {request["prompt"]}', 'attachments': [],
                         'source_binding': None, 'warnings': [], 'trace_id': f'trace-{len(state.calls)}',
-                        'retrieval': {'state': 'retrieved' if self.variant == 'on' else 'disabled', 'snapshot_id': state.snapshot if self.variant == 'on' else None}}
+                        'retrieval': {'state': 'retrieved' if self.variant == 'on' else 'disabled', 'snapshot_id': state.snapshot if self.variant == 'on' else None,
+                                      'error': None}}  # response_envelope.v1 (T017-FIX3)
             return SimpleNamespace(envelope=envelope, after_delivery=delivered, abandon=abandoned)
     return FakePipeline
 

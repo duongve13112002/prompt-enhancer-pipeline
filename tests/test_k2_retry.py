@@ -186,11 +186,24 @@ def test_attempts_above_one_need_an_integer_seed_in_range(k2_env, seed):
         validate_observation_reads(k2_env.config, project_root=k2_env.root)
 
 
-def test_a_provider_that_cannot_take_a_seed_is_refused_for_retries(k2_env):
-    configure(k2_env, 2)
+def _bind_anthropic(env, policy):
     from test_model_production_probes import synthetic_provider_backend  # a whole, schema-valid anthropic backend
-    k2_env.config['vlm']['backends']['main'] = synthetic_provider_backend(k2_env, 'anthropic')
-    with pytest.raises(ConfigurationError, match="observe.reply_attempts.*'anthropic' does not map sampling.seed"):
+    env.config['vlm']['backends']['cloud_claude'] = synthetic_provider_backend(env, 'anthropic', policy=policy)
+    env.config['vlm']['roles']['observer']['backend'] = 'cloud_claude'
+
+
+def test_a_provider_without_a_seed_field_takes_retries_without_a_seed(k2_env):
+    """CLOUD-1: Anthropic has no seed parameter, so its retry needs no seed base and is not refused."""
+    configure(k2_env, 2, seed='none')
+    _bind_anthropic(k2_env, 'stop')
+    validate_observation_reads(k2_env.config, project_root=k2_env.root)
+
+
+def test_a_seeded_fallback_still_needs_an_integer_seed(k2_env):
+    """The fallback backend (local) maps a seed, so a budget fallback keeps the T017-FIX2 requirement."""
+    configure(k2_env, 2, seed='none')
+    _bind_anthropic(k2_env, 'fallback_to_default_backend')
+    with pytest.raises(ConfigurationError, match=r'observe\.reply_attempts.*observer\.sampling\.seed'):
         validate_observation_reads(k2_env.config, project_root=k2_env.root)
 
 

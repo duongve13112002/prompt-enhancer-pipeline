@@ -91,6 +91,19 @@ class SchemaRegistry:
             resources.append((schema_id, Resource.from_contents(schema)))
         self._registry = Registry().with_resources(resources)
 
+    def with_schema(self, schema_id, schema, digest):
+        """A new registry: these schemas plus one checked caller schema (T017-FIX3: the admin bundle's output schema,
+        `profiles.output_schema`). The receiver is never changed (cached registries are shared); an id that is already
+        registered is refused, so a bundle schema can never shadow a project contract."""
+        if schema_id in self._schemas:
+            raise ValueError(f'schema id {schema_id!r} is already registered')
+        Draft202012Validator.check_schema(schema)
+        registry = SchemaRegistry.__new__(SchemaRegistry)
+        registry._schemas = dict(self._schemas)
+        registry._schemas[schema_id] = (deepcopy(schema), digest)
+        registry._registry = self._registry.with_resource(schema_id, Resource.from_contents(deepcopy(schema)))
+        return registry
+
     def validate(self, schema_id, value):
         schema, digest = self._schemas[schema_id]
         Draft202012Validator(schema, registry=self._registry).validate(value)
@@ -109,6 +122,12 @@ class SchemaRegistry:
 # Safety-bound: distinct schema directories kept in one process (the project has one; tests use temporary ones).
 REGISTRY_CACHE_CAPACITY = 16
 _REGISTRIES = SnapshotCache(REGISTRY_CACHE_CAPACITY)
+
+
+def with_output_schema(registry, output_schema):
+    """`registry` with the profile's bundle output schema `(schema_id, schema, sha256 hex)` added, or `registry` itself
+    when the profile has none (`output_schema_id: none`, or a project contract id)."""
+    return registry if output_schema is None else registry.with_schema(*output_schema)
 
 
 def cached_registry(directory):

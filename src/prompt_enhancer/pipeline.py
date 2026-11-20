@@ -288,6 +288,10 @@ class Pipeline:
                             embedder = Embedder(query_embedder_settings(effective))
                             shortlist = await build_candidates(s0, embedder=embedder)
                         owner = await compose_model_client(effective, 'planner', project_root=self.root)
+                        output_schema = getattr(s0.profile, 'output_schema', None)
+                        if output_schema is not None:
+                            # T017-FIX3: the admin bundle schema the writer sends and every attempt validates against.
+                            owner.use_output_schema(output_schema)
                         planned = await plan(s0, shortlist, owner, project_root=self.root, embedder=embedder)
                         if planned['state'] != 'needs_clarification':
                             writer = None
@@ -379,18 +383,53 @@ class Pipeline:
 
 
 class GoldenAdapter:
-    """Production golden runner for a confirmed ProfileView before its activation exists."""
-    identity = 's0-s6.v2'  # artifact-bound adapter revision (v2, T017-FIX: run_case returns per-case diagnostics)
+    """Production golden runner for a confirmed ProfileView before its activation exists.
+
+    Each case states `retrieval` (golden_case.v1, decision 197). `enabled` runs on the given pipeline, which must have
+    retrieval on; `disabled` runs on a pipeline whose configuration has `rag.enabled: false`: the given one when the
+    deployment already has retrieval off, else a second, separately owned `Pipeline` built on first use (the pattern
+    of `eval_run.execute`). That pipeline opens no knowledge store and runs no S1, S3 or K stage (R-009), and the switch
+    never reaches another case. Use as an async context manager, so the second pipeline is closed."""
+    identity = 's0-s6.v3'  # artifact-bound adapter revision (v3, T017-FIX3: per-case retrieval switch, envelope v1)
 
     def __init__(self, pipeline):
         self.pipeline = pipeline
+        self._off = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        await self.close()
+
+    async def close(self):
+        off, self._off = self._off, None
+        if off is not None:
+            await off.close()
+
+    async def _pipeline_for(self, retrieval):
+        enabled = self.pipeline.config['rag']['enabled'] is True
+        if retrieval == 'enabled':
+            if not enabled:
+                raise ConfigurationError('golden case needs retrieval but rag.enabled is false')
+            return self.pipeline
+        if retrieval != 'disabled':
+            raise ValueError('golden request needs retrieval enabled or disabled')
+        if not enabled:
+            return self.pipeline
+        if self._off is None:
+            config = deepcopy(self.pipeline.config)
+            config['rag']['enabled'] = False
+            self._off = Pipeline(config, project_root=self.pipeline.root)
+        return self._off
 
     async def run_case(self, profile, request):
         """The envelope and the case's stage codes (`case_diagnostics`) for golden_results.json."""
         request = dict(request, profile_id=profile.profile_id)
+        pipeline = await self._pipeline_for(request.pop('retrieval', None))
         if isinstance(request.get('source_image'), bytes):
             request['source_image'] = base64.b64encode(request['source_image']).decode('ascii')
-        response = await self.pipeline._enhance(request, profile)
+        response = await pipeline._enhance(request, profile)
         await response.after_delivery()
         return response.envelope, response.diagnostics
 
