@@ -16,7 +16,7 @@ Release 0.2, 2026-11-14. **The single rule source** for Claude Code (through `@A
 ## 2. Understand before changing
 
 - **Step 0:** a task not marked `trivial` starts with the template's Step 0: unknowns, at most 5 ranked questions each with a proposed answer, a plan with a checkable finish. A file-changing worker then waits for its plan to be read; inside a started task, read-only roles and small tasks (`Small: yes`) put Step 0 atop their report and continue.
-- Ask when product meaning, edit permission, model identity, API behaviour or a deployment setting is unclear, and meanwhile do the work that does not depend on the answer: a guessed meaning is the costliest mistake, because every later step builds on it. Search `tasks/DECISIONS_INDEX.md`, `tasks/STATUS.md` and `recall.py search` first, so the user is asked each thing once.
+- Ask when product meaning, edit permission, model identity, API behaviour or a deployment setting is unclear, and meanwhile do the work that does not depend on the answer: a guessed meaning is the costliest mistake, because every later step builds on it. Search `tasks/DECISIONS_INDEX.md`, `tasks/STATUS.md` and `recall.py search` first, so nothing is asked twice.
 - **User away:** take the conservative, reversible choice, log it in `tasks/STATUS.md` as "PM decision pending user review", ask in chat and continue.
 
 ## 3. Research and evidence
@@ -42,7 +42,7 @@ Release 0.2, 2026-11-14. **The single rule source** for Claude Code (through `@A
 - **Everything stays under the project root** (`models/`, `.cache/`, `.tmp/`, `.venv/`, outputs); working data lives under `data_root` (default `data/`, Git-ignored). The user's knowledge base is read only (R-014). Validate configured paths after resolving links.
 - **Models:** configured local artifacts first, verified by repository, revision, file, size and hash; use exactly the configured model ([model-storage](docs/model-storage.md)).
 - **Secrets** live only in Git-ignored `.secrets/`. Agents, shells and review tools never open, list or print it; only project Python loads a credential at runtime. The one readable file there is [.secrets/README.md](.secrets/README.md).
-- **Clean up after yourself:** remove your own `.tmp/` trees before handoff, keep the small reports you cite, remove links as links; never touch `models/`, `.venv*/`, `.secrets/`, `runs/` evidence or trees in use. The orchestrator cleans up finished agents and orphan trees ([ORCHESTRATION](.agents/ORCHESTRATION.md) section 4).
+- **Clean up:** remove your own `.tmp/` trees before handoff, keep the small reports you cite, remove links as links; never touch `models/`, `.venv*/`, `.secrets/`, `runs/` evidence or trees in use. The orchestrator cleans up finished agents and orphan trees ([ORCHESTRATION](.agents/ORCHESTRATION.md) section 4).
 
 ## 7. Testing
 

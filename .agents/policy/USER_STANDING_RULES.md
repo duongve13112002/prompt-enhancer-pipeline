@@ -9,7 +9,7 @@ S04 | Outcome-deciding defaults (route, verifier, deadline, fail-closed) go to t
 S06 | Questions to the user: recommendation and example per question, end with "Việc bạn cần làm:" | seed rules 2026-10-11 | `question_guard.py` (warns)
 S07 | GPU: `nvidia-smi` first, tell the peer "starting GPU job" and "GPU free", busy = recheck every 30 min and never kill, one heavy model | seed rules; AGENT_PEER_RULES.md | remembered only
 S13 | Every user decision enters DECISIONS_INDEX in the same session with an `applied:` marker | seed rules | `decisions_applied.py check`
-S14 | Delegate per `.agents/ORCHESTRATION.md` (read it before each assignment); at most 8 running agents; Claude workers only via `cli_worker.py` | seed rules | `cli_worker.py`
+S14 | Delegate per `.agents/ORCHESTRATION.md` (read it first); at most 3 running agents, all CLIs (decision 217); Claude workers only via `cli_worker.py` | seed rules | `cli_worker.py`
 S15 | Reuse a worker only within its task (fix rounds, next phase, same worktree); a new task gets a fresh worker and worktree; retire a worker over about 250K | user 2026-11-13 (decision 45) | remembered only
 S16 | Every brief: Step 0 then STOP (small tasks: Step 0 atop the report, then continue; Codex still two messages), footer, `Kind:`, R-IDs (feature), class test sets (code) | seed rules; changed 2026-11-13 (decision 49) | `brief_lint.py`
 S17 | Start at the lowest effort that can meet the gate; raise effort before changing model; `high` for builds, P2+ and high-risk reviews | seed rules; N093 | remembered only

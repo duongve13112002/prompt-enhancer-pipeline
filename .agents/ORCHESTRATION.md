@@ -7,7 +7,7 @@ Updated: 2026-11-13. The user's agent-reuse rules (pasted 2026-10-28), rewritten
 - **One task, one fresh worker.** A worker that carries a previous task brings its history and its uncommitted, possibly rejected diff into the next one; a fresh worker in a fresh worktree keeps each patch tied to one task. A warm worker in a different worktree misses its cache anyway (N137).
 - **Inside a task, keep the warm worker.** Fix rounds and the next phase of the same task go to the worker that already holds the context and the cache.
 - **Clean up at once.** A finished worker costs disk, registry lines and attention; it is removed as soon as nothing more is planned for it (section 4).
-- **At most 8 running agents** across Claude Code, Codex and Antigravity together; a ceiling, not a target. Idle agents do not count.
+- **At most 3 running agents** across Claude Code, Codex and Antigravity together (Gemini jobs count); a ceiling, not a target. Idle agents do not count. The machine is shared with other PM sessions, each under the same ceiling (decision 217): start a new agent only with at least 8 GiB RAM and 8 GiB commit free, run one pytest command at a time, and ask the other PMs before a full suite.
 
 ## 1. Working mode
 
@@ -65,7 +65,7 @@ The mode is the `CURRENT MODE` line in the `ORCHESTRATION` block of AGENTS.md (C
 3. **A new task** goes to a fresh worker of the row [PM_POLICY](policy/PM_POLICY.md) section 2 names, in a fresh worktree under `.tmp/worktrees/`, never to a worker that holds another task (decision 45).
 4. **Base of the worktree:** the latest pushed commit of `main`. A task that depends on accepted work that is not yet committed starts from that commit plus the predecessor patches, applied in order with `git apply --check` first; record the base commit and the patch files in the task file.
 5. **Parallel start** only when the task is briefed and its Scope shares no file with running work. Workers write decisions, notes and status lines into their own task file; the PM moves them into `docs/implementation-notes.md`, `docs/note/` (number and index) and `tasks/STATUS.md` at integration, so shared documents are never edited in parallel.
-6. **Slots:** fewer than 8 busy agents, start it; otherwise queue it in `## IN-FLIGHT` and rerun this procedure when an agent finishes.
+6. **Slots:** fewer than 3 busy agents, start it; otherwise queue it in `## IN-FLIGHT` and rerun this procedure when an agent finishes.
 7. **Send** with section 8; update `## IN-FLIGHT`; log one line.
 
 ## 6. Review results
@@ -123,7 +123,7 @@ Every worker reports with the [template](policy/AGENT_TASK_TEMPLATE.md)'s Comple
 - [ ] A new task goes to a fresh worker and worktree; a continuation to its own warm worker?
 - [ ] Base commit and predecessor patches recorded; no Scope overlap with running work?
 - [ ] Quota read and the provider allowed ([PM_POLICY](policy/PM_POLICY.md) section 1)?
-- [ ] At most 8 running agents?
+- [ ] At most 3 running agents (decision 217), RAM floor met?
 - [ ] The message says new phase, feedback or retest; `## IN-FLIGHT` and `.agents/log.md` updated?
 
 ## 11. Reporting to the user
